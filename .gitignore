@@ -1,0 +1,12 @@
+# Build output
+dist/
+/selective
+
+# Go
+*.exe
+*.test
+*.out
+coverage.out
+
+# GoReleaser
+.goreleaser-dist/
