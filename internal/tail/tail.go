@@ -10,16 +10,17 @@ import (
 	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/config"
+	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
 	"nhooyr.io/websocket"
 )
 
 type BuildLookup struct {
-	BuildID   string `json:"build_id"`
-	Status    string `json:"status"`
-	RunCount  int    `json:"run_count"`
-	SuiteCount int   `json:"suite_count"`
+	BuildID    string `json:"build_id"`
+	Status     string `json:"status"`
+	RunCount   int    `json:"run_count"`
+	SuiteCount int    `json:"suite_count"`
 }
 
 func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
@@ -55,14 +56,18 @@ func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
 
 // Run executes `selective tail` with the given options.
 // Returns an exit code: 0=all pass, 1=failures, 2=only flaky, 3=no build, 4=auth/network error.
-func Run(runID, commitSHA, fmtFlag string) (int, error) {
+func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return 4, fmt.Errorf("could not load config: %w", err)
 	}
-
-	if cfg.Token == "" {
-		return 4, fmt.Errorf("not authenticated — run: selective auth")
+	host, err := cfg.ResolveHost(hostname)
+	if err != nil {
+		return 4, err
+	}
+	cred, err := credentials.Lookup(cfg, host)
+	if err != nil {
+		return 4, fmt.Errorf("not logged in to %s — run: selective auth login", host)
 	}
 
 	var repo string
@@ -82,7 +87,7 @@ func Run(runID, commitSHA, fmtFlag string) (int, error) {
 	if runID != "" {
 		buildID = runID
 	} else {
-		build, err := LookupBuild(cfg.APIBase(), cfg.Token, repo, commitSHA)
+		build, err := LookupBuild(host, cred.Token, repo, commitSHA)
 		if err != nil {
 			return 4, err
 		}
@@ -98,20 +103,27 @@ func Run(runID, commitSHA, fmtFlag string) (int, error) {
 		fmtFlag = format.DefaultFormat()
 	}
 
-	return stream(cfg, buildID, fmtFlag)
+	return stream(host, cred.Token, buildID, fmtFlag)
 }
 
-func stream(cfg *config.Config, buildID, fmtFlag string) (int, error) {
-	wsURL := strings.Replace(cfg.APIBase(), "https://", "wss://", 1)
+func stream(host, token, buildID, fmtFlag string) (int, error) {
+	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
-	wsURL = fmt.Sprintf("%s/api/v1/tail?build_id=%s&token=%s", wsURL, url.QueryEscape(buildID), url.QueryEscape(cfg.Token))
+	// Phoenix serves a socket mounted at /api/v1/tail on /api/v1/tail/websocket;
+	// the bare path is a 404, so tail never connected before this.
+	wsURL = fmt.Sprintf("%s/api/v1/tail/websocket?build_id=%s", wsURL, url.QueryEscape(buildID))
+
+	// The token goes in a header, not the URL: URLs end up in proxy and
+	// access logs.
+	header := http.Header{}
+	header.Set("X-Selective-Token", token)
 
 	ctx := context.Background()
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		return 4, fmt.Errorf("could not connect to Selective: %w", err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 
 	fw := format.NewWriter(os.Stdout, fmtFlag)
 

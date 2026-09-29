@@ -28,7 +28,6 @@ type Writer struct {
 
 	passStyle  lipgloss.Style
 	failStyle  lipgloss.Style
-	nodeStyles []lipgloss.Style
 	nodeColors map[string]lipgloss.Style
 }
 
@@ -38,10 +37,10 @@ var nodeColorPool = []lipgloss.Color{
 
 func NewWriter(w io.Writer, format string) *Writer {
 	return &Writer{
-		w:         w,
-		format:    format,
-		passStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")),
-		failStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")),
+		w:          w,
+		format:     format,
+		passStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")),
+		failStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")),
 		nodeColors: make(map[string]lipgloss.Style),
 	}
 }
