@@ -123,7 +123,7 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	if err != nil {
 		return 4, fmt.Errorf("could not connect to Selective: %w", err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 
 	fw := format.NewWriter(os.Stdout, fmtFlag)
 

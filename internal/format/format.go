@@ -28,7 +28,6 @@ type Writer struct {
 
 	passStyle  lipgloss.Style
 	failStyle  lipgloss.Style
-	nodeStyles []lipgloss.Style
 	nodeColors map[string]lipgloss.Style
 }
 
