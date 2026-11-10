@@ -74,14 +74,19 @@ func TestStreamExitCodes(t *testing.T) {
 			want:   1,
 		},
 		{
-			name:   "every failure is flaky",
+			name:   "a real failure alongside a test that passed on retry",
 			frames: []string{buildStart, testFail, `{"event":"summary","passed":4,"failed":1,"flaky":1,"ms":10}`},
+			want:   1,
+		},
+		{
+			name:   "joining a build where a test passed on retry",
+			frames: []string{buildStart, `{"event":"summary","passed":5,"failed":0,"flaky":1,"ms":10}`},
 			want:   2,
 		},
 		{
-			name:   "a failure that passed on retry",
+			name:   "a failure seen live that passed on retry, from a server that reports no flaky count",
 			frames: []string{buildStart, testFail, `{"event":"summary","passed":5,"failed":0,"flaky":0,"ms":10}`},
-			want:   0,
+			want:   2,
 		},
 		{
 			name:    "connection dropped before the summary",
