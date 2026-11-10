@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/selectiveci/selective-cli/internal/auth"
+	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/tail"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,7 @@ func main() {
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
 
-	root.AddCommand(authCmd(), tailCmd(), versionCmd())
+	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), versionCmd())
 
 	root.SilenceUsage = true
 	root.SilenceErrors = true
@@ -72,20 +73,28 @@ func authLoginCmd() *cobra.Command {
 		Long: `Log in to Selective.
 
 Prints a one-time code and opens your browser (or prints the URL when there
-isn't one: SSH, containers, CI). Approve the request there and the CLI is
-logged in. The token is stored in your system keychain and appears on your
-API tokens page, where you can revoke it.
+isn't one: SSH, containers, CI). Without an account, the page signs you up
+with GitHub first. Approve the request there and the CLI is logged in. The
+token is stored in your system keychain and appears on your API tokens
+page, where you can revoke it.
+
+--setup also lets the CLI create suites and read their API keys, for
+setting a repository up. --json writes events to stdout as they happen
+(first the URL to open, then the login), for an agent to read while the
+command waits.
 
 For scripts, pass a token on stdin instead:
 
   selective auth login --with-token < token.txt`,
 		Example: `  selective auth login
+  selective auth login --setup --json
   selective auth login --hostname staging.selective.ci
   selective auth login --hostname localhost:4000`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Version = version
 			opts.Stdin = os.Stdin
+			opts.Stdout = os.Stdout
 			opts.Stderr = os.Stderr
 			return auth.Login(opts)
 		},
@@ -93,6 +102,8 @@ For scripts, pass a token on stdin instead:
 	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "Selective server (default app.selective.ci, or SELECTIVE_HOST)")
 	cmd.Flags().BoolVar(&opts.WithToken, "with-token", false, "Read an API token from stdin instead of using the browser")
 	cmd.Flags().BoolVar(&opts.NoBrowser, "no-browser", false, "Print the URL instead of opening a browser")
+	cmd.Flags().BoolVar(&opts.Setup, "setup", false, "Also allow creating suites and reading their API keys")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Write login events to stdout as JSON lines")
 	return cmd
 }
 
@@ -169,4 +180,152 @@ func versionCmd() *cobra.Command {
 			fmt.Printf("selective %s (%s)\n", version, commit)
 		},
 	}
+}
+
+type setupFlags struct {
+	hostname string
+	org      string
+	json     bool
+}
+
+func (f *setupFlags) bind(cmd *cobra.Command, withOrg bool) {
+	cmd.Flags().StringVar(&f.hostname, "hostname", "", "Selective server (default: the one you logged in to)")
+	cmd.Flags().BoolVar(&f.json, "json", false, "JSON output (the default when piped)")
+	if withOrg {
+		cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
+	}
+}
+
+// env connects and, when asked, resolves the organization.
+func (f *setupFlags) env(withOrg bool) (*setup.Env, string, error) {
+	env, err := setup.Connect(f.hostname, f.json)
+	if err != nil || !withOrg {
+		return env, "", err
+	}
+	org, err := env.ResolveOrg(f.org)
+	return env, org, err
+}
+
+func orgsCmd() *cobra.Command {
+	var f setupFlags
+	cmd := &cobra.Command{
+		Use:   "orgs",
+		Short: "List your organizations",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _, err := f.env(false)
+			if err != nil {
+				return err
+			}
+			return env.Orgs()
+		},
+	}
+	f.bind(cmd, false)
+	return cmd
+}
+
+func reposCmd() *cobra.Command {
+	var f setupFlags
+	cmd := &cobra.Command{
+		Use:   "repos",
+		Short: "List the repositories Selective's GitHub App can see",
+		Long: `List the repositories a suite can be created for: the ones the
+organization's Selective GitHub App installation can see. The output ends
+with the URL where a signed-in user can add more.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, org, err := f.env(true)
+			if err != nil {
+				return err
+			}
+			return env.Repos(org)
+		},
+	}
+	f.bind(cmd, true)
+	return cmd
+}
+
+func suitesCmd() *cobra.Command {
+	var f setupFlags
+	cmd := &cobra.Command{
+		Use:   "suites",
+		Short: "List, create and configure test suites",
+		Long: `List the organization's test suites, with when each last ran.
+
+  selective suites create   Create a suite for a repository (needs --setup login)
+  selective suites key      Hand a suite's API key to a secret store`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, org, err := f.env(true)
+			if err != nil {
+				return err
+			}
+			return env.Suites(org)
+		},
+	}
+	f.bind(cmd, true)
+	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd())
+	return cmd
+}
+
+func suitesCreateCmd() *cobra.Command {
+	var f setupFlags
+	var name, repo, framework string
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a suite for a repository",
+		Long: `Create a test suite for a repository, or find the one already there:
+running it again with the same name returns the same suite.
+
+The repository defaults to this checkout's origin remote, and must be one
+the organization's Selective GitHub App can see (selective repos). A
+repository with several test commands (say, RSpec and Minitest) gets one
+suite per command.`,
+		Example: `  selective suites create --name rspec --framework rspec
+  selective suites create --name minitest --framework minitest --repo acme/web`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, org, err := f.env(true)
+			if err != nil {
+				return err
+			}
+			return env.CreateSuite(org, name, repo, framework)
+		},
+	}
+	f.bind(cmd, true)
+	cmd.Flags().StringVar(&name, "name", "", "Suite name, e.g. the test command it runs (required)")
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository owner/name (default: this checkout's origin)")
+	cmd.Flags().StringVar(&framework, "framework", "", "Test framework: rspec or minitest (default: learned from the first run)")
+	_ = cmd.MarkFlagRequired("name")
+	return cmd
+}
+
+func suitesKeyCmd() *cobra.Command {
+	var f setupFlags
+	var opts setup.KeyOptions
+	cmd := &cobra.Command{
+		Use:   "key SUITE",
+		Short: "Hand a suite's API key to a secret store without showing it",
+		Long: `Send a suite's API key (by name or ID) where CI can read it, without it
+appearing on screen.
+
+  --github-secret NAME   set a GitHub Actions secret on the suite's repository
+                         (uses the GitHub CLI, gh)
+  otherwise              write the key to stdout, which must be a pipe into
+                         a secret store; it is never printed to a terminal`,
+		Example: `  selective suites key rspec --github-secret SELECTIVE_API_KEY
+  selective suites key rspec | rwx vaults secrets set SELECTIVE_API_KEY`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, org, err := f.env(true)
+			if err != nil {
+				return err
+			}
+			return env.Key(org, args[0], opts)
+		},
+	}
+	f.bind(cmd, true)
+	cmd.Flags().StringVar(&opts.GithubSecret, "github-secret", "", "Set this GitHub Actions secret instead of writing to stdout")
+	cmd.Flags().StringVar(&opts.Repo, "repo", "", "Repository for --github-secret (default: the suite's)")
+	return cmd
 }

@@ -23,6 +23,9 @@ func Detect() (*Context, error) {
 	return &Context{Repo: repo, Commit: commit}, nil
 }
 
+// Repo is "owner/name" of this checkout's origin remote.
+func Repo() (string, error) { return gitRemoteSlug() }
+
 func gitRemoteSlug() (string, error) {
 	out, err := run("git", "remote", "get-url", "origin")
 	if err != nil {

@@ -4,6 +4,7 @@ package auth
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,9 +24,25 @@ type LoginOptions struct {
 	Hostname  string
 	WithToken bool // read a token from stdin instead of the browser flow
 	NoBrowser bool
+	Setup     bool // also ask for the setup scope: create suites, read their keys
+	JSON      bool // NDJSON events on Stdout, for agents
 	Version   string
 	Stdin     io.Reader
+	Stdout    io.Writer
 	Stderr    io.Writer
+}
+
+func (o LoginOptions) scope() string {
+	if o.Setup {
+		return "setup"
+	}
+	return ""
+}
+
+func (o LoginOptions) emit(event map[string]any) {
+	if o.JSON && o.Stdout != nil {
+		_ = json.NewEncoder(o.Stdout).Encode(event)
+	}
 }
 
 // Login signs the CLI in to a host, by default through the browser.
@@ -42,7 +59,7 @@ func Login(opts LoginOptions) error {
 		fmt.Fprintln(opts.Stderr, "! SELECTIVE_TOKEN is set; it takes precedence over the login you're about to store.")
 	}
 
-	var token, email string
+	var token, email, scope string
 	if opts.WithToken {
 		token, err = readToken(opts.Stdin)
 		if err != nil {
@@ -61,7 +78,7 @@ func Login(opts LoginOptions) error {
 		if err != nil {
 			return err
 		}
-		token, email = grant.AccessToken, grant.User.Email
+		token, email, scope = grant.AccessToken, grant.User.Email, grant.Scope
 	}
 
 	source, err := credentials.Store(cfg, host, email, token)
@@ -69,6 +86,7 @@ func Login(opts LoginOptions) error {
 		return fmt.Errorf("logged in, but could not save the token: %w", err)
 	}
 	fmt.Fprintf(opts.Stderr, "✓ Logged in to %s as %s\n", host, email)
+	opts.emit(map[string]any{"event": "logged_in", "host": host, "email": email, "scope": scope})
 	if source == credentials.SourceFile {
 		fmt.Fprintf(opts.Stderr, "! No system keychain is available; the token is stored in %s (mode 0600).\n", config.Path())
 	}
@@ -77,17 +95,24 @@ func Login(opts LoginOptions) error {
 
 func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	client := devicelogin.New(host)
-	code, err := client.Start(clientName(opts.Version))
+	code, err := client.Start(clientName(opts.Version), opts.scope())
 	if err != nil {
 		return nil, err
 	}
 
+	opts.emit(map[string]any{
+		"event":      "authorize",
+		"url":        code.VerificationURIComplete,
+		"user_code":  code.UserCode,
+		"expires_in": code.ExpiresIn,
+		"scope":      code.Scope,
+	})
 	fmt.Fprintf(opts.Stderr, "! First copy your one-time code: %s\n", code.UserCode)
 	opened := !opts.NoBrowser && isatty.IsTerminal(os.Stderr.Fd()) && browser.Open(code.VerificationURIComplete)
 	if opened {
 		fmt.Fprintf(opts.Stderr, "Opened %s in your browser.\n", code.VerificationURIComplete)
 	} else {
-		fmt.Fprintf(opts.Stderr, "Open this URL in a browser where you're signed in to Selective:\n  %s\n", code.VerificationURIComplete)
+		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to sign in, or create an account, and authorize the CLI:\n  %s\n", code.VerificationURIComplete)
 	}
 	fmt.Fprintln(opts.Stderr, "Waiting for you to authorize the CLI… (Ctrl+C to cancel)")
 
@@ -159,6 +184,9 @@ func Status(hostname string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "%s\n  ✓ Logged in as %s\n  Organizations: %s\n  Token: %s (from %s)\n",
 		host, me.Email, strings.Join(me.OrgSlugs, ", "), mask(cred.Token), cred.Source)
+	if len(me.Scopes) > 0 {
+		fmt.Fprintf(stdout, "  Scopes: %s\n", strings.Join(me.Scopes, " "))
+	}
 	return nil
 }
 
