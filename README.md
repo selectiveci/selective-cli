@@ -46,7 +46,7 @@ the environment.
 | Variable | Meaning |
 |---|---|
 | `SELECTIVE_TOKEN` | API token to use. Takes precedence over any stored login and is never written to disk. |
-| `SELECTIVE_HOST` | Server, when it isn't app.selective.ci. |
+| `SELECTIVE_HOST` | Server, when it isn't app.selective.ci. The runner gems' `wss://` form works too. |
 | `SELECTIVE_CONFIG_DIR` | Where to keep config (default `~/.config/selective`). |
 
 To store a token non-interactively, pass it on stdin. It never goes on the
@@ -55,6 +55,32 @@ command line, where it would land in shell history and `ps`.
 ```bash
 selective auth login --with-token < token.txt
 ```
+
+## Set up a repository
+
+What an agent (or you) needs to put a repository on Selective, without
+opening the dashboard:
+
+```bash
+selective auth login --setup          # sign up or sign in; also allows creating suites
+selective orgs                        # your organizations (pass --org when you have several)
+selective repos                       # repositories Selective's GitHub App can see
+selective suites create --name rspec --framework rspec    # repo defaults to this checkout's origin
+selective suites key rspec --github-secret SELECTIVE_API_KEY
+```
+
+- **For agents.** `selective auth login --setup --json` writes
+  `{"event":"authorize","url":…,"user_code":…}` to stdout at once and
+  `{"event":"logged_in",…}` the moment the person approves. Run it in the
+  background, hand the person the URL, and wait for the second line. Without an
+  account, the page signs them up with GitHub first.
+- **`suites create` is repeatable.** The same name returns the same suite.
+- **The API key is never shown.** `suites key` sets a GitHub Actions secret
+  through `gh` (key on stdin), or writes to a pipe:
+  `selective suites key rspec | <your CI's secret command>`. It refuses to
+  print to a terminal.
+- **Output.** JSON when piped or with `--json`, tables on a terminal.
+- `SELECTIVE_ORG` sets the organization for these commands.
 
 ## Tail a build
 
