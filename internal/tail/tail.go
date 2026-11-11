@@ -127,13 +127,11 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 
 	fw := format.NewWriter(os.Stdout, fmtFlag)
 
-	var failCount int
-	var flakyCount int
-
+	var summary map[string]any
+	sawFailure := false
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			// Normal close — server closed after summary
 			break
 		}
 
@@ -141,29 +139,36 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 			fmt.Fprintf(os.Stderr, "format error: %v\n", writeErr)
 		}
 
-		// Track outcome for exit code
 		var ev map[string]any
-		if jsonErr := json.Unmarshal(data, &ev); jsonErr == nil {
+		if json.Unmarshal(data, &ev) == nil {
 			switch ev["event"] {
 			case "test_fail":
-				failCount++
+				sawFailure = true
 			case "summary":
-				if f, ok := ev["flaky"].(float64); ok {
-					flakyCount = int(f)
-				}
+				summary = ev
 			}
 		}
 	}
 
 	conn.Close(websocket.StatusNormalClosure, "")
 
-	if failCount > 0 && flakyCount == failCount {
-		return 2, nil
+	if summary == nil {
+		return 4, fmt.Errorf("lost the connection to Selective before build %s finished", buildID)
 	}
-	if failCount > 0 {
-		return 1, nil
+	return summaryExitCode(summary, sawFailure), nil
+}
+
+func summaryExitCode(summary map[string]any, sawFailure bool) int {
+	failed, _ := summary["failed"].(float64)
+	flaky, _ := summary["flaky"].(float64)
+	switch {
+	case failed > 0:
+		return 1
+	case flaky > 0 || sawFailure:
+		return 2
+	default:
+		return 0
 	}
-	return 0, nil
 }
 
 func shortSHA(sha string) string {
