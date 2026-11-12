@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/config"
 	"github.com/selectiveci/selective-cli/internal/credentials"
@@ -106,6 +108,32 @@ func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
 	return stream(host, cred.Token, buildID, fmtFlag)
 }
 
+var pingInterval = 30 * time.Second
+
+func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, interval time.Duration, timedOut *atomic.Bool) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		pctx, pcancel := context.WithTimeout(ctx, interval)
+		err := conn.Ping(pctx)
+		expired := pctx.Err() == context.DeadlineExceeded
+		pcancel()
+		if err == nil {
+			continue
+		}
+		if expired && ctx.Err() == nil {
+			timedOut.Store(true)
+			cancel()
+		}
+		return
+	}
+}
+
 func stream(host, token, buildID, fmtFlag string) (int, error) {
 	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
@@ -118,12 +146,17 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	header := http.Header{}
 	header.Set("X-Selective-Token", token)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		return 4, fmt.Errorf("could not connect to Selective: %w", err)
 	}
 	defer func() { _ = conn.CloseNow() }()
+
+	interval := pingInterval
+	var timedOut atomic.Bool
+	go keepAlive(ctx, cancel, conn, interval, &timedOut)
 
 	fw := format.NewWriter(os.Stdout, fmtFlag)
 
@@ -153,6 +186,9 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	conn.Close(websocket.StatusNormalClosure, "")
 
 	if summary == nil {
+		if timedOut.Load() {
+			return 4, fmt.Errorf("no response from Selective to a ping within %s; lost the connection before build %s finished", interval, buildID)
+		}
 		return 4, fmt.Errorf("lost the connection to Selective before build %s finished", buildID)
 	}
 	return summaryExitCode(summary, sawFailure), nil
