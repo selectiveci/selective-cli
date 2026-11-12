@@ -62,7 +62,8 @@ What an agent (or you) needs to put a repository on Selective, without
 opening the dashboard:
 
 ```bash
-selective auth login --setup          # sign up or sign in; also allows creating suites
+selective auth signup                 # new account: signup page, then logged in with setup access
+selective auth login --setup          # existing account; also allows creating suites
 selective orgs                        # your organizations (pass --org when you have several)
 selective repos                       # repositories Selective's GitHub App can see
 selective suites create --name web-rspec --framework rspec    # repo defaults to this checkout's origin

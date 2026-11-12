@@ -60,7 +60,7 @@ for a server other than app.selective.ci).`,
 	_ = cmd.Flags().MarkHidden("token")
 	_ = cmd.Flags().MarkHidden("hostname")
 
-	cmd.AddCommand(authLoginCmd(), authStatusCmd(), authLogoutCmd())
+	cmd.AddCommand(authLoginCmd(), authSignupCmd(), authStatusCmd(), authLogoutCmd())
 	return cmd
 }
 
@@ -103,6 +103,32 @@ For scripts, pass a token on stdin instead:
 	cmd.Flags().BoolVar(&opts.WithToken, "with-token", false, "Read an API token from stdin instead of using the browser")
 	cmd.Flags().BoolVar(&opts.NoBrowser, "no-browser", false, "Print the URL instead of opening a browser")
 	cmd.Flags().BoolVar(&opts.Setup, "setup", false, "Also allow creating suites and reading their API keys")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Write login events to stdout as JSON lines")
+	return cmd
+}
+
+func authSignupCmd() *cobra.Command {
+	opts := auth.LoginOptions{Signup: true}
+	cmd := &cobra.Command{
+		Use:   "signup",
+		Short: "Create a Selective account and log in",
+		Long: `Create a Selective account with GitHub and log the CLI in to it.
+
+Like auth login --setup, but the page greets the person with signup. Someone
+who already has an account can still sign in from there.`,
+		Example: `  selective auth signup
+  selective auth signup --json`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.Version = version
+			opts.Stdin = os.Stdin
+			opts.Stdout = os.Stdout
+			opts.Stderr = os.Stderr
+			return auth.Login(opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "Selective server (default app.selective.ci, or SELECTIVE_HOST)")
+	cmd.Flags().BoolVar(&opts.NoBrowser, "no-browser", false, "Print the URL instead of opening a browser")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Write login events to stdout as JSON lines")
 	return cmd
 }

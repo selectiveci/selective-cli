@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -132,5 +133,31 @@ func TestJSONLoginReportsADenial(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != 2 || !strings.Contains(lines[1], `"event":"error"`) || !strings.Contains(lines[1], `"error":"access_denied"`) {
 		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestSignupAsksForTheSignupPageAndSetup(t *testing.T) {
+	setup(t)
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/code":
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device?code=ABCD-EFGH&signup=1","expires_in":600,"interval":1}`))
+		case "/api/v1/device/token":
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":"access_denied"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	stderr := &bytes.Buffer{}
+	_ = Login(LoginOptions{Hostname: srv.URL, Signup: true, NoBrowser: true, Stdout: &bytes.Buffer{}, Stderr: stderr})
+	if got["intent"] != "signup" || got["scope"] != "setup" {
+		t.Fatalf("code request = %v", got)
+	}
+	if !strings.Contains(stderr.String(), "create your Selective account") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

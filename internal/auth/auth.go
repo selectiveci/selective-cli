@@ -25,6 +25,7 @@ type LoginOptions struct {
 	WithToken bool // read a token from stdin instead of the browser flow
 	NoBrowser bool
 	Setup     bool // also ask for the setup scope: create suites, read their keys
+	Signup    bool // a new user: the page offers signup first; implies Setup
 	JSON      bool // NDJSON events on Stdout, for agents
 	Version   string
 	Stdin     io.Reader
@@ -33,7 +34,7 @@ type LoginOptions struct {
 }
 
 func (o LoginOptions) scope() string {
-	if o.Setup {
+	if o.Setup || o.Signup {
 		return "setup"
 	}
 	return ""
@@ -96,6 +97,7 @@ func Login(opts LoginOptions) error {
 
 func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	client := devicelogin.New(host)
+	client.Signup = opts.Signup
 	code, err := client.Start(clientName(opts.Version), opts.scope())
 	if err != nil {
 		return nil, err
@@ -113,7 +115,11 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	if opened {
 		fmt.Fprintf(opts.Stderr, "Opened %s in your browser.\n", code.VerificationURIComplete)
 	} else {
-		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to sign in, or create an account, and authorize the CLI:\n  %s\n", code.VerificationURIComplete)
+		action := "sign in, or create an account,"
+		if opts.Signup {
+			action = "create your Selective account with GitHub"
+		}
+		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to %s and authorize the CLI:\n  %s\n", action, code.VerificationURIComplete)
 	}
 	fmt.Fprintln(opts.Stderr, "Waiting for you to authorize the CLI… (Ctrl+C to cancel)")
 

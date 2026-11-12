@@ -46,6 +46,8 @@ const holdSeconds = 25
 type Client struct {
 	Host string
 	HTTP *http.Client
+	// Signup asks the approval page to greet a new user with signup.
+	Signup bool
 	// Sleep and Now are swapped out in tests.
 	Sleep func(context.Context, time.Duration) error
 	Now   func() time.Time
@@ -68,6 +70,9 @@ func (c *Client) Start(clientName, scope string) (*Code, error) {
 	payload := map[string]string{"client_name": clientName}
 	if scope != "" {
 		payload["scope"] = scope
+	}
+	if c.Signup {
+		payload["intent"] = "signup"
 	}
 	status, err := c.post(context.Background(), "/api/v1/device/code", payload, &code)
 	if err != nil {
