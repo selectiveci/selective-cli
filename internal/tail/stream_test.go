@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -118,7 +120,102 @@ func TestStreamExitCodes(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Errorf("err = %v, wantErr %v", err, tc.wantErr)
 			}
+			if err != nil && !strings.Contains(err.Error(), "lost the connection") {
+				t.Errorf("err = %q, want a lost-connection error", err)
+			}
 		})
+	}
+}
+
+func quietTailServer(t *testing.T, answerPings bool, after time.Duration, last string) *httptest.Server {
+	t.Helper()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		defer func() { _ = c.CloseNow() }()
+		ctx := context.Background()
+		if err := c.Write(ctx, websocket.MessageText, []byte(buildStart)); err != nil {
+			t.Errorf("write: %v", err)
+			return
+		}
+		if !answerPings {
+			<-release
+			return
+		}
+		ctx = c.CloseRead(ctx)
+		select {
+		case <-time.After(after):
+		case <-ctx.Done():
+			return
+		}
+		if err := c.Write(context.Background(), websocket.MessageText, []byte(last)); err != nil {
+			t.Errorf("write: %v", err)
+			return
+		}
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	}))
+	t.Cleanup(func() {
+		close(release)
+		srv.Close()
+	})
+	return srv
+}
+
+func shortPings(t *testing.T) {
+	t.Helper()
+	old := pingInterval
+	pingInterval = 50 * time.Millisecond
+	t.Cleanup(func() { pingInterval = old })
+}
+
+type streamResult struct {
+	code int
+	err  error
+}
+
+func streamWithin(t *testing.T, srv *httptest.Server, limit time.Duration) streamResult {
+	t.Helper()
+	done := make(chan streamResult, 1)
+	go func() {
+		code, err := stream(srv.URL, "tok", "b", "ndjson")
+		done <- streamResult{code, err}
+	}()
+	select {
+	case res := <-done:
+		return res
+	case <-time.After(limit):
+		t.Fatalf("tail still running after %s", limit)
+		return streamResult{}
+	}
+}
+
+func TestStreamGivesUpOnAnUnresponsiveServer(t *testing.T) {
+	shortPings(t)
+	srv := quietTailServer(t, false, 0, "")
+
+	res := streamWithin(t, srv, 2*time.Second)
+
+	if res.code != 4 {
+		t.Errorf("exit code = %d, want 4", res.code)
+	}
+	if res.err == nil || !strings.Contains(res.err.Error(), "no response from Selective") {
+		t.Errorf("err = %v, want a no-response error", res.err)
+	}
+}
+
+func TestStreamStaysConnectedToAQuietServer(t *testing.T) {
+	shortPings(t)
+	summary := `{"event":"summary","passed":5,"failed":0,"flaky":0,"ms":10}`
+	srv := quietTailServer(t, true, 8*pingInterval, summary)
+
+	res := streamWithin(t, srv, 5*time.Second)
+
+	if res.code != 0 || res.err != nil {
+		t.Errorf("got exit %d err %v, want exit 0", res.code, res.err)
 	}
 }
 
