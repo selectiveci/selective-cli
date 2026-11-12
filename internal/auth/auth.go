@@ -1,4 +1,4 @@
-// Package auth implements `selective auth login|status|logout`.
+// Package auth implements `sel auth login|status|logout`.
 package auth
 
 import (
@@ -168,7 +168,7 @@ func readToken(r io.Reader) (string, error) {
 	}
 	token := strings.TrimSpace(line)
 	if token == "" {
-		return "", errors.New("no token on stdin (usage: selective auth login --with-token < token.txt)")
+		return "", errors.New("no token on stdin (usage: sel auth login --with-token < token.txt)")
 	}
 	if !strings.HasPrefix(token, "sk_live_") {
 		return "", errors.New("that doesn't look like a Selective API token (they start with sk_live_)")
@@ -189,7 +189,7 @@ func Status(hostname string, stdout io.Writer) error {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: selective auth login", host)
+		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: sel auth login", host)
 		if host != config.DefaultHost {
 			fmt.Fprintf(stdout, " --hostname %s", host)
 		}
@@ -200,7 +200,7 @@ func Status(hostname string, stdout io.Writer) error {
 	me, err := api.New(host, cred.Token).Me()
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
-		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: selective auth login\n", host)
+		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: sel auth login\n", host)
 		return errSilent
 	case err != nil:
 		return err
@@ -259,10 +259,10 @@ var errSilent = errors.New("")
 // IsSilent reports whether err was already explained to the user.
 func IsSilent(err error) bool { return errors.Is(err, errSilent) }
 
-// LegacyTokenLogin supports `selective auth --token sk_live_…` from before
+// LegacyTokenLogin supports `sel auth --token sk_live_…` from before
 // `auth login` existed.
 func LegacyTokenLogin(token, hostname, version string, stderr io.Writer) error {
-	fmt.Fprintln(stderr, "! `selective auth --token` is deprecated: use `selective auth login`, or `selective auth login --with-token < file` for scripts.")
+	fmt.Fprintln(stderr, "! `sel auth --token` is deprecated: use `sel auth login`, or `sel auth login --with-token < file` for scripts.")
 	return Login(LoginOptions{
 		Hostname:  hostname,
 		WithToken: true,

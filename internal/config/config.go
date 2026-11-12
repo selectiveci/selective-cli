@@ -30,7 +30,7 @@ type Config struct {
 	CurrentHost string           `json:"current_host,omitempty"`
 	Hosts       map[string]*Host `json:"hosts,omitempty"`
 
-	// Pre-login format (`selective auth --token`): read, migrated, never written.
+	// Pre-login format (`sel auth --token`): read, migrated, never written.
 	LegacyToken   string `json:"token,omitempty"`
 	LegacyBaseURL string `json:"base_url,omitempty"`
 }

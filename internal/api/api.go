@@ -27,7 +27,7 @@ type Error struct {
 func (e *Error) Error() string {
 	switch {
 	case e.Code == "insufficient_scope":
-		return fmt.Sprintf("this login can't do that (it needs the %q scope); run: selective auth login --setup", e.Scope)
+		return fmt.Sprintf("this login can't do that (it needs the %q scope); run: sel auth login --setup", e.Scope)
 	case e.Message != "":
 		return e.Message
 	case e.Code != "":

@@ -1,6 +1,6 @@
-# selective
+# sel
 
-The Selective CLI: stream live test results from your CI builds to your
+The Selective CLI, `sel`: stream live test results from your CI builds to your
 terminal or your agent.
 
 ## Install
@@ -9,12 +9,12 @@ terminal or your agent.
 curl -fsSL https://raw.githubusercontent.com/selectiveci/selective-cli/main/install.sh | sh
 ```
 
-Or build from source with Go 1.23+: `go build -o selective ./cmd/selective`.
+Or build from source with Go 1.23+: `go build -o sel ./cmd/sel`.
 
 ## Log in
 
 ```bash
-selective auth login
+sel auth login
 ```
 
 This prints a one-time code and opens your browser; approve the request there
@@ -28,14 +28,14 @@ It's the OAuth 2.0 device authorization grant (RFC 8628), the same flow as
   `~/.config/selective/config.json` with mode 0600, and the CLI says so.
 - **Revoking it.** It appears on your API tokens page as
   "CLI: selective-cli <version> on <hostname>", where you can revoke it.
-  `selective auth logout` revokes it too.
-- **Other servers.** Use `--hostname`: `selective auth login --hostname
+  `sel auth logout` revokes it too.
+- **Other servers.** Use `--hostname`: `sel auth login --hostname
   staging.selective.ci`, or `--hostname localhost:4000` for a local dev
   server (loopback hosts default to http).
 
 ```bash
-selective auth status    # who you're logged in as, and whether the token still works
-selective auth logout    # revoke this machine's token and forget it
+sel auth status    # who you're logged in as, and whether the token still works
+sel auth logout    # revoke this machine's token and forget it
 ```
 
 ### CI and agents
@@ -53,7 +53,7 @@ To store a token non-interactively, pass it on stdin. It never goes on the
 command line, where it would land in shell history and `ps`.
 
 ```bash
-selective auth login --with-token < token.txt
+sel auth login --with-token < token.txt
 ```
 
 ## Set up a repository
@@ -62,15 +62,15 @@ What an agent (or you) needs to put a repository on Selective, without
 opening the dashboard:
 
 ```bash
-selective auth signup                 # new account: signup page, then logged in with setup access
-selective auth login --setup          # existing account; also allows creating suites
-selective orgs                        # your organizations (pass --org when you have several)
-selective repos                       # repositories Selective's GitHub App can see
-selective suites create --name web-rspec --framework rspec    # repo defaults to this checkout's origin
-selective suites key web-rspec --github-secret SELECTIVE_API_KEY
+sel auth signup                 # new account: signup page, then logged in with setup access
+sel auth login --setup          # existing account; also allows creating suites
+sel orgs                        # your organizations (pass --org when you have several)
+sel repos                       # repositories Selective's GitHub App can see
+sel suites create --name web-rspec --framework rspec    # repo defaults to this checkout's origin
+sel suites key web-rspec --github-secret SELECTIVE_API_KEY
 ```
 
-- **For agents.** `selective auth login --setup --json` writes
+- **For agents.** `sel auth login --setup --json` writes
   `{"event":"authorize","url":…,"user_code":…}` to stdout at once and
   `{"event":"logged_in",…}` the moment the person approves. Run it in the
   background, hand the person the URL, and wait for the second line. Without an
@@ -81,7 +81,7 @@ selective suites key web-rspec --github-secret SELECTIVE_API_KEY
 - **The API key is never shown.** `suites key` needs a destination: a GitHub
   Actions secret through `gh` (key on stdin) with `--github-secret NAME`, or
   `--stdout` piped into a secret store:
-  `selective suites key web-rspec --stdout | <your CI's secret command>`.
+  `sel suites key web-rspec --stdout | <your CI's secret command>`.
   `--stdout` refuses a terminal.
 - **Output.** JSON when piped or with `--json`, tables on a terminal.
 - `SELECTIVE_ORG` sets the organization for these commands.
@@ -89,8 +89,8 @@ selective suites key web-rspec --github-secret SELECTIVE_API_KEY
 ## Tail a build
 
 ```bash
-selective tail                   # the build for this repo's HEAD commit
-selective tail --run-id <id>     # a specific build
+sel tail                   # the build for this repo's HEAD commit
+sel tail --run-id <id>     # a specific build
 ```
 
 Output is NDJSON when piped and readable when on a terminal

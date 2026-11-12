@@ -1,6 +1,6 @@
 // Package devicelogin implements the client side of the OAuth 2.0 device
 // authorization grant (RFC 8628) against Selective, the flow behind
-// `selective auth login`.
+// `sel auth login`.
 package devicelogin
 
 import (
@@ -15,7 +15,7 @@ import (
 
 var (
 	ErrDenied  = errors.New("the login was denied in the browser")
-	ErrExpired = errors.New("the code expired before it was approved; run selective auth login again")
+	ErrExpired = errors.New("the code expired before it was approved; run sel auth login again")
 )
 
 // Code is what the server hands out to start a login.

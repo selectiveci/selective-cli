@@ -15,7 +15,7 @@ var commit = "none"
 
 func main() {
 	root := &cobra.Command{
-		Use:               "selective",
+		Use:               "sel",
 		Short:             "Selective CI — AI-first test intelligence CLI",
 		Long:              "Stream live test results from Selective CI builds directly to your terminal or agent.",
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -41,9 +41,9 @@ func authCmd() *cobra.Command {
 		Short: "Log in to Selective, check the login, or log out",
 		Long: `Manage the CLI's login.
 
-  selective auth login     Log in through your browser
-  selective auth status    Show who you're logged in as
-  selective auth logout    Revoke this machine's token and forget it
+  sel auth login     Log in through your browser
+  sel auth status    Show who you're logged in as
+  sel auth logout    Revoke this machine's token and forget it
 
 CI and agents can skip logging in: set SELECTIVE_TOKEN (and SELECTIVE_HOST
 for a server other than app.selective.ci).`,
@@ -54,7 +54,7 @@ for a server other than app.selective.ci).`,
 			return cmd.Help()
 		},
 	}
-	// `selective auth --token …` predates `auth login`; keep it working, quietly.
+	// `sel auth --token …` predates `auth login`; keep it working, quietly.
 	cmd.Flags().StringVar(&legacyToken, "token", "", "")
 	cmd.Flags().StringVar(&legacyHost, "hostname", "", "")
 	_ = cmd.Flags().MarkHidden("token")
@@ -85,11 +85,11 @@ command waits.
 
 For scripts, pass a token on stdin instead:
 
-  selective auth login --with-token < token.txt`,
-		Example: `  selective auth login
-  selective auth login --setup --json
-  selective auth login --hostname staging.selective.ci
-  selective auth login --hostname localhost:4000`,
+  sel auth login --with-token < token.txt`,
+		Example: `  sel auth login
+  sel auth login --setup --json
+  sel auth login --hostname staging.selective.ci
+  sel auth login --hostname localhost:4000`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Version = version
@@ -116,8 +116,8 @@ func authSignupCmd() *cobra.Command {
 
 Like auth login --setup, but the page greets the person with signup. Someone
 who already has an account can still sign in from there.`,
-		Example: `  selective auth signup
-  selective auth signup --json`,
+		Example: `  sel auth signup
+  sel auth signup --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Version = version
@@ -172,7 +172,7 @@ func tailCmd() *cobra.Command {
 		Short: "Stream live test results for the current commit",
 		Long: `Connect to a live Selective CI build and stream test results as NDJSON.
 
-Run from inside a git repository — selective tail auto-detects the repo and HEAD commit.
+Run from inside a git repository — sel tail auto-detects the repo and HEAD commit.
 
 Exit codes:
   0  all tests passed
@@ -203,7 +203,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("selective %s (%s)\n", version, commit)
+			fmt.Printf("sel %s (%s)\n", version, commit)
 		},
 	}
 }
@@ -278,8 +278,8 @@ func suitesCmd() *cobra.Command {
 		Short: "List, create and configure test suites",
 		Long: `List the organization's test suites, with when each last ran.
 
-  selective suites create   Create a suite for a repository (needs --setup login)
-  selective suites key      Hand a suite's API key to a secret store`,
+  sel suites create   Create a suite for a repository (needs --setup login)
+  sel suites key      Hand a suite's API key to a secret store`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -306,11 +306,11 @@ unique within an organization, so with several repositories include the
 repository in the name (web-rspec).
 
 The repository defaults to this checkout's origin remote, and must be one
-the organization's Selective GitHub App can see (selective repos). A
+the organization's Selective GitHub App can see (sel repos). A
 repository with several test commands (say, RSpec and Minitest) gets one
 suite per command.`,
-		Example: `  selective suites create --name web-rspec --framework rspec
-  selective suites create --name web-minitest --framework minitest --repo acme/web`,
+		Example: `  sel suites create --name web-rspec --framework rspec
+  sel suites create --name web-minitest --framework minitest --repo acme/web`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -343,8 +343,8 @@ appearing on screen.
                          secret store; never to a terminal
 
 One of the two is required.`,
-		Example: `  selective suites key rspec --github-secret SELECTIVE_API_KEY
-  selective suites key rspec --stdout | rwx vaults secrets set SELECTIVE_API_KEY`,
+		Example: `  sel suites key rspec --github-secret SELECTIVE_API_KEY
+  sel suites key rspec --stdout | rwx vaults secrets set SELECTIVE_API_KEY`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)

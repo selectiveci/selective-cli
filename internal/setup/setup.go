@@ -1,5 +1,5 @@
-// Package setup implements `selective orgs`, `selective repos` and
-// `selective suites`: what an agent needs to set a repository up.
+// Package setup implements `sel orgs`, `sel repos` and
+// `sel suites`: what an agent needs to set a repository up.
 package setup
 
 import (
@@ -44,7 +44,7 @@ func Connect(hostname string, forceJSON bool) (*Env, error) {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		return nil, fmt.Errorf("not logged in to %s; run: selective auth login --setup", host)
+		return nil, fmt.Errorf("not logged in to %s; run: sel auth login --setup", host)
 	}
 	tty := isatty.IsTerminal(os.Stdout.Fd())
 	return &Env{
@@ -202,7 +202,7 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 	switch {
 	case opts.GithubSecret == "" && !opts.Stdout:
 		return errors.New("say where the key goes: --github-secret NAME, " +
-			"or --stdout piped straight into a secret store (selective suites key NAME --stdout | <secret command>)")
+			"or --stdout piped straight into a secret store (sel suites key NAME --stdout | <secret command>)")
 	case opts.GithubSecret != "" && opts.Stdout:
 		return errors.New("use --github-secret or --stdout, not both")
 	case opts.Stdout && e.StdoutIsTerminal:
@@ -254,7 +254,7 @@ func (e *Env) findSuite(org, want string) (*api.Suite, error) {
 			return &suites[i], nil
 		}
 	}
-	return nil, fmt.Errorf("no suite %q in %s; see: selective suites --org %s", want, org, org)
+	return nil, fmt.Errorf("no suite %q in %s; see: sel suites --org %s", want, org, org)
 }
 
 func repoOrOrigin(repo string) (string, error) {
