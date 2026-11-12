@@ -275,14 +275,16 @@ func suitesCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a suite for a repository",
 		Long: `Create a test suite for a repository, or find the one already there:
-running it again with the same name returns the same suite.
+running it again with the same name returns the same suite. Names are
+unique within an organization, so with several repositories include the
+repository in the name (web-rspec).
 
 The repository defaults to this checkout's origin remote, and must be one
 the organization's Selective GitHub App can see (selective repos). A
 repository with several test commands (say, RSpec and Minitest) gets one
 suite per command.`,
-		Example: `  selective suites create --name rspec --framework rspec
-  selective suites create --name minitest --framework minitest --repo acme/web`,
+		Example: `  selective suites create --name web-rspec --framework rspec
+  selective suites create --name web-minitest --framework minitest --repo acme/web`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -295,7 +297,7 @@ suite per command.`,
 	f.bind(cmd, true)
 	cmd.Flags().StringVar(&name, "name", "", "Suite name, e.g. the test command it runs (required)")
 	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository owner/name (default: this checkout's origin)")
-	cmd.Flags().StringVar(&framework, "framework", "", "Test framework: rspec or minitest (default: learned from the first run)")
+	cmd.Flags().StringVar(&framework, "framework", "", "Test framework: rspec, minitest, exunit, pytest, junit, phpunit or vitest (default: learned from the first run)")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
 }
@@ -311,10 +313,12 @@ appearing on screen.
 
   --github-secret NAME   set a GitHub Actions secret on the suite's repository
                          (uses the GitHub CLI, gh)
-  otherwise              write the key to stdout, which must be a pipe into
-                         a secret store; it is never printed to a terminal`,
+  --stdout               write the key to stdout, piped straight into a
+                         secret store; never to a terminal
+
+One of the two is required.`,
 		Example: `  selective suites key rspec --github-secret SELECTIVE_API_KEY
-  selective suites key rspec | rwx vaults secrets set SELECTIVE_API_KEY`,
+  selective suites key rspec --stdout | rwx vaults secrets set SELECTIVE_API_KEY`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -325,7 +329,8 @@ appearing on screen.
 		},
 	}
 	f.bind(cmd, true)
-	cmd.Flags().StringVar(&opts.GithubSecret, "github-secret", "", "Set this GitHub Actions secret instead of writing to stdout")
+	cmd.Flags().StringVar(&opts.GithubSecret, "github-secret", "", "Set this GitHub Actions secret on the repository")
+	cmd.Flags().BoolVar(&opts.Stdout, "stdout", false, "Write the key to stdout, which must be a pipe into a secret store")
 	cmd.Flags().StringVar(&opts.Repo, "repo", "", "Repository for --github-secret (default: the suite's)")
 	return cmd
 }

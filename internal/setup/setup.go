@@ -191,24 +191,31 @@ func (e *Env) CreateSuite(org, name, repo, framework string) error {
 type KeyOptions struct {
 	GithubSecret string // set this GitHub Actions secret, via gh
 	Repo         string // the secret's repository; default the suite's
+	Stdout       bool   // write the key to stdout, which must be a pipe
 }
 
 // Key hands a suite's API key on without displaying it: into a GitHub
-// Actions secret, or down a pipe. It refuses to print to a terminal.
+// Actions secret, or, with --stdout, down a pipe. Nothing is written
+// unless the caller names where the key goes.
 func (e *Env) Key(org, suite string, opts KeyOptions) error {
+	switch {
+	case opts.GithubSecret == "" && !opts.Stdout:
+		return errors.New("say where the key goes: --github-secret NAME, " +
+			"or --stdout piped straight into a secret store (selective suites key NAME --stdout | <secret command>)")
+	case opts.GithubSecret != "" && opts.Stdout:
+		return errors.New("use --github-secret or --stdout, not both")
+	case opts.Stdout && e.StdoutIsTerminal:
+		return errors.New("refusing to print an API key to a terminal; pipe --stdout into a secret store")
+	}
 	s, err := e.findSuite(org, suite)
 	if err != nil {
 		return err
-	}
-	if opts.GithubSecret == "" && e.StdoutIsTerminal {
-		return errors.New("refusing to print an API key to a terminal; pipe it into a secret store " +
-			"(selective suites key NAME | gh secret set SELECTIVE_API_KEY) or use --github-secret")
 	}
 	key, err := e.Client.SuiteAPIKey(org, s.ID)
 	if err != nil {
 		return err
 	}
-	if opts.GithubSecret == "" {
+	if opts.Stdout {
 		_, err := io.WriteString(e.Stdout, key)
 		return err
 	}

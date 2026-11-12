@@ -109,3 +109,28 @@ func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 		t.Fatal("logout should refuse to act on SELECTIVE_TOKEN")
 	}
 }
+
+func TestJSONLoginReportsADenial(t *testing.T) {
+	setup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/code":
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device?code=ABCD-EFGH","expires_in":600,"interval":1}`))
+		case "/api/v1/device/token":
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":"access_denied"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &bytes.Buffer{}
+	err := Login(LoginOptions{Hostname: srv.URL, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("login succeeded")
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[1], `"event":"error"`) || !strings.Contains(lines[1], `"error":"access_denied"`) {
+		t.Fatalf("stdout = %q", out.String())
+	}
+}

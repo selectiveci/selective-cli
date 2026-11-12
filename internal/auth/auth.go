@@ -76,6 +76,7 @@ func Login(opts LoginOptions) error {
 	} else {
 		grant, err := browserLogin(host, opts)
 		if err != nil {
+			opts.emit(map[string]any{"event": "error", "error": loginErrorCode(err), "message": err.Error()})
 			return err
 		}
 		token, email, scope = grant.AccessToken, grant.User.Email, grant.Scope
@@ -120,10 +121,24 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	defer stop()
 	grant, err := client.Wait(ctx, code)
 	if errors.Is(err, context.Canceled) {
-		return nil, errors.New("login cancelled")
+		return nil, errCancelled
 	}
 	return grant, err
 }
+
+func loginErrorCode(err error) string {
+	switch {
+	case errors.Is(err, devicelogin.ErrDenied):
+		return "access_denied"
+	case errors.Is(err, devicelogin.ErrExpired):
+		return "expired_token"
+	case errors.Is(err, errCancelled):
+		return "cancelled"
+	}
+	return "login_failed"
+}
+
+var errCancelled = errors.New("login cancelled")
 
 func clientName(version string) string {
 	host, err := os.Hostname()

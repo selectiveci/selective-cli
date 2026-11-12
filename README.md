@@ -65,8 +65,8 @@ opening the dashboard:
 selective auth login --setup          # sign up or sign in; also allows creating suites
 selective orgs                        # your organizations (pass --org when you have several)
 selective repos                       # repositories Selective's GitHub App can see
-selective suites create --name rspec --framework rspec    # repo defaults to this checkout's origin
-selective suites key rspec --github-secret SELECTIVE_API_KEY
+selective suites create --name web-rspec --framework rspec    # repo defaults to this checkout's origin
+selective suites key web-rspec --github-secret SELECTIVE_API_KEY
 ```
 
 - **For agents.** `selective auth login --setup --json` writes
@@ -75,10 +75,13 @@ selective suites key rspec --github-secret SELECTIVE_API_KEY
   background, hand the person the URL, and wait for the second line. Without an
   account, the page signs them up with GitHub first.
 - **`suites create` is repeatable.** The same name returns the same suite.
-- **The API key is never shown.** `suites key` sets a GitHub Actions secret
-  through `gh` (key on stdin), or writes to a pipe:
-  `selective suites key rspec | <your CI's secret command>`. It refuses to
-  print to a terminal.
+  Names are unique within an organization, so include the repository in the
+  name when the organization has several.
+- **The API key is never shown.** `suites key` needs a destination: a GitHub
+  Actions secret through `gh` (key on stdin) with `--github-secret NAME`, or
+  `--stdout` piped into a secret store:
+  `selective suites key web-rspec --stdout | <your CI's secret command>`.
+  `--stdout` refuses a terminal.
 - **Output.** JSON when piped or with `--json`, tables on a terminal.
 - `SELECTIVE_ORG` sets the organization for these commands.
 

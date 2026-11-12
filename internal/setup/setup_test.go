@@ -45,10 +45,24 @@ func env(t *testing.T, orgs string) (*Env, *bytes.Buffer) {
 
 const oneOrg = `{"organizations":[{"slug":"acme","name":"Acme","role":"owner"}]}`
 
+func TestKeyNeedsADestination(t *testing.T) {
+	e, out := env(t, oneOrg)
+	err := e.Key("acme", "rspec", KeyOptions{})
+	if err == nil || !strings.Contains(err.Error(), "--stdout") {
+		t.Fatalf("err = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q", out.String())
+	}
+	if err := e.Key("acme", "rspec", KeyOptions{Stdout: true, GithubSecret: "X"}); err == nil {
+		t.Fatal("accepted both destinations")
+	}
+}
+
 func TestKeyNeverReachesATerminal(t *testing.T) {
 	e, out := env(t, oneOrg)
 	e.StdoutIsTerminal = true
-	err := e.Key("acme", "rspec", KeyOptions{})
+	err := e.Key("acme", "rspec", KeyOptions{Stdout: true})
 	if err == nil || !strings.Contains(err.Error(), "refusing") {
 		t.Fatalf("err = %v", err)
 	}
@@ -59,7 +73,7 @@ func TestKeyNeverReachesATerminal(t *testing.T) {
 
 func TestKeyGoesDownAPipe(t *testing.T) {
 	e, out := env(t, oneOrg)
-	if err := e.Key("acme", "rspec", KeyOptions{}); err != nil {
+	if err := e.Key("acme", "rspec", KeyOptions{Stdout: true}); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != secretKey {
