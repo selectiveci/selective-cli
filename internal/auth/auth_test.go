@@ -152,8 +152,11 @@ func TestSignupAsksForTheSignupPageAndSetup(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	stderr := &bytes.Buffer{}
-	_ = Login(LoginOptions{Hostname: srv.URL, Signup: true, NoBrowser: true, Stdout: &bytes.Buffer{}, Stderr: stderr})
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	_ = Login(LoginOptions{Hostname: srv.URL, Signup: true, JSON: true, NoBrowser: true, Stdout: stdout, Stderr: stderr})
+	if !strings.Contains(stdout.String(), `"url":"http://x/device?code=ABCD-EFGH&signup=1"`) {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
 	if got["intent"] != "signup" || got["scope"] != "setup" {
 		t.Fatalf("code request = %v", got)
 	}

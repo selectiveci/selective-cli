@@ -59,6 +59,7 @@ func Connect(hostname string, forceJSON bool) (*Env, error) {
 
 func (e *Env) json(v any) error {
 	enc := json.NewEncoder(e.Stdout)
+	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }

@@ -42,7 +42,9 @@ func (o LoginOptions) scope() string {
 
 func (o LoginOptions) emit(event map[string]any) {
 	if o.JSON && o.Stdout != nil {
-		_ = json.NewEncoder(o.Stdout).Encode(event)
+		enc := json.NewEncoder(o.Stdout)
+		enc.SetEscapeHTML(false) // agents copy the URL from the raw line
+		_ = enc.Encode(event)
 	}
 }
 
