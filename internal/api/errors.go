@@ -90,6 +90,8 @@ func codeForStatus(status int) contract.Code {
 		return contract.RateLimited
 	case status == http.StatusBadRequest, status == http.StatusNotAcceptable, status == http.StatusUnprocessableEntity:
 		return contract.InvalidRequest
+	case status == http.StatusRequestTimeout:
+		return contract.NetworkError
 	case status >= 500:
 		return contract.ServerError
 	default:
