@@ -167,6 +167,9 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 		manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
 	}
 	r.event("build_start", buildStartFields(raw.Tree))
+	if r.writeErr != nil {
+		return r.writeErr
+	}
 	selection, err := r.selectWithHeartbeats(ctx, manifest)
 	if err != nil {
 		return err

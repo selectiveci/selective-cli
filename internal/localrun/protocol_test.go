@@ -384,13 +384,19 @@ func TestRunAcceptsAnEmptyManifestList(t *testing.T) {
 }
 
 func TestRunFailsWhenTheEventStreamCannotBeWritten(t *testing.T) {
-	for _, writable := range []int{0, 1} {
-		t.Run(fmt.Sprintf("writes before failure=%d", writable), func(t *testing.T) {
-			wrap := func(w io.Writer) io.Writer { return &failingWriter{w: w, after: writable} }
+	cases := []struct {
+		writable int
+		runSent  bool
+	}{{0, false}, {1, true}, {2, true}, {3, true}}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("writes before failure=%d", tc.writable), func(t *testing.T) {
+			wrap := func(w io.Writer) io.Writer { return &failingWriter{w: w, after: tc.writable} }
 			out := exerciseWriting(t, Options{Selector: selecting("a")}, wrap, func(c *fakeClient) {
 				c.handshake("a")
-				c.next("run_test_cases")
-				c.result("a", "passed")
+				if tc.runSent {
+					c.next("run_test_cases")
+					c.result("a", "passed")
+				}
 				c.next("close")
 				c.send("report_at_finish", map[string]any{"connection_retries": 0})
 			})
@@ -706,5 +712,24 @@ func TestRunFailsFastWhenAHeartbeatCannotBeWritten(t *testing.T) {
 				t.Fatalf("err=%v after %s, want internal_error well before the deadline", out.err, time.Since(started))
 			}
 		})
+	}
+}
+
+func TestRunFailsFastWhenBuildStartCannotBeWritten(t *testing.T) {
+	slow := func(context.Context, Manifest) (Selection, error) {
+		time.Sleep(time.Second)
+		return Selection{Outcome: "select"}, nil
+	}
+	started := time.Now()
+	wrap := func(w io.Writer) io.Writer { return &failingWriter{w: w, after: 0} }
+	out := exerciseWriting(t, Options{Selector: slow, Timeout: 400 * time.Millisecond}, wrap, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		c.next("close")
+	})
+	if codeOf(out.err) != contract.InternalError || time.Since(started) > 300*time.Millisecond {
+		t.Fatalf("err=%v after %s, want internal_error before the selector or the deadline", out.err, time.Since(started))
 	}
 }
