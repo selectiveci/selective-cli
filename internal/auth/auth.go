@@ -136,11 +136,10 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 }
 
 func loginErrorCode(err error) string {
+	var coded contract.Coded
 	switch {
-	case errors.Is(err, devicelogin.ErrDenied):
-		return "access_denied"
-	case errors.Is(err, devicelogin.ErrExpired):
-		return "expired_token"
+	case errors.As(err, &coded):
+		return string(coded.ErrorCode())
 	case errors.Is(err, errCancelled):
 		return "cancelled"
 	}
