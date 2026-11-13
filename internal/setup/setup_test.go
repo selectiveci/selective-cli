@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,9 +27,11 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 			w.WriteHeader(422)
 			_, _ = w.Write([]byte(`{"error":"repo_not_installed","message":"The Selective GitHub App can't see this repository.","install_url":"http://x/acme/github/install"}`))
 		case r.URL.Path == "/api/v1/orgs/acme/suites/s-1" && r.Method == "PATCH":
-			var body map[string]string
+			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			_, _ = w.Write([]byte(`{"suite":{"id":"s-1","name":"RSpec","selection_mode":"` + body["selection_mode"] + `"},"previous":{"selection_mode":"off"}}`))
+			mode, _ := body["selection_mode"].(string)
+			selects, _ := body["selection_on_default_branch"].(bool)
+			_, _ = fmt.Fprintf(w, `{"suite":{"id":"s-1","name":"RSpec","selection_mode":%q,"selection_on_default_branch":%t},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`, mode, selects)
 		case r.URL.Path == "/api/v1/orgs/acme/suites/s-1/api_key":
 			_, _ = w.Write([]byte(`{"api_key":"` + secretKey + `"}`))
 		default:
@@ -139,6 +142,18 @@ func TestConfigureSetsSelectionAndSaysWhatChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, `Selection for "RSpec": off → shadow`) {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestConfigureSetsDefaultBranchSelection(t *testing.T) {
+	e, out := env(t, oneOrg)
+	selects := true
+	if err := e.Configure("acme", "rspec", api.SuiteSettings{SelectionOnDefaultBranch: &selects}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `Default-branch runs for "RSpec": full → select`) || strings.Contains(got, "Selection for") {
 		t.Fatalf("stdout = %q", got)
 	}
 }

@@ -194,7 +194,7 @@ var SelectionModes = []string{"off", "shadow", "live"}
 
 // Configure changes a suite's settings.
 func (e *Env) Configure(org, suite string, settings api.SuiteSettings) error {
-	if settings == (api.SuiteSettings{}) {
+	if settings.SelectionMode == "" && settings.SelectionOnDefaultBranch == nil {
 		return errors.New("say what to change, e.g. --selection shadow")
 	}
 	if m := settings.SelectionMode; m != "" && !slices.Contains(SelectionModes, m) {
@@ -218,7 +218,29 @@ func (e *Env) Configure(org, suite string, settings api.SuiteSettings) error {
 			fmt.Fprintf(e.Stdout, "✓ Selection for %q: %s → %s\n", updated.Name, dash(previous.SelectionMode), updated.SelectionMode)
 		}
 	}
+	if settings.SelectionOnDefaultBranch != nil {
+		was, now := defaultBranch(previous.SelectionOnDefaultBranch), defaultBranch(updated.SelectionOnDefaultBranch)
+		if was == now {
+			fmt.Fprintf(e.Stdout, "✓ Default-branch runs for %q already: %s\n", updated.Name, now)
+		} else {
+			fmt.Fprintf(e.Stdout, "✓ Default-branch runs for %q: %s → %s\n", updated.Name, was, now)
+		}
+	}
 	return nil
+}
+
+// DefaultBranchModes are what --default-branch accepts.
+var DefaultBranchModes = []string{"full", "select"}
+
+func defaultBranch(selects *bool) string {
+	switch {
+	case selects == nil:
+		return "-"
+	case *selects:
+		return "select"
+	default:
+		return "full"
+	}
 }
 
 // KeyOptions say where `suites key` sends the key.
