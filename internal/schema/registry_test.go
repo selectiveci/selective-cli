@@ -53,3 +53,12 @@ func TestEventsAreUniqueAndAttributed(t *testing.T) {
 		seen[e.Name] = true
 	}
 }
+
+func TestAccessorsReturnCopies(t *testing.T) {
+	exit, event := ExitCodes()[0], Events()[0]
+	ExitCodes()[0].Meaning = "changed"
+	Events()[0].Name = "changed"
+	if ExitCodes()[0] != exit || Events()[0] != event {
+		t.Error("writing through an accessor changed the registry")
+	}
+}

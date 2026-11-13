@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -49,9 +50,9 @@ var events = []Event{
 	{"done", "cli"},
 }
 
-func ExitCodes() []ExitCode { return exitCodes }
+func ExitCodes() []ExitCode { return slices.Clone(exitCodes) }
 
-func Events() []Event { return events }
+func Events() []Event { return slices.Clone(events) }
 
 func Errors() []ErrorCode {
 	codes := contract.Codes()
