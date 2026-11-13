@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,56 @@ type fakeClient struct {
 	t        *testing.T
 	commands chan map[string]any
 	frames   *io.PipeWriter
+	events   *stampedLines
+}
+
+type stamp struct {
+	event string
+	at    time.Time
+}
+
+type stampedLines struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	lines []stamp
+}
+
+func (s *stampedLines) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var e struct{ Event string }
+	_ = json.Unmarshal(b, &e)
+	s.lines = append(s.lines, stamp{e.Event, time.Now()})
+	return s.buf.Write(b)
+}
+
+func (s *stampedLines) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func (s *stampedLines) at(event string) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.lines {
+		if l.event == event {
+			return l.at, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func (c *fakeClient) awaitEvent(name string) time.Time {
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if at, ok := c.events.at(name); ok {
+			return at
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	c.t.Errorf("no %q event within 3s", name)
+	return time.Time{}
 }
 
 func (c *fakeClient) next(want string) map[string]any {
@@ -142,10 +194,11 @@ func exerciseWriting(t *testing.T, opts Options, wrap func(io.Writer) io.Writer,
 		script(client)
 		fromClientW.Close()
 	}()
-	var events bytes.Buffer
-	var sink io.Writer = &events
+	events := &stampedLines{}
+	client.events = events
+	var sink io.Writer = events
 	if wrap != nil {
-		sink = wrap(&events)
+		sink = wrap(events)
 	}
 	sum, err := Run(context.Background(), fromClientR, toClientW, sink, opts)
 	toClientW.Close()
@@ -201,17 +254,67 @@ func TestRunStreamsSelectedTestsAndSummarises(t *testing.T) {
 	if len(seen.Cases) != 3 || seen.Cases[2] != (Case{ID: "c", FilePath: "./spec/c_spec.rb"}) || !strings.Contains(string(seen.Tree), `"sha":"abc123"`) {
 		t.Errorf("selector saw %+v", seen)
 	}
-	want := []string{"selection", "summary"}
+	want := []string{"build_start", "selection", "progress", "progress", "summary"}
 	if !reflect.DeepEqual(out.names(), want) {
 		t.Fatalf("events = %v, want %v", out.names(), want)
 	}
-	selection := out.events[0]
+	start := out.events[0]
+	if start["local"] != true || start["commit"] != "abc123" || start["dirty"] != true || start["build_id"] != nil {
+		t.Errorf("build_start = %v", start)
+	}
+	selection := out.events[1]
 	if selection["outcome"] != "select" || selection["selected"] != float64(2) || selection["skipped"] != float64(1) || selection["total"] != float64(3) || selection["changed_files"] != float64(1) || selection["source"] != "map" || selection["cause"] != nil {
 		t.Errorf("selection = %v", selection)
 	}
-	last := out.events[1]
+	last := out.events[4]
 	if last["passed"] != float64(1) || last["pending"] != float64(1) || last["failed"] != float64(0) || last["selected"] != float64(2) {
 		t.Errorf("summary = %v", last)
+	}
+	if got := out.named("progress")[1]; got["completed"] != float64(2) || got["total"] != float64(2) || got["percent"] != float64(100) {
+		t.Errorf("progress = %v", got)
+	}
+}
+
+func TestRunTurnsAFailedResultIntoATailShapedTestFail(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a")}, func(c *fakeClient) {
+		c.handshake("a")
+		c.next("run_test_cases")
+		c.result("a", "failed")
+		c.finish()
+	})
+	fails := out.named("test_fail")
+	if len(fails) != 1 {
+		t.Fatalf("test_fail events = %v", out.events)
+	}
+	want := map[string]any{"v": float64(1), "event": "test_fail", "node": "local", "id": "a", "file": "./spec/a_spec.rb", "line": float64(7), "ms": float64(12), "error": "expected 1\ngot 2"}
+	if !reflect.DeepEqual(fails[0], want) {
+		t.Errorf("test_fail = %v, want %v", fails[0], want)
+	}
+	if out.summary.Failed != 1 {
+		t.Errorf("summary = %+v", out.summary)
+	}
+	if out.names()[len(out.names())-1] != "summary" {
+		t.Errorf("summary is not the last event: %v", out.names())
+	}
+}
+
+func TestRunEmitsTestPassOnlyWhenAsked(t *testing.T) {
+	for _, passes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("passes=%v", passes), func(t *testing.T) {
+			out := exercise(t, Options{Selector: selecting("a"), Passes: passes}, func(c *fakeClient) {
+				c.handshake("a")
+				c.next("run_test_cases")
+				c.result("a", "passed")
+				c.finish()
+			})
+			got := out.named("test_pass")
+			if passes != (len(got) == 1) || (!passes && len(got) != 0) {
+				t.Fatalf("test_pass events = %v", got)
+			}
+			if passes && (got[0]["id"] != "a" || got[0]["node"] != "local" || got[0]["ms"] != float64(12)) {
+				t.Errorf("test_pass = %v", got[0])
+			}
+		})
 	}
 }
 
@@ -239,7 +342,7 @@ func TestRunRejectsAFinishReportWhileResultsAreOutstanding(t *testing.T) {
 	if codeOf(out.err) != contract.RunnerError {
 		t.Fatalf("err = %v, want runner_error", out.err)
 	}
-	if got := out.names(); !reflect.DeepEqual(got, []string{"selection"}) {
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "progress"}) {
 		t.Errorf("events = %v: an incomplete run must not summarise", got)
 	}
 }
@@ -358,7 +461,7 @@ func TestRunClosesWithoutRunningWhenNothingIsSelected(t *testing.T) {
 	if out.err != nil || out.summary.Selected != 0 || out.summary.Skipped != 1 {
 		t.Fatalf("err=%v summary=%+v", out.err, out.summary)
 	}
-	if got := out.names(); !reflect.DeepEqual(got, []string{"selection", "summary"}) {
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "summary"}) {
 		t.Errorf("events = %v", got)
 	}
 }
@@ -380,8 +483,8 @@ func TestRunDoesNotCloseOnADuplicateResult(t *testing.T) {
 	if early != nil {
 		t.Fatalf("closed early on a duplicate result: %v", early)
 	}
-	if out.err != nil || out.summary.Passed != 2 {
-		t.Errorf("err=%v summary=%+v", out.err, out.summary)
+	if out.err != nil || len(out.named("progress")) != 2 {
+		t.Errorf("err=%v progress=%v", out.err, out.named("progress"))
 	}
 }
 
@@ -416,7 +519,7 @@ func TestRunReportsARunnerThatDiesMidRun(t *testing.T) {
 	if codeOf(out.err) != contract.RunnerError {
 		t.Fatalf("err = %v, want code runner_error", out.err)
 	}
-	if got := out.names(); !reflect.DeepEqual(got, []string{"selection"}) {
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "test_fail", "progress"}) {
 		t.Errorf("events before the death = %v", got)
 	}
 	var terminal bytes.Buffer
@@ -472,5 +575,136 @@ func TestRunClosesTheRunnerWhenSelectionFails(t *testing.T) {
 	})
 	if codeOf(out.err) != contract.SuiteNotFound || !closed {
 		t.Fatalf("err=%v closed=%v", out.err, closed)
+	}
+}
+
+func TestRunEmitsAHeartbeatWhileTheStreamIsQuiet(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting(), HeartbeatEvery: 20 * time.Millisecond}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		time.Sleep(120 * time.Millisecond)
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		c.finish()
+	})
+	beats := out.named("heartbeat")
+	if len(beats) == 0 || out.names()[0] != "heartbeat" {
+		t.Fatalf("events = %v", out.names())
+	}
+	if _, ok := beats[0]["elapsed_s"]; !ok {
+		t.Errorf("heartbeat = %v", beats[0])
+	}
+	keys := make([]string, 0)
+	for k := range beats[0] {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if !reflect.DeepEqual(keys, []string{"elapsed_s", "event", "v"}) {
+		t.Errorf("heartbeat keys = %v", keys)
+	}
+}
+
+func TestRunHeartbeatsAfterTheIntervalOfSilenceFollowingTheLastEvent(t *testing.T) {
+	every := 200 * time.Millisecond
+	var quietFor time.Duration
+	exercise(t, Options{Selector: selecting(), HeartbeatEvery: every}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		time.Sleep(20 * time.Millisecond)
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		selected := c.awaitEvent("selection")
+		beat := c.awaitEvent("heartbeat")
+		quietFor = beat.Sub(selected)
+		c.finish()
+	})
+	if quietFor > every*3/2 {
+		t.Errorf("first heartbeat came %s after the last event, want about %s", quietFor, every)
+	}
+}
+
+func TestRunStaysSilentWhileEventsKeepFlowing(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "b", "c", "d"), HeartbeatEvery: 150 * time.Millisecond}, func(c *fakeClient) {
+		c.handshake("a", "b", "c", "d")
+		c.next("run_test_cases")
+		for _, id := range []string{"a", "b", "c", "d"} {
+			time.Sleep(70 * time.Millisecond)
+			c.result(id, "passed")
+		}
+		c.finish()
+	})
+	if beats := out.named("heartbeat"); len(beats) != 0 {
+		t.Errorf("heartbeats while events flowed: %v", beats)
+	}
+}
+
+func TestRunHeartbeatsWhileTheSelectorIsRunning(t *testing.T) {
+	selector := func(ctx context.Context, _ Manifest) (Selection, error) {
+		time.Sleep(250 * time.Millisecond)
+		return Selection{Outcome: "select"}, nil
+	}
+	out := exercise(t, Options{Selector: selector, HeartbeatEvery: 50 * time.Millisecond}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		c.finish()
+	})
+	names := out.names()
+	if len(names) < 4 || names[0] != "build_start" || out.err != nil {
+		t.Fatalf("err=%v events=%v", out.err, names)
+	}
+	if beats := strings.Count(strings.Join(names[1:len(names)-2], " "), "heartbeat"); beats < 2 {
+		t.Errorf("events = %v: want at least two heartbeats between build_start and selection", names)
+	}
+}
+
+func TestRunTimesOutWhenTheSelectorIgnoresTheDeadline(t *testing.T) {
+	selector := func(context.Context, Manifest) (Selection, error) {
+		time.Sleep(time.Second)
+		return Selection{}, nil
+	}
+	started := time.Now()
+	out := exercise(t, Options{Selector: selector, Timeout: 100 * time.Millisecond}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		c.next("close")
+	})
+	if codeOf(out.err) != contract.Timeout || time.Since(started) > 700*time.Millisecond {
+		t.Fatalf("err=%v after %s", out.err, time.Since(started))
+	}
+}
+
+func TestRunFailsFastWhenAHeartbeatCannotBeWritten(t *testing.T) {
+	slow := func(context.Context, Manifest) (Selection, error) {
+		time.Sleep(time.Second)
+		return Selection{Outcome: "select"}, nil
+	}
+	cases := map[string]struct {
+		writable int
+		selector Selector
+	}{
+		"quiet stream":    {0, selecting()},
+		"during selector": {1, slow},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			started := time.Now()
+			wrap := func(w io.Writer) io.Writer { return &failingWriter{w: w, after: tc.writable} }
+			out := exerciseWriting(t, Options{Selector: tc.selector, HeartbeatEvery: 30 * time.Millisecond}, wrap, func(c *fakeClient) {
+				c.next("connected")
+				c.next("configure_test_map")
+				c.next("test_manifest")
+				if tc.writable > 0 {
+					c.send("test_manifest", map[string]any{"test_cases": []any{}})
+				}
+				c.next("close")
+			})
+			if codeOf(out.err) != contract.InternalError || time.Since(started) > 700*time.Millisecond {
+				t.Fatalf("err=%v after %s, want internal_error well before the deadline", out.err, time.Since(started))
+			}
+		})
 	}
 }
