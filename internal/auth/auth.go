@@ -106,6 +106,9 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 		return nil, err
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	opts.emit(map[string]any{
 		"event":      "authorize",
 		"url":        code.VerificationURIComplete,
@@ -125,9 +128,6 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to %s and authorize the CLI:\n  %s\n", action, code.VerificationURIComplete)
 	}
 	fmt.Fprintln(opts.Stderr, "Waiting for you to authorize the CLI… (Ctrl+C to cancel)")
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	grant, err := client.Wait(ctx, code)
 	if errors.Is(err, context.Canceled) {
 		return nil, errCancelled
