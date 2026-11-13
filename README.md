@@ -5,6 +5,9 @@ terminal or your agent.
 
 ## Install
 
+With the install script, which puts `sel` in `/usr/local/bin`, or
+`~/.local/bin` when that isn't writable (set `INSTALL_DIR` to choose):
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/selectiveci/selective-cli/main/install.sh | sh
 ```
