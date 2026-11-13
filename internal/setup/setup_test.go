@@ -2,6 +2,8 @@ package setup
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +26,12 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "POST":
 			w.WriteHeader(422)
 			_, _ = w.Write([]byte(`{"error":"repo_not_installed","message":"The Selective GitHub App can't see this repository.","install_url":"http://x/acme/github/install"}`))
+		case r.URL.Path == "/api/v1/orgs/acme/suites/s-1" && r.Method == "PATCH":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mode, _ := body["selection_mode"].(string)
+			selects, _ := body["selection_on_default_branch"].(bool)
+			_, _ = fmt.Fprintf(w, `{"suite":{"id":"s-1","name":"RSpec","selection_mode":%q,"selection_on_default_branch":%t},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`, mode, selects)
 		case r.URL.Path == "/api/v1/orgs/acme/suites/s-1/api_key":
 			_, _ = w.Write([]byte(`{"api_key":"` + secretKey + `"}`))
 		default:
@@ -125,5 +133,37 @@ func TestCreateSuiteExplainsAMissingRepo(t *testing.T) {
 	err := e.CreateSuite("acme", "rspec", "acme/other", "rspec")
 	if err == nil || !strings.Contains(err.Error(), "http://x/acme/github/install") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestConfigureSetsSelectionAndSaysWhatChanged(t *testing.T) {
+	e, out := env(t, oneOrg)
+	if err := e.Configure("acme", "rspec", api.SuiteSettings{SelectionMode: "shadow"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, `Selection for "RSpec": off → shadow`) {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestConfigureSetsDefaultBranchSelection(t *testing.T) {
+	e, out := env(t, oneOrg)
+	selects := true
+	if err := e.Configure("acme", "rspec", api.SuiteSettings{SelectionOnDefaultBranch: &selects}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `Default-branch runs for "RSpec": full → select`) || strings.Contains(got, "Selection for") {
+		t.Fatalf("stdout = %q", got)
+	}
+}
+
+func TestConfigureRefusesBeforeCallingTheServer(t *testing.T) {
+	e, _ := env(t, oneOrg)
+	if err := e.Configure("acme", "rspec", api.SuiteSettings{}); err == nil || !strings.Contains(err.Error(), "--selection") {
+		t.Fatalf("empty settings: err = %v", err)
+	}
+	if err := e.Configure("acme", "rspec", api.SuiteSettings{SelectionMode: "on"}); err == nil || !strings.Contains(err.Error(), "off, shadow, live") {
+		t.Fatalf("bad mode: err = %v", err)
 	}
 }
