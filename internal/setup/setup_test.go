@@ -3,13 +3,17 @@ package setup
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/zalando/go-keyring"
 )
 
 const secretKey = "suite-key-should-not-show"
@@ -22,7 +26,7 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 		case r.URL.Path == "/api/v1/orgs":
 			_, _ = w.Write([]byte(orgs))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "GET":
-			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null}]}`))
+			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null},{"id":"s-2","name":"Bare","type":"rspec","repo":null,"last_run_at":null}]}`))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "POST":
 			w.WriteHeader(422)
 			_, _ = w.Write([]byte(`{"error":"repo_not_installed","message":"The Selective GitHub App can't see this repository.","install_url":"http://x/acme/github/install"}`))
@@ -32,7 +36,7 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 			mode, _ := body["selection_mode"].(string)
 			selects, _ := body["selection_on_default_branch"].(bool)
 			_, _ = fmt.Fprintf(w, `{"suite":{"id":"s-1","name":"RSpec","selection_mode":%q,"selection_on_default_branch":%t},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`, mode, selects)
-		case r.URL.Path == "/api/v1/orgs/acme/suites/s-1/api_key":
+		case strings.HasPrefix(r.URL.Path, "/api/v1/orgs/acme/suites/s-") && strings.HasSuffix(r.URL.Path, "/api_key"):
 			_, _ = w.Write([]byte(`{"api_key":"` + secretKey + `"}`))
 		default:
 			w.WriteHeader(404)
@@ -165,5 +169,111 @@ func TestConfigureRefusesBeforeCallingTheServer(t *testing.T) {
 	}
 	if err := e.Configure("acme", "rspec", api.SuiteSettings{SelectionMode: "on"}); err == nil || !strings.Contains(err.Error(), "off, shadow, live") {
 		t.Fatalf("bad mode: err = %v", err)
+	}
+}
+
+func codeOf(err error) contract.Code {
+	var coded contract.Coded
+	if errors.As(err, &coded) {
+		return coded.ErrorCode()
+	}
+	return ""
+}
+
+func inDirWithoutAGitRepo(t *testing.T) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+}
+
+func TestLocalRefusalsCarryTheirContractCode(t *testing.T) {
+	t.Setenv("SELECTIVE_ORG", "")
+	inDirWithoutAGitRepo(t)
+	e, _ := env(t, oneOrg)
+	several, _ := env(t, `{"organizations":[{"slug":"acme"},{"slug":"globex"}]}`)
+	none, _ := env(t, `{"organizations":[]}`)
+	terminal, _ := env(t, oneOrg)
+	terminal.StdoutIsTerminal = true
+
+	cases := []struct {
+		name string
+		err  error
+		want contract.Code
+	}{
+		{"configure with nothing to change", e.Configure("acme", "RSpec", api.SuiteSettings{}), contract.UsageError},
+		{"configure with a bad mode", e.Configure("acme", "RSpec", api.SuiteSettings{SelectionMode: "on"}), contract.UsageError},
+		{"configure a name no suite has", e.Configure("acme", "nope", api.SuiteSettings{SelectionMode: "off"}), contract.SuiteNotFound},
+		{"key for a name no suite has", e.Key("acme", "nope", KeyOptions{Stdout: true}), contract.SuiteNotFound},
+		{"key without a destination", e.Key("acme", "RSpec", KeyOptions{}), contract.UsageError},
+		{"key with two destinations", e.Key("acme", "RSpec", KeyOptions{Stdout: true, GithubSecret: "K"}), contract.UsageError},
+		{"key to a terminal", terminal.Key("acme", "RSpec", KeyOptions{Stdout: true}), contract.UsageError},
+		{"key for a suite with no repository", e.Key("acme", "Bare", KeyOptions{GithubSecret: "K"}), contract.UsageError},
+		{"several organizations", orgErr(several), contract.UsageError},
+		{"no organization", orgErr(none), contract.OrganizationNotFound},
+		{"missing origin remote", e.CreateSuite("acme", "rspec", "", "rspec"), contract.UsageError},
+		{"repo the app can't see", e.CreateSuite("acme", "rspec", "acme/other", "rspec"), contract.RepoNotInstalled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codeOf(tc.err); got != tc.want {
+				t.Errorf("code = %q, want %q (err: %v)", got, tc.want, tc.err)
+			}
+		})
+	}
+}
+
+func TestKeyIntoASecretWithoutGhIsAUsageError(t *testing.T) {
+	e, _ := env(t, oneOrg)
+	e.RunGh = runGh
+	t.Setenv("PATH", t.TempDir())
+
+	err := e.Key("acme", "RSpec", KeyOptions{GithubSecret: "K"})
+
+	if got := codeOf(err); got != contract.UsageError {
+		t.Errorf("code = %q, want %q (err: %v)", got, contract.UsageError, err)
+	}
+}
+
+func orgErr(e *Env) error {
+	_, err := e.ResolveOrg("")
+	return err
+}
+
+func TestRepoNotInstalledKeepsTheInstallURL(t *testing.T) {
+	e, _ := env(t, oneOrg)
+	err := e.CreateSuite("acme", "rspec", "acme/other", "rspec")
+
+	var fielded contract.Fielded
+	if !errors.As(err, &fielded) || fielded.ErrorFields()["install_url"] != "http://x/acme/github/install" {
+		t.Errorf("fields = %v, want install_url", fielded)
+	}
+}
+
+func TestConfigurePassesAnIdTheListDoesNotShowToTheServer(t *testing.T) {
+	e, _ := env(t, oneOrg)
+	err := e.Configure("acme", missingID, api.SuiteSettings{SelectionMode: "off"})
+
+	if got := codeOf(err); got != contract.NotFound {
+		t.Errorf("code = %q, want the server's %q for an unmatched PATCH (err: %v)", got, contract.NotFound, err)
+	}
+}
+
+const missingID = "00000000-0000-0000-0000-000000000000"
+
+func TestConnectWithoutALoginIsUnauthorized(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("SELECTIVE_CONFIG_DIR", t.TempDir())
+	t.Setenv("SELECTIVE_TOKEN", "")
+
+	_, err := Connect("http://127.0.0.1:1", true)
+
+	if got := codeOf(err); got != contract.Unauthorized {
+		t.Errorf("code = %q, want %q (err: %v)", got, contract.Unauthorized, err)
 	}
 }

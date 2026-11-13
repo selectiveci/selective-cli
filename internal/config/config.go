@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 // DefaultHost is used when neither --hostname, SELECTIVE_HOST nor a
@@ -148,7 +150,7 @@ func (c *Config) ResolveHost(flag string) (string, error) {
 func NormalizeHost(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", fmt.Errorf("empty hostname")
+		return "", contract.Errorf(contract.UsageError, "empty hostname")
 	}
 	if !strings.Contains(raw, "://") {
 		scheme := "https"
@@ -161,7 +163,7 @@ func NormalizeHost(raw string) (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("invalid hostname %q", raw)
+		return "", contract.Errorf(contract.UsageError, "invalid hostname %q", raw)
 	}
 	// The runner gems take SELECTIVE_HOST as a websocket URL.
 	switch u.Scheme {
@@ -171,7 +173,7 @@ func NormalizeHost(raw string) (string, error) {
 		u.Scheme = "https"
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("hostname must be http or https, got %q", u.Scheme)
+		return "", contract.Errorf(contract.UsageError, "hostname must be http or https, got %q", u.Scheme)
 	}
 	return u.Scheme + "://" + u.Host, nil
 }
