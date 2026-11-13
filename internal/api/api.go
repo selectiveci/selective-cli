@@ -4,8 +4,10 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -78,7 +80,12 @@ func (c *Client) do(method, path string, body any, want int, out any) error {
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return &Error{Status: resp.StatusCode, Code: contract.ServerError, Message: fmt.Sprintf("unexpected response from %s: %v", path, err), cause: err}
+			code := contract.ServerError
+			var netErr net.Error
+			if errors.As(err, &netErr) {
+				code = contract.NetworkError
+			}
+			return &Error{Status: resp.StatusCode, Code: code, Message: fmt.Sprintf("unexpected response from %s: %v", path, err), cause: err}
 		}
 	}
 	return nil
