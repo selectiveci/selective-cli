@@ -15,6 +15,7 @@ import (
 const (
 	OutcomeFull    = "full"
 	defaultTimeout = 30 * time.Minute
+	closeGrace     = 2 * time.Second
 )
 
 type Case struct {
@@ -63,11 +64,13 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, events io.Writer, opt
 	}
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
-	r := &run{opts: opts, out: json.NewEncoder(out), events: events, start: time.Now()}
+	r := &run{ctx: ctx, opts: opts, out: json.NewEncoder(out), events: events, start: time.Now()}
 	return r.loop(ctx, readFrames(in, ctx.Done()))
 }
 
 type run struct {
+	ctx         context.Context
+	stuck       bool
 	opts        Options
 	out         *json.Encoder
 	events      io.Writer
@@ -217,16 +220,34 @@ func (r *run) close() error {
 }
 
 func (r *run) send(command map[string]any) error {
-	if err := r.out.Encode(command); err != nil {
+	err := r.write(r.ctx, command)
+	switch {
+	case r.stuck:
+		return r.ctx.Err()
+	case err != nil:
 		return runnerLost(err)
 	}
 	return nil
 }
 
+func (r *run) write(ctx context.Context, command map[string]any) error {
+	wrote := make(chan error, 1)
+	go func() { wrote <- r.out.Encode(command) }()
+	select {
+	case err := <-wrote:
+		return err
+	case <-ctx.Done():
+		r.stuck = ctx == r.ctx
+		return ctx.Err()
+	}
+}
+
 func (r *run) abort(cause error) error {
-	if !r.closed {
+	if !r.closed && !r.stuck {
 		r.closed = true
-		_ = r.out.Encode(map[string]any{"command": "close", "exit_status": nil})
+		grace, release := context.WithTimeout(context.Background(), closeGrace)
+		defer release()
+		_ = r.write(grace, map[string]any{"command": "close", "exit_status": nil})
 	}
 	if errors.Is(cause, context.DeadlineExceeded) {
 		return contract.Errorf(contract.Timeout, "the test run did not finish: %d of %d selected tests had reported", r.completed, r.total)
