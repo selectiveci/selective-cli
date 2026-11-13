@@ -31,7 +31,7 @@ var exitCodes = []ExitCode{
 	{contract.ExitRetryable, "Auth, network or server. Retry, or log in again.", true},
 	{contract.ExitUsage, "Usage, invalid input, or a conflict with the current state. Fix the call.", false},
 	{contract.ExitForbidden, "Forbidden: this token or role may not do it.", false},
-	{contract.ExitPending, "Pending approval: a person must approve.", false},
+	{contract.ExitPending, "Pending approval: a person must approve, or the approval expired and must be requested again.", false},
 	{contract.ExitTimeout, "Timeout: the thing exists but did not finish in time.", false},
 	{contract.ExitInternal, "Internal: an unclassified CLI failure. Do not retry blindly.", false},
 	{contract.ExitInterrupted, "Interrupted (SIGINT).", false},
@@ -48,6 +48,7 @@ var events = []Event{
 	{"heartbeat", "cli"},
 	{"rerun_started", "cli"},
 	{"done", "cli"},
+	{"test_pass", "cli"},
 }
 
 func ExitCodes() []ExitCode { return slices.Clone(exitCodes) }

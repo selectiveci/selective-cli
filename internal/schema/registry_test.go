@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -60,5 +61,37 @@ func TestAccessorsReturnCopies(t *testing.T) {
 	Events()[0].Name = "changed"
 	if ExitCodes()[0] != exit || Events()[0] != event {
 		t.Error("writing through an accessor changed the registry")
+	}
+}
+
+func TestEventsAreExactlyTheContractEventTable(t *testing.T) {
+	want := []string{
+		"build_start", "selection", "progress", "summary", "test_fail", "replay_truncated",
+		"waiting", "heartbeat", "rerun_started", "done", "test_pass",
+	}
+	got := map[string]bool{}
+	for _, e := range Events() {
+		got[e.Name] = true
+	}
+	for _, name := range want {
+		if !got[name] {
+			t.Errorf("event %q is in the contract table but not the registry", name)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("registry has %d events, contract table has %d", len(got), len(want))
+	}
+}
+
+func TestExitSevenMeaningCoversPendingAndExpiredApprovals(t *testing.T) {
+	for _, e := range ExitCodes() {
+		if e.Code != contract.ExitPending {
+			continue
+		}
+		for _, word := range []string{"pending", "expired"} {
+			if !strings.Contains(strings.ToLower(e.Meaning), word) {
+				t.Errorf("exit 7 meaning %q does not mention %q", e.Meaning, word)
+			}
+		}
 	}
 }
