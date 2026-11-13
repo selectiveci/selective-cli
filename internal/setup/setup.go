@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -16,6 +17,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/config"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
 )
@@ -45,7 +47,7 @@ func Connect(hostname string, forceJSON bool) (*Env, error) {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		return nil, fmt.Errorf("not logged in to %s; run: sel auth login --setup", host)
+		return nil, contract.Errorf(contract.Unauthorized, "not logged in to %s; run: sel auth login --setup", host)
 	}
 	tty := isatty.IsTerminal(os.Stdout.Fd())
 	return &Env{
@@ -105,7 +107,7 @@ func (e *Env) ResolveOrg(flag string) (string, error) {
 	}
 	switch len(orgs) {
 	case 0:
-		return "", errors.New("this login belongs to no organization yet; finish signing up in the browser")
+		return "", contract.Errorf(contract.OrganizationNotFound, "this login belongs to no organization yet; finish signing up in the browser")
 	case 1:
 		return orgs[0].Slug, nil
 	}
@@ -113,7 +115,7 @@ func (e *Env) ResolveOrg(flag string) (string, error) {
 	for i, o := range orgs {
 		slugs[i] = o.Slug
 	}
-	return "", fmt.Errorf("you belong to several organizations; pass --org (one of: %s)", strings.Join(slugs, ", "))
+	return "", contract.Errorf(contract.UsageError, "you belong to several organizations; pass --org (one of: %s)", strings.Join(slugs, ", "))
 }
 
 // Repos lists the repositories a suite can be created for.
@@ -172,7 +174,8 @@ func (e *Env) CreateSuite(org, name, repo, framework string) error {
 	suite, result, err := e.Client.CreateSuite(org, name, repo, framework)
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) && apiErr.InstallURL != "" {
-		return fmt.Errorf("%s\n  Ask the user to open %s and give the app access to %s, then try again", apiErr.Message, apiErr.InstallURL, repo)
+		apiErr.Message = fmt.Sprintf("%s\n  Ask the user to open %s and give the app access to %s, then try again", apiErr.Message, apiErr.InstallURL, repo)
+		return apiErr
 	}
 	if err != nil {
 		return err
@@ -195,16 +198,16 @@ var SelectionModes = []string{"off", "shadow", "live"}
 // Configure changes a suite's settings.
 func (e *Env) Configure(org, suite string, settings api.SuiteSettings) error {
 	if settings.SelectionMode == "" && settings.SelectionOnDefaultBranch == nil {
-		return errors.New("say what to change, e.g. --selection shadow")
+		return contract.Errorf(contract.UsageError, "say what to change, e.g. --selection shadow")
 	}
 	if m := settings.SelectionMode; m != "" && !slices.Contains(SelectionModes, m) {
-		return fmt.Errorf("--selection must be one of: %s", strings.Join(SelectionModes, ", "))
+		return contract.Errorf(contract.UsageError, "--selection must be one of: %s", strings.Join(SelectionModes, ", "))
 	}
-	s, err := e.findSuite(org, suite)
+	id, err := e.suiteIDForConfigure(org, suite)
 	if err != nil {
 		return err
 	}
-	updated, previous, err := e.Client.ConfigureSuite(org, s.ID, settings)
+	updated, previous, err := e.Client.ConfigureSuite(org, id, settings)
 	if err != nil {
 		return err
 	}
@@ -256,12 +259,12 @@ type KeyOptions struct {
 func (e *Env) Key(org, suite string, opts KeyOptions) error {
 	switch {
 	case opts.GithubSecret == "" && !opts.Stdout:
-		return errors.New("say where the key goes: --github-secret NAME, " +
+		return contract.Errorf(contract.UsageError, "say where the key goes: --github-secret NAME, "+
 			"or --stdout piped straight into a secret store (sel suites key NAME --stdout | <secret command>)")
 	case opts.GithubSecret != "" && opts.Stdout:
-		return errors.New("use --github-secret or --stdout, not both")
+		return contract.Errorf(contract.UsageError, "use --github-secret or --stdout, not both")
 	case opts.Stdout && e.StdoutIsTerminal:
-		return errors.New("refusing to print an API key to a terminal; pipe --stdout into a secret store")
+		return contract.Errorf(contract.UsageError, "refusing to print an API key to a terminal; pipe --stdout into a secret store")
 	}
 	s, err := e.findSuite(org, suite)
 	if err != nil {
@@ -281,7 +284,7 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 		repo = deref(s.Repo)
 	}
 	if repo == "" {
-		return errors.New("the suite has no repository yet; pass --repo owner/name")
+		return contract.Errorf(contract.UsageError, "the suite has no repository yet; pass --repo owner/name")
 	}
 	if err := e.RunGh(key, "secret", "set", opts.GithubSecret, "--repo", repo); err != nil {
 		return fmt.Errorf("could not set the GitHub secret: %w", err)
@@ -293,8 +296,34 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 	return nil
 }
 
-// findSuite matches by ID, then by name (ignoring case).
+var suiteID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func suiteNotFound(org, want string) error {
+	return contract.Errorf(contract.SuiteNotFound, "no suite %q in %s; see: sel suites --org %s", want, org, org)
+}
+
+func (e *Env) suiteIDForConfigure(org, want string) (string, error) {
+	s, err := e.lookupSuite(org, want)
+	switch {
+	case err != nil:
+		return "", err
+	case s != nil:
+		return s.ID, nil
+	case suiteID.MatchString(want):
+		return want, nil
+	}
+	return "", suiteNotFound(org, want)
+}
+
 func (e *Env) findSuite(org, want string) (*api.Suite, error) {
+	s, err := e.lookupSuite(org, want)
+	if s == nil && err == nil {
+		err = suiteNotFound(org, want)
+	}
+	return s, err
+}
+
+func (e *Env) lookupSuite(org, want string) (*api.Suite, error) {
 	suites, err := e.Client.Suites(org)
 	if err != nil {
 		return nil, err
@@ -309,7 +338,7 @@ func (e *Env) findSuite(org, want string) (*api.Suite, error) {
 			return &suites[i], nil
 		}
 	}
-	return nil, fmt.Errorf("no suite %q in %s; see: sel suites --org %s", want, org, org)
+	return nil, nil
 }
 
 func repoOrOrigin(repo string) (string, error) {
@@ -318,14 +347,14 @@ func repoOrOrigin(repo string) (string, error) {
 	}
 	repo, err := gitctx.Repo()
 	if err != nil {
-		return "", fmt.Errorf("pass --repo owner/name (couldn't read this checkout's origin: %w)", err)
+		return "", contract.Errorf(contract.UsageError, "pass --repo owner/name (couldn't read this checkout's origin: %v)", err)
 	}
 	return repo, nil
 }
 
 func runGh(stdin string, args ...string) error {
 	if _, err := exec.LookPath("gh"); err != nil {
-		return errors.New("the GitHub CLI (gh) isn't installed; pipe the key into your CI's secret store instead")
+		return contract.Errorf(contract.UsageError, "the GitHub CLI (gh) isn't installed; pipe the key into your CI's secret store instead")
 	}
 	cmd := exec.Command("gh", args...)
 	cmd.Stdin = strings.NewReader(stdin)
