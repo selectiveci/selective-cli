@@ -71,6 +71,7 @@ type run struct {
 	opts        Options
 	out         *json.Encoder
 	events      io.Writer
+	writeErr    error
 	start       time.Time
 	manifested  bool
 	closed      bool
@@ -99,6 +100,9 @@ func (r *run) loop(ctx context.Context, frames <-chan inbound) (Summary, error) 
 				return r.sum, r.abort(runnerLost(frame.err))
 			}
 			done, err := r.handle(ctx, frame)
+			if err == nil {
+				err = r.writeErr
+			}
 			if err != nil {
 				return r.sum, r.abort(err)
 			}
@@ -231,7 +235,9 @@ func (r *run) abort(cause error) error {
 }
 
 func (r *run) event(name string, fields map[string]any) {
-	_ = format.EventLine(r.events, name, fields)
+	if err := format.EventLine(r.events, name, fields); err != nil && r.writeErr == nil {
+		r.writeErr = contract.Errorf(contract.InternalError, "could not write the event stream: %v", err)
+	}
 }
 
 func decode(data json.RawMessage, into any) error {

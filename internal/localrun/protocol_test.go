@@ -104,6 +104,24 @@ func selecting(ids ...string) Selector {
 
 func exercise(t *testing.T, opts Options, script func(*fakeClient)) outcome {
 	t.Helper()
+	return exerciseWriting(t, opts, nil, script)
+}
+
+type failingWriter struct {
+	w     io.Writer
+	after int
+}
+
+func (f *failingWriter) Write(b []byte) (int, error) {
+	if f.after <= 0 {
+		return 0, io.ErrClosedPipe
+	}
+	f.after--
+	return f.w.Write(b)
+}
+
+func exerciseWriting(t *testing.T, opts Options, wrap func(io.Writer) io.Writer, script func(*fakeClient)) outcome {
+	t.Helper()
 	if opts.Timeout == 0 {
 		opts.Timeout = 3 * time.Second
 	}
@@ -125,7 +143,11 @@ func exercise(t *testing.T, opts Options, script func(*fakeClient)) outcome {
 		fromClientW.Close()
 	}()
 	var events bytes.Buffer
-	sum, err := Run(context.Background(), fromClientR, toClientW, &events, opts)
+	var sink io.Writer = &events
+	if wrap != nil {
+		sink = wrap(&events)
+	}
+	sum, err := Run(context.Background(), fromClientR, toClientW, sink, opts)
 	toClientW.Close()
 	fromClientR.Close()
 	<-scripted
@@ -255,6 +277,24 @@ func TestRunAcceptsAnEmptyManifestList(t *testing.T) {
 	})
 	if out.err != nil || out.summary.Selected != 0 {
 		t.Fatalf("err=%v summary=%+v", out.err, out.summary)
+	}
+}
+
+func TestRunFailsWhenTheEventStreamCannotBeWritten(t *testing.T) {
+	for _, writable := range []int{0, 1} {
+		t.Run(fmt.Sprintf("writes before failure=%d", writable), func(t *testing.T) {
+			wrap := func(w io.Writer) io.Writer { return &failingWriter{w: w, after: writable} }
+			out := exerciseWriting(t, Options{Selector: selecting("a")}, wrap, func(c *fakeClient) {
+				c.handshake("a")
+				c.next("run_test_cases")
+				c.result("a", "passed")
+				c.next("close")
+				c.send("report_at_finish", map[string]any{"connection_retries": 0})
+			})
+			if codeOf(out.err) != contract.InternalError || !strings.Contains(out.err.Error(), "event stream") {
+				t.Fatalf("err = %v, want an internal_error about the event stream", out.err)
+			}
+		})
 	}
 }
 
