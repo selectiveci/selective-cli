@@ -1,6 +1,10 @@
 package schema
 
-import "github.com/selectiveci/selective-cli/internal/contract"
+import (
+	"sort"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
+)
 
 type ExitCode struct {
 	Code      int    `json:"code"`
@@ -45,20 +49,16 @@ var events = []Event{
 	{"done", "cli"},
 }
 
-func knownExit(code int) bool {
-	for _, e := range exitCodes {
-		if e.Code == code {
-			return true
-		}
-	}
-	return false
-}
+func ExitCodes() []ExitCode { return exitCodes }
 
-func knownEvent(name string) bool {
-	for _, e := range events {
-		if e.Name == name {
-			return true
-		}
+func Events() []Event { return events }
+
+func Errors() []ErrorCode {
+	codes := contract.Codes()
+	sort.Slice(codes, func(i, j int) bool { return codes[i] < codes[j] })
+	out := make([]ErrorCode, 0, len(codes))
+	for _, c := range codes {
+		out = append(out, ErrorCode{string(c), contract.ExitFor(c, 0)})
 	}
-	return false
+	return out
 }
