@@ -81,9 +81,9 @@ func TestRuntimeErrorsExitByCode(t *testing.T) {
 		},
 		{
 			"server says the scope is missing",
-			&api.Error{Status: 403, Code: contract.InsufficientScope, Message: "needs write", Scope: "write", Fields: map[string]any{"scope": "write"}},
+			&api.Error{Status: 403, Code: contract.InsufficientScope, Message: "needs write", Fields: map[string]any{"scope": "write"}},
 			6,
-			`{"v":1,"error":"insufficient_scope","message":"this login can't do that (it needs the \"write\" scope); run: sel auth login --setup","scope":"write"}` + "\n",
+			`{"v":1,"error":"insufficient_scope","message":"needs write","scope":"write"}` + "\n",
 		},
 		{
 			"cli-originated timeout",
