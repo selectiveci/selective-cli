@@ -143,6 +143,41 @@ func TestRejectedTokenExitsFourThroughTheClient(t *testing.T) {
 	}
 }
 
+func TestDeviceLoginFailuresExitByContractCode(t *testing.T) {
+	cases := []struct {
+		name        string
+		tokenStatus int
+		tokenBody   string
+		exit        int
+		code        string
+	}{
+		{"person denied the login", 400, `{"error":"access_denied"}`, 6, "approval_denied"},
+		{"device code expired", 400, `{"error":"expired_token"}`, 7, "approval_expired"},
+		{"server fault while polling", 500, `{"error":"server_error"}`, 4, "server_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/device/code" {
+					_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device","expires_in":600,"interval":1}`))
+					return
+				}
+				w.WriteHeader(tc.tokenStatus)
+				_, _ = w.Write([]byte(tc.tokenBody))
+			}))
+			t.Cleanup(srv.Close)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "auth", "login", "--no-browser", "--json")
+
+			lines := strings.Split(strings.TrimSpace(res.stdout), "\n")
+			last := lines[len(lines)-1]
+			if res.exit != tc.exit || !strings.HasPrefix(last, `{"v":1,"error":"`+tc.code+`"`) {
+				t.Errorf("exit %d last line %q, want exit %d and error %q", res.exit, last, tc.exit, tc.code)
+			}
+		})
+	}
+}
+
 func leafPaths(c *cobra.Command, prefix string, out map[string]*cobra.Command) {
 	for _, sub := range c.Commands() {
 		path := strings.TrimSpace(prefix + " " + sub.Name())

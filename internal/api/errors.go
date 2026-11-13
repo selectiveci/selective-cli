@@ -73,12 +73,12 @@ func decodeError(resp *http.Response) *Error {
 		e.Fields["retry_after_s"] = retry
 	}
 	if e.Code == "" {
-		e.Code = codeForStatus(resp.StatusCode)
+		e.Code = CodeForStatus(resp.StatusCode)
 	}
 	return e
 }
 
-func codeForStatus(status int) contract.Code {
+func CodeForStatus(status int) contract.Code {
 	switch {
 	case status == http.StatusUnauthorized:
 		return contract.Unauthorized
