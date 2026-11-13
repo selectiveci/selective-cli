@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/selectiveci/selective-cli/internal/api"
@@ -101,6 +103,12 @@ func TestRuntimeErrorsExitByCode(t *testing.T) {
 			`{"v":1,"error":"network_error","message":"dial tcp: no route to host"}` + "\n",
 		},
 		{
+			"config file error is not a network error",
+			&os.PathError{Op: "open", Path: "/home/u/.config/selective/credentials", Err: syscall.ENOENT},
+			9,
+			`{"v":1,"error":"internal_error","message":"open /home/u/.config/selective/credentials: no such file or directory"}` + "\n",
+		},
+		{
 			"unclassified error",
 			http.ErrAbortHandler,
 			9,
@@ -189,4 +197,25 @@ func TestNoCommandSetsPersistentPreRun(t *testing.T) {
 		}
 	}
 	walk(newRoot())
+}
+
+func TestJSONFlagGivenAcceptsBooleanSpellings(t *testing.T) {
+	cases := []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"tail", "--json"}, true},
+		{[]string{"tail", "--json=true"}, true},
+		{[]string{"tail", "--json=1"}, true},
+		{[]string{"tail", "--json=T"}, true},
+		{[]string{"tail", "--json=false"}, false},
+		{[]string{"tail", "--json=0"}, false},
+		{[]string{"tail", "--json=maybe"}, false},
+		{[]string{"tail"}, false},
+	}
+	for _, tc := range cases {
+		if got := jsonFlagGiven(tc.args); got != tc.want {
+			t.Errorf("jsonFlagGiven(%v) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
 }

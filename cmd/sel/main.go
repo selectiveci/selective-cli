@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/auth"
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -54,22 +57,42 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 		return contract.ExitFor(contract.Unauthorized, 0)
 	}
 	coded := classify(err, entered)
-	if format.JSONMode(cmd.Flags(), stdout) || slices.Contains(args, "--json") {
+	if format.JSONMode(cmd.Flags(), stdout) || jsonFlagGiven(args) {
 		_ = format.Error(stdout, coded)
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return coded.ExitCode()
 }
 
+func jsonFlagGiven(args []string) bool {
+	return slices.ContainsFunc(args, func(arg string) bool {
+		if arg == "--json" {
+			return true
+		}
+		value, ok := strings.CutPrefix(arg, "--json=")
+		if !ok {
+			return false
+		}
+		asked, err := strconv.ParseBool(value)
+		return err == nil && asked
+	})
+}
+
+func isNetworkError(err error) bool {
+	var urlErr *url.Error
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	return errors.As(err, &urlErr) || errors.As(err, &opErr) || errors.As(err, &dnsErr)
+}
+
 func classify(err error, entered bool) contract.Coded {
 	var coded contract.Coded
-	var netErr net.Error
 	switch {
 	case !entered:
 		return contract.Errorf(contract.UsageError, "%s", err.Error())
 	case errors.As(err, &coded):
 		return coded
-	case errors.As(err, &netErr):
+	case isNetworkError(err):
 		return contract.Errorf(contract.NetworkError, "%s", err.Error())
 	default:
 		return contract.Errorf(contract.InternalError, "%s", err.Error())
