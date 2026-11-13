@@ -748,6 +748,13 @@ func (s *stuckWriter) Write(b []byte) (int, error) {
 }
 
 func TestRunTimesOutWhenACommandWriteBlocks(t *testing.T) {
+	for _, command := range []string{"connected", "run_test_cases"} {
+		t.Run(command, func(t *testing.T) { runWithBlockedWrite(t, command) })
+	}
+}
+
+func runWithBlockedWrite(t *testing.T, command string) {
+	t.Helper()
 	release := make(chan struct{})
 	defer close(release)
 	framesIn, framesOut := io.Pipe()
@@ -763,7 +770,7 @@ func TestRunTimesOutWhenACommandWriteBlocks(t *testing.T) {
 	finished := make(chan ended, 1)
 	started := time.Now()
 	go func() {
-		_, err := Run(context.Background(), framesIn, &stuckWriter{release: release, on: "run_test_cases"}, io.Discard, Options{Selector: selecting("a"), Timeout: 200 * time.Millisecond})
+		_, err := Run(context.Background(), framesIn, &stuckWriter{release: release, on: command}, io.Discard, Options{Selector: selecting("a"), Timeout: 200 * time.Millisecond})
 		finished <- ended{err, time.Since(started)}
 	}()
 	select {
