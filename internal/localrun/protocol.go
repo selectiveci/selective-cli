@@ -132,7 +132,7 @@ func (r *run) handle(ctx context.Context, frame inbound) (bool, error) {
 
 func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	var raw struct {
-		TestCases []struct {
+		TestCases *[]struct {
 			ID       string `json:"id"`
 			FilePath string `json:"file_path"`
 		} `json:"test_cases"`
@@ -141,8 +141,11 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	if err := decode(data, &raw); err != nil {
 		return err
 	}
+	if raw.TestCases == nil {
+		return contract.Errorf(contract.RunnerError, "the test runner sent a manifest without a test case list")
+	}
 	manifest := Manifest{Tree: raw.Tree}
-	for _, c := range raw.TestCases {
+	for _, c := range *raw.TestCases {
 		manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
 	}
 	selection, err := r.opts.Selector(ctx, manifest)

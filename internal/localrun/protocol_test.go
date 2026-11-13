@@ -222,6 +222,42 @@ func TestRunRejectsAFinishReportWhileResultsAreOutstanding(t *testing.T) {
 	}
 }
 
+func TestRunRejectsAManifestWithoutATestCaseList(t *testing.T) {
+	frames := map[string]string{
+		"null data": `{"type":"test_manifest","data":null}`,
+		"null list": `{"type":"test_manifest","data":{"test_cases":null}}`,
+		"no list":   `{"type":"test_manifest","data":{}}`,
+	}
+	for name, frame := range frames {
+		t.Run(name, func(t *testing.T) {
+			var closed map[string]any
+			out := exercise(t, Options{Selector: selecting()}, func(c *fakeClient) {
+				c.next("connected")
+				c.next("configure_test_map")
+				c.next("test_manifest")
+				_, _ = c.frames.Write([]byte(frame + "\n"))
+				closed = c.next("close")
+			})
+			if codeOf(out.err) != contract.RunnerError || closed["command"] != "close" || len(out.events) != 0 {
+				t.Fatalf("err=%v close=%v events=%v", out.err, closed, out.events)
+			}
+		})
+	}
+}
+
+func TestRunAcceptsAnEmptyManifestList(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting()}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		c.finish()
+	})
+	if out.err != nil || out.summary.Selected != 0 {
+		t.Fatalf("err=%v summary=%+v", out.err, out.summary)
+	}
+}
+
 func TestRunRejectsAResultWithAnUnknownStatus(t *testing.T) {
 	for _, status := range []string{"", "skipped"} {
 		t.Run("status="+status, func(t *testing.T) {
