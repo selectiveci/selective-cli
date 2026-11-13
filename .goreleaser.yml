@@ -11,14 +11,6 @@ builds:
     binary: sel
     env:
       - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    # musl static build for Alpine
     targets:
       - linux_amd64
       - linux_arm64
@@ -32,25 +24,13 @@ builds:
 
 archives:
   - id: default
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "selective_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 checksum:
   name_template: "checksums.txt"
-
-brews:
-  - name: selective
-    repository:
-      owner: selectiveci
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: https://selective.ci
-    description: "Selective CI — AI-first test intelligence CLI"
-    license: "MIT"
-    install: |
-      bin.install "sel"
 
 release:
   github:
