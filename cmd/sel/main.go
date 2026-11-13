@@ -1,12 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/auth"
+	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/tail"
 	"github.com/spf13/cobra"
@@ -16,22 +24,91 @@ var version = "dev"
 var commit = "none"
 
 func main() {
+	os.Exit(run(newRoot(), os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func newRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:               "sel",
 		Short:             "Selective CI — AI-first test intelligence CLI",
 		Long:              "Stream live test results from Selective CI builds directly to your terminal or agent.",
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
+	root.PersistentFlags().Bool("json", false, "JSON output (the default when stdout isn't a terminal)")
 
 	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), versionCmd())
 
 	root.SilenceUsage = true
 	root.SilenceErrors = true
-	if err := root.Execute(); err != nil {
-		if !auth.IsSilent(err) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	return root
+}
+
+func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	entered := false
+	markEntered(root, &entered)
+
+	cmd, err := root.ExecuteC()
+	if err == nil {
+		return contract.ExitOK
+	}
+	if auth.IsSilent(err) {
+		return contract.ExitFor(contract.Unauthorized, 0)
+	}
+	coded := classify(err, entered)
+	if format.JSONMode(cmd.Flags(), stdout) || jsonFlagGiven(args) {
+		_ = format.Error(stdout, coded)
+	}
+	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
+	return coded.ExitCode()
+}
+
+func jsonFlagGiven(args []string) bool {
+	return slices.ContainsFunc(args, func(arg string) bool {
+		if arg == "--json" {
+			return true
 		}
-		os.Exit(1)
+		value, ok := strings.CutPrefix(arg, "--json=")
+		if !ok {
+			return false
+		}
+		asked, err := strconv.ParseBool(value)
+		return err == nil && asked
+	})
+}
+
+func isNetworkError(err error) bool {
+	var urlErr *url.Error
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	return errors.As(err, &urlErr) || errors.As(err, &opErr) || errors.As(err, &dnsErr)
+}
+
+func classify(err error, entered bool) contract.Coded {
+	var coded contract.Coded
+	switch {
+	case !entered:
+		return contract.Errorf(contract.UsageError, "%s", err.Error())
+	case errors.As(err, &coded):
+		return coded
+	case isNetworkError(err):
+		return contract.Errorf(contract.NetworkError, "%s", err.Error())
+	default:
+		return contract.Errorf(contract.InternalError, "%s", err.Error())
+	}
+}
+
+func markEntered(c *cobra.Command, entered *bool) {
+	if run := c.RunE; run != nil {
+		c.RunE = func(cmd *cobra.Command, args []string) error {
+			*entered = true
+			return run(cmd, args)
+		}
+	}
+	for _, sub := range c.Commands() {
+		markEntered(sub, entered)
 	}
 }
 
@@ -395,7 +472,7 @@ selection missed on a pull request is caught when it merges:
 				selects := defaultBranch == "select"
 				settings.SelectionOnDefaultBranch = &selects
 			default:
-				return fmt.Errorf("--default-branch must be one of: %s", strings.Join(setup.DefaultBranchModes, ", "))
+				return contract.Errorf(contract.UsageError, "--default-branch must be one of: %s", strings.Join(setup.DefaultBranchModes, ", "))
 			}
 			env, org, err := f.env(true)
 			if err != nil {

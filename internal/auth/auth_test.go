@@ -3,12 +3,14 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/selectiveci/selective-cli/internal/config"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/zalando/go-keyring"
 )
@@ -162,5 +164,40 @@ func TestSignupAsksForTheSignupPageAndSetup(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "create your Selective account") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func codeOf(err error) contract.Code {
+	var coded contract.Coded
+	if errors.As(err, &coded) {
+		return coded.ErrorCode()
+	}
+	return ""
+}
+
+func TestLoginAndLogoutRefusalsCarryTheirContractCode(t *testing.T) {
+	setup(t)
+	srv, _ := fakeAPI(t)
+	login := func(stdin string) error {
+		return Login(LoginOptions{Hostname: srv.URL, WithToken: true, Stdin: strings.NewReader(stdin), Stderr: &bytes.Buffer{}})
+	}
+	t.Setenv("SELECTIVE_TOKEN", "sk_live_env")
+
+	cases := []struct {
+		name string
+		err  error
+		want contract.Code
+	}{
+		{"no token on stdin", login(""), contract.UsageError},
+		{"stdin is not a token", login("not-a-token\n"), contract.UsageError},
+		{"server rejects the token", login("sk_live_wrong\n"), contract.Unauthorized},
+		{"logout with an env token", Logout("", &bytes.Buffer{}), contract.UsageError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := codeOf(tc.err); got != tc.want {
+				t.Errorf("code = %q, want %q (err: %v)", got, tc.want, tc.err)
+			}
+		})
 	}
 }

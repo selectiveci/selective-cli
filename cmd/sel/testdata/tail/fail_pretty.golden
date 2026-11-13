@@ -1,0 +1,8 @@
+
+  Build b  commit abc1234
+
+  ✗  n1  spec/a_spec.rb:12
+    expected true, got false & <more>
+
+  ●  9 passed  1 failed  2.5s
+
