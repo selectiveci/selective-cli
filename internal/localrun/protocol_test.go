@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -180,67 +179,31 @@ func TestRunStreamsSelectedTestsAndSummarises(t *testing.T) {
 	if len(seen.Cases) != 3 || seen.Cases[2] != (Case{ID: "c", FilePath: "./spec/c_spec.rb"}) || !strings.Contains(string(seen.Tree), `"sha":"abc123"`) {
 		t.Errorf("selector saw %+v", seen)
 	}
-	want := []string{"build_start", "selection", "progress", "progress", "summary"}
+	want := []string{"selection", "summary"}
 	if !reflect.DeepEqual(out.names(), want) {
 		t.Fatalf("events = %v, want %v", out.names(), want)
 	}
-	start := out.events[0]
-	if start["local"] != true || start["commit"] != "abc123" || start["dirty"] != true || start["build_id"] != nil {
-		t.Errorf("build_start = %v", start)
-	}
-	selection := out.events[1]
+	selection := out.events[0]
 	if selection["outcome"] != "select" || selection["selected"] != float64(2) || selection["skipped"] != float64(1) || selection["total"] != float64(3) || selection["changed_files"] != float64(1) || selection["source"] != "map" || selection["cause"] != nil {
 		t.Errorf("selection = %v", selection)
 	}
-	last := out.events[4]
+	last := out.events[1]
 	if last["passed"] != float64(1) || last["pending"] != float64(1) || last["failed"] != float64(0) || last["selected"] != float64(2) {
 		t.Errorf("summary = %v", last)
 	}
-	if got := out.named("progress")[1]; got["completed"] != float64(2) || got["total"] != float64(2) || got["percent"] != float64(100) {
-		t.Errorf("progress = %v", got)
-	}
 }
 
-func TestRunTurnsAFailedResultIntoATailShapedTestFail(t *testing.T) {
-	out := exercise(t, Options{Selector: selecting("a")}, func(c *fakeClient) {
-		c.handshake("a")
+func TestRunCountsAFailedResultInTheSummary(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "b")}, func(c *fakeClient) {
+		c.handshake("a", "b")
 		c.next("run_test_cases")
 		c.result("a", "failed")
+		c.result("b", "passed")
 		c.finish()
 	})
-	fails := out.named("test_fail")
-	if len(fails) != 1 {
-		t.Fatalf("test_fail events = %v", out.events)
-	}
-	want := map[string]any{"v": float64(1), "event": "test_fail", "node": "local", "id": "a", "file": "./spec/a_spec.rb", "line": float64(7), "ms": float64(12), "error": "expected 1\ngot 2"}
-	if !reflect.DeepEqual(fails[0], want) {
-		t.Errorf("test_fail = %v, want %v", fails[0], want)
-	}
-	if out.summary.Failed != 1 {
-		t.Errorf("summary = %+v", out.summary)
-	}
-	if out.names()[len(out.names())-1] != "summary" {
-		t.Errorf("summary is not the last event: %v", out.names())
-	}
-}
-
-func TestRunEmitsTestPassOnlyWhenAsked(t *testing.T) {
-	for _, passes := range []bool{false, true} {
-		t.Run(fmt.Sprintf("passes=%v", passes), func(t *testing.T) {
-			out := exercise(t, Options{Selector: selecting("a"), Passes: passes}, func(c *fakeClient) {
-				c.handshake("a")
-				c.next("run_test_cases")
-				c.result("a", "passed")
-				c.finish()
-			})
-			got := out.named("test_pass")
-			if passes != (len(got) == 1) || (!passes && len(got) != 0) {
-				t.Fatalf("test_pass events = %v", got)
-			}
-			if passes && (got[0]["id"] != "a" || got[0]["node"] != "local" || got[0]["ms"] != float64(12)) {
-				t.Errorf("test_pass = %v", got[0])
-			}
-		})
+	last := out.events[len(out.events)-1]
+	if out.err != nil || out.summary.Failed != 1 || last["event"] != "summary" || last["failed"] != float64(1) {
+		t.Errorf("err=%v summary=%+v last=%v", out.err, out.summary, last)
 	}
 }
 
@@ -272,7 +235,7 @@ func TestRunClosesWithoutRunningWhenNothingIsSelected(t *testing.T) {
 	if out.err != nil || out.summary.Selected != 0 || out.summary.Skipped != 1 {
 		t.Fatalf("err=%v summary=%+v", out.err, out.summary)
 	}
-	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "summary"}) {
+	if got := out.names(); !reflect.DeepEqual(got, []string{"selection", "summary"}) {
 		t.Errorf("events = %v", got)
 	}
 }
@@ -294,8 +257,8 @@ func TestRunDoesNotCloseOnADuplicateResult(t *testing.T) {
 	if early != nil {
 		t.Fatalf("closed early on a duplicate result: %v", early)
 	}
-	if out.err != nil || len(out.named("progress")) != 2 {
-		t.Errorf("err=%v progress=%v", out.err, out.named("progress"))
+	if out.err != nil || out.summary.Passed != 2 {
+		t.Errorf("err=%v summary=%+v", out.err, out.summary)
 	}
 }
 
@@ -327,10 +290,10 @@ func TestRunReportsARunnerThatDiesMidRun(t *testing.T) {
 		c.next("run_test_cases")
 		c.result("a", "failed")
 	})
-	if codeOf(out.err) != RunnerError {
+	if codeOf(out.err) != contract.RunnerError {
 		t.Fatalf("err = %v, want code runner_error", out.err)
 	}
-	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "test_fail", "progress"}) {
+	if got := out.names(); !reflect.DeepEqual(got, []string{"selection"}) {
 		t.Errorf("events before the death = %v", got)
 	}
 	var terminal bytes.Buffer
@@ -344,7 +307,7 @@ func TestRunReportsAnUnreadableFrame(t *testing.T) {
 		c.next("connected")
 		_, _ = c.frames.Write([]byte("not json\n"))
 	})
-	if codeOf(out.err) != RunnerError {
+	if codeOf(out.err) != contract.RunnerError {
 		t.Fatalf("err = %v", out.err)
 	}
 }
@@ -382,31 +345,5 @@ func TestRunClosesTheRunnerWhenSelectionFails(t *testing.T) {
 	})
 	if codeOf(out.err) != contract.SuiteNotFound || !closed {
 		t.Fatalf("err=%v closed=%v", out.err, closed)
-	}
-}
-
-func TestRunEmitsAHeartbeatWhileTheStreamIsQuiet(t *testing.T) {
-	out := exercise(t, Options{Selector: selecting(), HeartbeatEvery: 20 * time.Millisecond}, func(c *fakeClient) {
-		c.next("connected")
-		c.next("configure_test_map")
-		c.next("test_manifest")
-		time.Sleep(120 * time.Millisecond)
-		c.send("test_manifest", map[string]any{"test_cases": []any{}})
-		c.finish()
-	})
-	beats := out.named("heartbeat")
-	if len(beats) == 0 || out.names()[0] != "heartbeat" {
-		t.Fatalf("events = %v", out.names())
-	}
-	if _, ok := beats[0]["elapsed_s"]; !ok {
-		t.Errorf("heartbeat = %v", beats[0])
-	}
-	keys := make([]string, 0)
-	for k := range beats[0] {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	if !reflect.DeepEqual(keys, []string{"elapsed_s", "event", "v"}) {
-		t.Errorf("heartbeat keys = %v", keys)
 	}
 }

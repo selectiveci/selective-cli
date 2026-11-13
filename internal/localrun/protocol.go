@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -14,10 +13,8 @@ import (
 )
 
 const (
-	RunnerError      contract.Code = "runner_error"
-	OutcomeFull                    = "full"
-	defaultTimeout                 = 30 * time.Minute
-	defaultHeartbeat               = 30 * time.Second
+	OutcomeFull    = "full"
+	defaultTimeout = 30 * time.Minute
 )
 
 type Case struct {
@@ -41,10 +38,8 @@ type Selection struct {
 type Selector func(context.Context, Manifest) (Selection, error)
 
 type Options struct {
-	Selector       Selector
-	Passes         bool
-	Timeout        time.Duration
-	HeartbeatEvery time.Duration
+	Selector Selector
+	Timeout  time.Duration
 }
 
 type Summary struct {
@@ -66,9 +61,6 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, events io.Writer, opt
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultTimeout
 	}
-	if opts.HeartbeatEvery <= 0 {
-		opts.HeartbeatEvery = defaultHeartbeat
-	}
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	r := &run{opts: opts, out: json.NewEncoder(out), events: events, start: time.Now()}
@@ -80,7 +72,6 @@ type run struct {
 	out         *json.Encoder
 	events      io.Writer
 	start       time.Time
-	wrote       bool
 	manifested  bool
 	closed      bool
 	outstanding map[string]bool
@@ -99,17 +90,10 @@ func (r *run) loop(ctx context.Context, frames <-chan inbound) (Summary, error) 
 			return r.sum, err
 		}
 	}
-	tick := time.NewTicker(r.opts.HeartbeatEvery)
-	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return r.sum, r.abort(ctx.Err())
-		case <-tick.C:
-			if !r.wrote {
-				r.event("heartbeat", map[string]any{"elapsed_s": int(time.Since(r.start).Seconds())})
-			}
-			r.wrote = false
 		case frame := <-frames:
 			if frame.err != nil {
 				return r.sum, runnerLost(frame.err)
@@ -158,7 +142,6 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	for _, c := range raw.TestCases {
 		manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
 	}
-	r.event("build_start", buildStartFields(raw.Tree))
 	selection, err := r.opts.Selector(ctx, manifest)
 	if err != nil {
 		return err
@@ -186,12 +169,8 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 
 func (r *run) onResult(data json.RawMessage) error {
 	var res struct {
-		ID           string   `json:"id"`
-		Status       string   `json:"status"`
-		FilePath     string   `json:"file_path"`
-		LineNumber   int      `json:"line_number"`
-		RunTime      float64  `json:"run_time"`
-		FailureLines []string `json:"failure_message_lines"`
+		ID     string `json:"id"`
+		Status string `json:"status"`
 	}
 	if err := decode(data, &res); err != nil {
 		return err
@@ -204,18 +183,11 @@ func (r *run) onResult(data json.RawMessage) error {
 	switch res.Status {
 	case "failed":
 		r.sum.Failed++
-		fields := caseFields(res.ID, res.FilePath, res.LineNumber, res.RunTime)
-		fields["error"] = strings.Join(res.FailureLines, "\n")
-		r.event("test_fail", fields)
 	case "pending":
 		r.sum.Pending++
 	default:
 		r.sum.Passed++
-		if r.opts.Passes {
-			r.event("test_pass", caseFields(res.ID, res.FilePath, res.LineNumber, res.RunTime))
-		}
 	}
-	r.event("progress", r.progressFields())
 	if len(r.outstanding) == 0 {
 		return r.close()
 	}
@@ -246,19 +218,18 @@ func (r *run) abort(cause error) error {
 }
 
 func (r *run) event(name string, fields map[string]any) {
-	r.wrote = true
 	_ = format.EventLine(r.events, name, fields)
 }
 
 func decode(data json.RawMessage, into any) error {
 	if err := json.Unmarshal(data, into); err != nil {
-		return contract.Errorf(RunnerError, "the test runner sent a frame that could not be read: %v", err)
+		return contract.Errorf(contract.RunnerError, "the test runner sent a frame that could not be read: %v", err)
 	}
 	return nil
 }
 
 func runnerLost(cause error) error {
-	return contract.Errorf(RunnerError, "the test runner went away before the run finished: %v", cause)
+	return contract.Errorf(contract.RunnerError, "the test runner went away before the run finished: %v", cause)
 }
 
 func readFrames(in io.Reader, done <-chan struct{}) <-chan inbound {
