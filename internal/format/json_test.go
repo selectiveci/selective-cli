@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-isatty"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/spf13/pflag"
 )
@@ -89,5 +90,17 @@ func TestWriteSecretFileIsPrivateAndNeverOverwrites(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != "sk_live_1" {
 		t.Errorf("file now holds %q, want the original secret", got)
+	}
+}
+
+func TestIsTerminalCountsAnMSYSTerminal(t *testing.T) {
+	isTTY, isCygwinTTY = func(uintptr) bool { return false }, func(uintptr) bool { return true }
+	t.Cleanup(func() { isTTY, isCygwinTTY = isatty.IsTerminal, isatty.IsCygwinTerminal })
+
+	if !IsTerminal(os.Stdout) {
+		t.Error("IsTerminal = false for a Cygwin/MSYS terminal, want true")
+	}
+	if IsTerminal(&bytes.Buffer{}) {
+		t.Error("IsTerminal = true for a buffer, want false")
 	}
 }

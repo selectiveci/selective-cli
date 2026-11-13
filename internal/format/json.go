@@ -19,9 +19,14 @@ type field struct {
 	value any
 }
 
+var (
+	isTTY       = isatty.IsTerminal
+	isCygwinTTY = isatty.IsCygwinTerminal
+)
+
 func IsTerminal(w io.Writer) bool {
 	f, ok := w.(*os.File)
-	return ok && isatty.IsTerminal(f.Fd())
+	return ok && (isTTY(f.Fd()) || isCygwinTTY(f.Fd()))
 }
 
 func JSONMode(flags interface{ GetBool(string) (bool, error) }, stdout io.Writer) bool {
