@@ -207,6 +207,53 @@ func TestRunCountsAFailedResultInTheSummary(t *testing.T) {
 	}
 }
 
+func TestRunRejectsAFinishReportWhileResultsAreOutstanding(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "b")}, func(c *fakeClient) {
+		c.handshake("a", "b")
+		c.next("run_test_cases")
+		c.result("a", "passed")
+		c.send("report_at_finish", map[string]any{"connection_retries": 0})
+	})
+	if codeOf(out.err) != contract.RunnerError {
+		t.Fatalf("err = %v, want runner_error", out.err)
+	}
+	if got := out.names(); !reflect.DeepEqual(got, []string{"selection"}) {
+		t.Errorf("events = %v: an incomplete run must not summarise", got)
+	}
+}
+
+func TestRunRejectsAResultWithAnUnknownStatus(t *testing.T) {
+	for _, status := range []string{"", "skipped"} {
+		t.Run("status="+status, func(t *testing.T) {
+			out := exercise(t, Options{Selector: selecting("a")}, func(c *fakeClient) {
+				c.handshake("a")
+				c.next("run_test_cases")
+				c.result("a", status)
+			})
+			if codeOf(out.err) != contract.RunnerError || out.summary.Passed != 0 {
+				t.Fatalf("err = %v, summary = %+v", out.err, out.summary)
+			}
+		})
+	}
+}
+
+func TestRunSendsEachSelectedIdOnce(t *testing.T) {
+	var batch []any
+	out := exercise(t, Options{Selector: selecting("a", "a", "b")}, func(c *fakeClient) {
+		c.handshake("a", "b", "c")
+		batch, _ = c.next("run_test_cases")["test_case_ids"].([]any)
+		c.result("a", "passed")
+		c.result("b", "passed")
+		c.finish()
+	})
+	if !reflect.DeepEqual(batch, []any{"a", "b"}) {
+		t.Errorf("run_test_cases ids = %v", batch)
+	}
+	if got := out.named("selection")[0]; got["selected"] != float64(2) || got["skipped"] != float64(1) || got["total"] != float64(3) {
+		t.Errorf("selection = %v", got)
+	}
+}
+
 func TestRunRunsEverythingOnAFullOutcome(t *testing.T) {
 	selector := func(context.Context, Manifest) (Selection, error) {
 		return Selection{Outcome: OutcomeFull, Cause: "no_map"}, nil
@@ -303,12 +350,16 @@ func TestRunReportsARunnerThatDiesMidRun(t *testing.T) {
 }
 
 func TestRunReportsAnUnreadableFrame(t *testing.T) {
+	var closed map[string]any
 	out := exercise(t, Options{Selector: selecting("a")}, func(c *fakeClient) {
 		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
 		_, _ = c.frames.Write([]byte("not json\n"))
+		closed = c.next("close")
 	})
-	if codeOf(out.err) != contract.RunnerError {
-		t.Fatalf("err = %v", out.err)
+	if codeOf(out.err) != contract.RunnerError || closed["command"] != "close" {
+		t.Fatalf("err = %v, close = %v", out.err, closed)
 	}
 }
 

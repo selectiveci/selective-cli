@@ -96,7 +96,7 @@ func (r *run) loop(ctx context.Context, frames <-chan inbound) (Summary, error) 
 			return r.sum, r.abort(ctx.Err())
 		case frame := <-frames:
 			if frame.err != nil {
-				return r.sum, runnerLost(frame.err)
+				return r.sum, r.abort(runnerLost(frame.err))
 			}
 			done, err := r.handle(ctx, frame)
 			if err != nil {
@@ -120,6 +120,9 @@ func (r *run) handle(ctx context.Context, frame inbound) (bool, error) {
 	case "test_case_result":
 		return false, r.onResult(frame.Data)
 	case "report_at_finish":
+		if !r.closed || len(r.outstanding) > 0 {
+			return false, contract.Errorf(contract.RunnerError, "the test runner reported its finish with %d selected tests still outstanding", len(r.outstanding))
+		}
 		r.sum.MS = time.Since(r.start).Milliseconds()
 		r.event("summary", r.summaryFields())
 		return true, nil
@@ -153,11 +156,16 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 			ids = append(ids, c.ID)
 		}
 	}
-	r.total = len(ids)
 	r.outstanding = make(map[string]bool, len(ids))
+	var unique []string
 	for _, id := range ids {
-		r.outstanding[id] = true
+		if !r.outstanding[id] {
+			r.outstanding[id] = true
+			unique = append(unique, id)
+		}
 	}
+	ids = unique
+	r.total = len(ids)
 	r.sum.Selected = len(ids)
 	r.sum.Skipped = max(len(manifest.Cases)-len(ids), 0)
 	r.event("selection", selectionFields(selection, r.sum, len(manifest.Cases)))
@@ -178,16 +186,18 @@ func (r *run) onResult(data json.RawMessage) error {
 	if !r.outstanding[res.ID] {
 		return nil
 	}
-	delete(r.outstanding, res.ID)
-	r.completed++
 	switch res.Status {
 	case "failed":
 		r.sum.Failed++
 	case "pending":
 		r.sum.Pending++
-	default:
+	case "passed":
 		r.sum.Passed++
+	default:
+		return contract.Errorf(contract.RunnerError, "the test runner sent status %q for %s", res.Status, res.ID)
 	}
+	delete(r.outstanding, res.ID)
+	r.completed++
 	if len(r.outstanding) == 0 {
 		return r.close()
 	}
