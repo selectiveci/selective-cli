@@ -38,6 +38,13 @@ func TestServerErrorsBecomeTypedErrors(t *testing.T) {
 		{"unregistered code uses the status", 409, nil, `{"error":"brand_new","message":"Nope."}`, "brand_new", 5, "Nope."},
 		{"proxy HTML", 502, nil, `<html>Bad Gateway</html>`, contract.ServerError, 4, "server refused: server_error (HTTP 502)"},
 		{"rate limit", 429, map[string]string{"Retry-After": "7"}, `{"error":"rate_limited","message":"Slow down."}`, contract.RateLimited, 4, "Slow down."},
+		{"unexpected 204", 204, nil, ``, contract.InternalError, 9, "server refused: internal_error (HTTP 204)"},
+		{"unexpected redirect", 302, nil, ``, contract.InternalError, 9, "server refused: internal_error (HTTP 302)"},
+		{"4xx outside the registry", 418, nil, ``, contract.InternalError, 9, "server refused: internal_error (HTTP 418)"},
+		{"409 without a code", 409, nil, ``, contract.InternalError, 9, "server refused: internal_error (HTTP 409)"},
+		{"empty 400", 400, nil, ``, contract.InvalidRequest, 5, "server refused: invalid_request (HTTP 400)"},
+		{"empty 406", 406, nil, ``, contract.InvalidRequest, 5, "server refused: invalid_request (HTTP 406)"},
+		{"empty 422", 422, nil, ``, contract.InvalidRequest, 5, "server refused: invalid_request (HTTP 422)"},
 		{"401 without a body", 401, nil, ``, contract.Unauthorized, 4, "server refused: unauthorized (HTTP 401)"},
 		{"old-style error body", 422, nil, `{"error":"repo and sha params are required"}`, "repo and sha params are required", 5, "server refused: repo and sha params are required (HTTP 422)"},
 	}
