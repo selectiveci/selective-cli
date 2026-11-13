@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/auth"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/tail"
@@ -279,7 +280,8 @@ func suitesCmd() *cobra.Command {
 		Long: `List the organization's test suites, with when each last ran.
 
   sel suites create   Create a suite for a repository (needs --setup login)
-  sel suites key      Hand a suite's API key to a secret store`,
+  sel suites key        Hand a suite's API key to a secret store
+  sel suites configure  Change a suite's settings, such as test selection`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -290,7 +292,7 @@ func suitesCmd() *cobra.Command {
 		},
 	}
 	f.bind(cmd, true)
-	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd())
+	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd())
 	return cmd
 }
 
@@ -358,5 +360,34 @@ One of the two is required.`,
 	cmd.Flags().StringVar(&opts.GithubSecret, "github-secret", "", "Set this GitHub Actions secret on the repository")
 	cmd.Flags().BoolVar(&opts.Stdout, "stdout", false, "Write the key to stdout, which must be a pipe into a secret store")
 	cmd.Flags().StringVar(&opts.Repo, "repo", "", "Repository for --github-secret (default: the suite's)")
+	return cmd
+}
+
+func suitesConfigureCmd() *cobra.Command {
+	var f setupFlags
+	var settings api.SuiteSettings
+	cmd := &cobra.Command{
+		Use:   "configure SUITE",
+		Short: "Change a suite's settings, such as test selection",
+		Long: `Change a suite's settings (by name or ID). Needs a --setup login, as an
+owner or admin of the organization.
+
+  --selection off      every test runs
+  --selection shadow   Selective decides which tests to run but runs them all,
+                       so you can see what it would have skipped
+  --selection live     only the selected tests run`,
+		Example: `  sel suites configure web-rspec --selection shadow
+  sel suites configure web-rspec --selection live`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, org, err := f.env(true)
+			if err != nil {
+				return err
+			}
+			return env.Configure(org, args[0], settings)
+		},
+	}
+	f.bind(cmd, true)
+	cmd.Flags().StringVar(&settings.SelectionMode, "selection", "", "Test selection: off, shadow or live")
 	return cmd
 }
