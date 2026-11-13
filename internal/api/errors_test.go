@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
 )
@@ -45,6 +46,7 @@ func TestServerErrorsBecomeTypedErrors(t *testing.T) {
 		{"empty 400", 400, nil, ``, contract.InvalidRequest, 5, "server refused: invalid_request (HTTP 400)"},
 		{"empty 406", 406, nil, ``, contract.InvalidRequest, 5, "server refused: invalid_request (HTTP 406)"},
 		{"empty 422", 422, nil, ``, contract.InvalidRequest, 5, "server refused: invalid_request (HTTP 422)"},
+		{"empty 408", 408, nil, ``, contract.NetworkError, 4, "server refused: network_error (HTTP 408)"},
 		{"401 without a body", 401, nil, ``, contract.Unauthorized, 4, "server refused: unauthorized (HTTP 401)"},
 		{"old-style error body", 422, nil, `{"error":"repo and sha params are required"}`, "repo and sha params are required", 5, "server refused: repo and sha params are required (HTTP 422)"},
 	}
@@ -108,6 +110,34 @@ func TestAcceptedResponseBodyPassesThrough(t *testing.T) {
 
 func TestUndecodableSuccessBodyIsAServerError(t *testing.T) {
 	_, err := serve(t, 200, nil, `not json`).Me()
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != contract.ServerError {
+		t.Errorf("err = %v, want server_error", err)
+	}
+}
+
+func TestAResponseBodyThatTimesOutIsANetworkError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"user":`))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	client := New(srv.URL, "tok")
+	client.HTTP.Timeout = 100 * time.Millisecond
+
+	_, err := client.Me()
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != contract.NetworkError || apiErr.ExitCode() != 4 {
+		t.Errorf("err = %v, want network_error exit 4", err)
+	}
+}
+
+func TestAMalformedSuccessBodyIsAServerError(t *testing.T) {
+	_, err := serve(t, 200, nil, `<html>not json`).Me()
 
 	var apiErr *Error
 	if !errors.As(err, &apiErr) || apiErr.Code != contract.ServerError {
