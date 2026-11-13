@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -186,17 +187,44 @@ func TestEveryLeafCommandDeclaresExitCodes(t *testing.T) {
 	}
 }
 
-func TestNoCommandSetsPersistentPreRun(t *testing.T) {
+func persistentHookViolations(root *cobra.Command) []string {
+	var found []string
 	var walk func(c *cobra.Command)
 	walk = func(c *cobra.Command) {
-		if c.PersistentPreRun != nil || c.PersistentPreRunE != nil {
-			t.Errorf("%q sets PersistentPreRun; the root wrapper owns it", c.CommandPath())
+		if c != root && c.PersistentPreRun != nil {
+			found = append(found, c.CommandPath()+" sets PersistentPreRun")
+		}
+		if c != root && c.PersistentPreRunE != nil {
+			found = append(found, c.CommandPath()+" sets PersistentPreRunE")
 		}
 		for _, sub := range c.Commands() {
 			walk(sub)
 		}
 	}
-	walk(newRoot())
+	walk(root)
+	return found
+}
+
+func TestNoCommandSetsAPersistentPreRunHook(t *testing.T) {
+	for _, violation := range persistentHookViolations(newRoot()) {
+		t.Error(violation)
+	}
+}
+
+func TestPersistentHookCheckSeesBothHookFields(t *testing.T) {
+	root := &cobra.Command{Use: "root"}
+	root.PersistentPreRunE = func(*cobra.Command, []string) error { return nil }
+	root.AddCommand(
+		&cobra.Command{Use: "a", PersistentPreRun: func(*cobra.Command, []string) {}},
+		&cobra.Command{Use: "b", PersistentPreRunE: func(*cobra.Command, []string) error { return nil }},
+	)
+
+	got := persistentHookViolations(root)
+
+	want := []string{"root a sets PersistentPreRun", "root b sets PersistentPreRunE"}
+	if !slices.Equal(got, want) {
+		t.Errorf("violations = %v, want %v", got, want)
+	}
 }
 
 func TestJSONFlagGivenAcceptsBooleanSpellings(t *testing.T) {
