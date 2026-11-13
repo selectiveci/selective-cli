@@ -126,7 +126,10 @@ func (e *Env) Repos(org string) error {
 		return e.json(repos)
 	}
 	if len(repos.Repos) == 0 {
-		fmt.Fprintf(e.Stdout, "The Selective GitHub App can't see any repositories yet. Add them at:\n  %s\n", repos.InstallURL)
+		fmt.Fprintf(e.Stdout, "Selective can't see any repositories yet. Add them to the GitHub App at:\n  %s\n", repos.InstallURL)
+		if repos.IntegrationsURL != "" {
+			fmt.Fprintf(e.Stdout, "or connect GitLab at:\n  %s\n", repos.IntegrationsURL)
+		}
 		return nil
 	}
 	rows := [][]string{}
@@ -135,10 +138,17 @@ func (e *Env) Repos(org string) error {
 		if r.Private {
 			vis = "private"
 		}
-		rows = append(rows, []string{r.FullName, vis})
+		host := r.Host
+		if host == "" {
+			host = "github.com"
+		}
+		rows = append(rows, []string{r.FullName, host, vis})
 	}
-	e.table("REPOSITORY\tVISIBILITY", rows)
-	fmt.Fprintf(e.Stdout, "\nAdd repositories at %s\n", repos.InstallURL)
+	e.table("REPOSITORY\tHOST\tVISIBILITY", rows)
+	fmt.Fprintf(e.Stdout, "\nAdd GitHub repositories at %s\n", repos.InstallURL)
+	if repos.IntegrationsURL != "" {
+		fmt.Fprintf(e.Stdout, "Connect GitLab at %s\n", repos.IntegrationsURL)
+	}
 	return nil
 }
 
@@ -165,13 +175,16 @@ func (e *Env) Suites(org string) error {
 
 // CreateSuite finds or creates a suite. repo defaults to this checkout's origin.
 func (e *Env) CreateSuite(org, name, repo, framework string) error {
-	repo, err := repoOrOrigin(repo)
+	repo, provider, err := repoOrOrigin(repo)
 	if err != nil {
 		return err
 	}
-	suite, result, err := e.Client.CreateSuite(org, name, repo, framework)
+	suite, result, err := e.Client.CreateSuite(org, name, repo, provider, framework)
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) && apiErr.InstallURL != "" {
+		if provider == "gitlab" {
+			return fmt.Errorf("%s\n  Ask the user to connect GitLab in Selective's Integrations settings with access to %s, then try again", apiErr.Message, repo)
+		}
 		return fmt.Errorf("%s\n  Ask the user to open %s and give the app access to %s, then try again", apiErr.Message, apiErr.InstallURL, repo)
 	}
 	if err != nil {
@@ -312,15 +325,16 @@ func (e *Env) findSuite(org, want string) (*api.Suite, error) {
 	return nil, fmt.Errorf("no suite %q in %s; see: sel suites --org %s", want, org, org)
 }
 
-func repoOrOrigin(repo string) (string, error) {
+// repoOrOrigin returns repo, or this checkout's origin path and provider.
+func repoOrOrigin(repo string) (string, string, error) {
 	if repo != "" {
-		return repo, nil
+		return repo, "", nil
 	}
-	repo, err := gitctx.Repo()
+	path, provider, err := gitctx.Origin()
 	if err != nil {
-		return "", fmt.Errorf("pass --repo owner/name (couldn't read this checkout's origin: %w)", err)
+		return "", "", fmt.Errorf("pass --repo owner/name (couldn't read this checkout's origin: %w)", err)
 	}
-	return repo, nil
+	return path, provider, nil
 }
 
 func runGh(stdin string, args ...string) error {

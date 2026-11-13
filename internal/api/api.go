@@ -126,11 +126,14 @@ func (c *Client) Organizations() ([]Organization, error) {
 }
 
 type Repos struct {
-	GithubAccount string `json:"github_account"`
-	InstallURL    string `json:"install_url"`
-	Repos         []struct {
+	GithubAccount   string `json:"github_account"`
+	InstallURL      string `json:"install_url"`
+	IntegrationsURL string `json:"integrations_url,omitempty"`
+	Repos           []struct {
 		FullName string `json:"full_name"`
 		Private  bool   `json:"private"`
+		Provider string `json:"provider,omitempty"`
+		Host     string `json:"host,omitempty"`
 	} `json:"repos"`
 }
 
@@ -145,6 +148,7 @@ type Suite struct {
 	Name      string     `json:"name"`
 	Type      *string    `json:"type"`
 	Repo      *string    `json:"repo"`
+	Provider  *string    `json:"provider,omitempty"`
 	LastRunAt *time.Time `json:"last_run_at"`
 	// SelectionMode is off, shadow or live; empty from servers that predate it.
 	SelectionMode string `json:"selection_mode,omitempty"`
@@ -161,8 +165,9 @@ func (c *Client) Suites(org string) ([]Suite, error) {
 }
 
 // CreateSuite finds or creates the suite. Result is "created", "existing"
-// or "adopted_default".
-func (c *Client) CreateSuite(org, name, repo, framework string) (*Suite, string, error) {
+// or "adopted_default". provider ("github", "gitlab") may be empty: the
+// server then tries GitHub, then GitLab.
+func (c *Client) CreateSuite(org, name, repo, provider, framework string) (*Suite, string, error) {
 	var out struct {
 		Suite  Suite  `json:"suite"`
 		Result string `json:"result"`
@@ -170,6 +175,9 @@ func (c *Client) CreateSuite(org, name, repo, framework string) (*Suite, string,
 	body := map[string]string{"name": name, "repo": repo}
 	if framework != "" {
 		body["type"] = framework
+	}
+	if provider != "" {
+		body["provider"] = provider
 	}
 	err := c.do("POST", "/api/v1/orgs/"+url.PathEscape(org)+"/suites", body, http.StatusOK, &out)
 	return &out.Suite, out.Result, err

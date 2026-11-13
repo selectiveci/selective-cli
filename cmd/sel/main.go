@@ -256,10 +256,11 @@ func reposCmd() *cobra.Command {
 	var f setupFlags
 	cmd := &cobra.Command{
 		Use:   "repos",
-		Short: "List the repositories Selective's GitHub App can see",
+		Short: "List the repositories Selective can see (GitHub App and GitLab)",
 		Long: `List the repositories a suite can be created for: the ones the
-organization's Selective GitHub App installation can see. The output ends
-with the URL where a signed-in user can add more.`,
+organization's Selective GitHub App installation can see, and the GitLab
+projects its GitLab connections can read. The output ends with where a
+signed-in user can add more.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -309,7 +310,8 @@ unique within an organization, so with several repositories include the
 repository in the name (web-rspec).
 
 The repository defaults to this checkout's origin remote, and must be one
-the organization's Selective GitHub App can see (sel repos). A
+the organization's Selective GitHub App or GitLab connection can see
+(sel repos). GitLab paths include their groups (acme/platform/web). A
 repository with several test commands (say, RSpec and Minitest) gets one
 suite per command.`,
 		Example: `  sel suites create --name web-rspec --framework rspec
@@ -325,7 +327,7 @@ suite per command.`,
 	}
 	f.bind(cmd, true)
 	cmd.Flags().StringVar(&name, "name", "", "Suite name, e.g. the test command it runs (required)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository owner/name (default: this checkout's origin)")
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository path, owner/name or group/subgroup/name (default: this checkout's origin)")
 	cmd.Flags().StringVar(&framework, "framework", "", "Test framework: rspec, minitest, exunit, pytest, junit, phpunit or vitest (default: learned from the first run)")
 	_ = cmd.MarkFlagRequired("name")
 	return cmd
