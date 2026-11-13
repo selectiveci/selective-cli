@@ -28,7 +28,7 @@ func TestRegistryExitCodes(t *testing.T) {
 
 func TestUnknownCodeFallsBackToItsHTTPStatus(t *testing.T) {
 	cases := map[int]int{
-		400: 5, 401: 4, 403: 6, 404: 3, 409: 5, 422: 5, 429: 4, 500: 4, 502: 4, 0: 9, 418: 9,
+		400: 5, 401: 4, 403: 6, 404: 3, 406: 5, 409: 5, 422: 5, 429: 4, 500: 4, 502: 4, 0: 9, 418: 9,
 	}
 	for status, exit := range cases {
 		if got := ExitFor("a_code_nobody_registered", status); got != exit {

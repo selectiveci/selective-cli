@@ -128,7 +128,7 @@ func ExitFor(code Code, status int) int {
 		return ExitForbidden
 	case status == 404:
 		return ExitNotFound
-	case status == 400, status == 409, status == 422:
+	case status == 400, status == 406, status == 409, status == 422:
 		return ExitUsage
 	}
 	return ExitInternal
