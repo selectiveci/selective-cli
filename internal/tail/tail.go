@@ -43,7 +43,7 @@ func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
 		return nil, nil // no build found
 	}
 	if resp.StatusCode == 401 {
-		return nil, fmt.Errorf("authentication failed — run: selective auth")
+		return nil, fmt.Errorf("authentication failed — run: sel auth")
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
@@ -56,7 +56,7 @@ func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
 	return &build, nil
 }
 
-// Run executes `selective tail` with the given options.
+// Run executes `sel tail` with the given options.
 // Returns an exit code: 0=all pass, 1=failures, 2=only flaky, 3=no build, 4=auth/network error.
 func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
 	cfg, err := config.Load()
@@ -69,7 +69,7 @@ func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		return 4, fmt.Errorf("not logged in to %s — run: selective auth login", host)
+		return 4, fmt.Errorf("not logged in to %s — run: sel auth login", host)
 	}
 
 	var repo string
@@ -95,7 +95,7 @@ func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
 		}
 		if build == nil {
 			fmt.Fprintf(os.Stderr, "No build found for repo %q commit %s\n", repo, shortSHA(commitSHA))
-			fmt.Fprintf(os.Stderr, "Push your branch and wait for CI to start, then re-run selective tail.\n")
+			fmt.Fprintf(os.Stderr, "Push your branch and wait for CI to start, then re-run sel tail.\n")
 			return 3, nil
 		}
 		buildID = build.BuildID

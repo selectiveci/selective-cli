@@ -7,8 +7,8 @@ before:
 
 builds:
   - id: selective
-    main: ./cmd/selective
-    binary: selective
+    main: ./cmd/sel
+    binary: sel
     env:
       - CGO_ENABLED=0
     goos:
@@ -50,7 +50,7 @@ brews:
     description: "Selective CI — AI-first test intelligence CLI"
     license: "MIT"
     install: |
-      bin.install "selective"
+      bin.install "sel"
 
 release:
   github:

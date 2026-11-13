@@ -8,11 +8,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
 // ErrUnauthorized means the token was rejected (revoked, mistyped, expired).
 var ErrUnauthorized = errors.New("unauthorized")
+
+// Error is a refusal the server explained.
+type Error struct {
+	Status     int
+	Code       string `json:"error"`
+	Message    string `json:"message"`
+	Scope      string `json:"scope"`
+	InstallURL string `json:"install_url"`
+}
+
+func (e *Error) Error() string {
+	switch {
+	case e.Code == "insufficient_scope":
+		return fmt.Sprintf("this login can't do that (it needs the %q scope); run: sel auth login --setup", e.Scope)
+	case e.Message != "":
+		return e.Message
+	case e.Code != "":
+		return fmt.Sprintf("server refused: %s (HTTP %d)", e.Code, e.Status)
+	default:
+		return fmt.Sprintf("server returned %d", e.Status)
+	}
+}
 
 type Client struct {
 	Host  string
@@ -28,6 +51,7 @@ type Me struct {
 	UserID   string   `json:"user_id"`
 	Email    string   `json:"email"`
 	OrgSlugs []string `json:"org_slugs"`
+	Scopes   []string `json:"scopes"`
 }
 
 func (c *Client) Me() (*Me, error) {
@@ -73,8 +97,10 @@ func (c *Client) do(method, path string, body any, want int, out any) error {
 	if resp.StatusCode == http.StatusUnauthorized {
 		return ErrUnauthorized
 	}
-	if resp.StatusCode != want {
-		return fmt.Errorf("%s %s: server returned %d", method, path, resp.StatusCode)
+	if resp.StatusCode != want && !(want == http.StatusOK && resp.StatusCode == http.StatusCreated) {
+		apiErr := &Error{Status: resp.StatusCode}
+		_ = json.NewDecoder(resp.Body).Decode(apiErr)
+		return apiErr
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -82,4 +108,73 @@ func (c *Client) do(method, path string, body any, want int, out any) error {
 		}
 	}
 	return nil
+}
+
+type Organization struct {
+	Slug          string `json:"slug"`
+	Name          string `json:"name"`
+	Role          string `json:"role"`
+	GithubAccount string `json:"github_account"`
+}
+
+func (c *Client) Organizations() ([]Organization, error) {
+	var out struct {
+		Organizations []Organization `json:"organizations"`
+	}
+	err := c.do("GET", "/api/v1/orgs", nil, http.StatusOK, &out)
+	return out.Organizations, err
+}
+
+type Repos struct {
+	GithubAccount string `json:"github_account"`
+	InstallURL    string `json:"install_url"`
+	Repos         []struct {
+		FullName string `json:"full_name"`
+		Private  bool   `json:"private"`
+	} `json:"repos"`
+}
+
+func (c *Client) Repos(org string) (*Repos, error) {
+	var out Repos
+	err := c.do("GET", "/api/v1/orgs/"+url.PathEscape(org)+"/repos", nil, http.StatusOK, &out)
+	return &out, err
+}
+
+type Suite struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Type      *string    `json:"type"`
+	Repo      *string    `json:"repo"`
+	LastRunAt *time.Time `json:"last_run_at"`
+}
+
+func (c *Client) Suites(org string) ([]Suite, error) {
+	var out struct {
+		Suites []Suite `json:"suites"`
+	}
+	err := c.do("GET", "/api/v1/orgs/"+url.PathEscape(org)+"/suites", nil, http.StatusOK, &out)
+	return out.Suites, err
+}
+
+// CreateSuite finds or creates the suite. Result is "created", "existing"
+// or "adopted_default".
+func (c *Client) CreateSuite(org, name, repo, framework string) (*Suite, string, error) {
+	var out struct {
+		Suite  Suite  `json:"suite"`
+		Result string `json:"result"`
+	}
+	body := map[string]string{"name": name, "repo": repo}
+	if framework != "" {
+		body["type"] = framework
+	}
+	err := c.do("POST", "/api/v1/orgs/"+url.PathEscape(org)+"/suites", body, http.StatusOK, &out)
+	return &out.Suite, out.Result, err
+}
+
+func (c *Client) SuiteAPIKey(org, suiteID string) (string, error) {
+	var out struct {
+		APIKey string `json:"api_key"`
+	}
+	err := c.do("GET", "/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(suiteID)+"/api_key", nil, http.StatusOK, &out)
+	return out.APIKey, err
 }

@@ -30,7 +30,7 @@ type Config struct {
 	CurrentHost string           `json:"current_host,omitempty"`
 	Hosts       map[string]*Host `json:"hosts,omitempty"`
 
-	// Pre-login format (`selective auth --token`): read, migrated, never written.
+	// Pre-login format (`sel auth --token`): read, migrated, never written.
 	LegacyToken   string `json:"token,omitempty"`
 	LegacyBaseURL string `json:"base_url,omitempty"`
 }
@@ -162,6 +162,13 @@ func NormalizeHost(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return "", fmt.Errorf("invalid hostname %q", raw)
+	}
+	// The runner gems take SELECTIVE_HOST as a websocket URL.
+	switch u.Scheme {
+	case "ws":
+		u.Scheme = "http"
+	case "wss":
+		u.Scheme = "https"
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", fmt.Errorf("hostname must be http or https, got %q", u.Scheme)

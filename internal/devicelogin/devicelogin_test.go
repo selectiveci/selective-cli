@@ -32,6 +32,9 @@ func fakeServer(t *testing.T, script []string) (*httptest.Server, *[]string) {
 			var body map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			polls = append(polls, body["device_code"])
+			if body["wait"] == "" {
+				t.Error("poll didn't ask the server to hold it")
+			}
 			next := script[0]
 			if len(script) > 1 {
 				script = script[1:]
@@ -50,6 +53,8 @@ func fakeServer(t *testing.T, script []string) (*httptest.Server, *[]string) {
 
 func client(url string, slept *[]time.Duration) *Client {
 	c := New(url)
+	fixed := time.Unix(0, 0)
+	c.Now = func() time.Time { return fixed }
 	c.Sleep = func(_ context.Context, d time.Duration) error {
 		*slept = append(*slept, d)
 		return nil
@@ -62,7 +67,7 @@ func TestApprovedAfterPendingAndSlowDown(t *testing.T) {
 	var slept []time.Duration
 	c := client(srv.URL, &slept)
 
-	code, err := c.Start("selective-cli test on box")
+	code, err := c.Start("selective-cli test on box", "")
 	if err != nil || code.UserCode != "BCDF-GHJK" {
 		t.Fatalf("Start = %+v, %v", code, err)
 	}
@@ -73,8 +78,12 @@ func TestApprovedAfterPendingAndSlowDown(t *testing.T) {
 	if len(*polls) != 4 || (*polls)[0] != "dc_x" {
 		t.Fatalf("polls = %v", *polls)
 	}
-	// 5s, 5s, then slow_down adds 5s for good.
-	want := []time.Duration{5 * time.Second, 5 * time.Second, 10 * time.Second, 10 * time.Second}
+	// The first poll is immediate; an instant "pending" waits out the 5s
+	// interval, and slow_down adds 5s for good.
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 10 * time.Second}
+	if len(slept) != len(want) {
+		t.Fatalf("slept = %v, want %v", slept, want)
+	}
 	for i, d := range want {
 		if slept[i] != d {
 			t.Fatalf("sleep %d = %v, want %v (all: %v)", i, slept[i], d, slept)
@@ -87,7 +96,7 @@ func TestDeniedAndExpired(t *testing.T) {
 		srv, _ := fakeServer(t, []string{"authorization_pending", reply})
 		var slept []time.Duration
 		c := client(srv.URL, &slept)
-		code, _ := c.Start("x")
+		code, _ := c.Start("x", "")
 		if _, err := c.Wait(context.Background(), code); !errors.Is(err, want) {
 			t.Errorf("%s: err = %v, want %v", reply, err, want)
 		}
@@ -97,10 +106,29 @@ func TestDeniedAndExpired(t *testing.T) {
 func TestCancel(t *testing.T) {
 	srv, _ := fakeServer(t, []string{"authorization_pending"})
 	c := New(srv.URL)
-	code, _ := c.Start("x")
+	code, _ := c.Start("x", "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := c.Wait(ctx, code); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestHeldPollsDontSleep(t *testing.T) {
+	srv, polls := fakeServer(t, []string{"authorization_pending", "authorization_pending", "ok"})
+	var slept []time.Duration
+	c := client(srv.URL, &slept)
+	// The server holds each poll: time moves on 25s between readings.
+	now := time.Unix(0, 0)
+	c.Now = func() time.Time {
+		now = now.Add(25 * time.Second)
+		return now
+	}
+	code, _ := c.Start("x", "setup")
+	if _, err := c.Wait(context.Background(), code); err != nil {
+		t.Fatal(err)
+	}
+	if len(*polls) != 3 || len(slept) != 0 {
+		t.Fatalf("polls = %d, slept = %v", len(*polls), slept)
 	}
 }

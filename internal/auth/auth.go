@@ -1,9 +1,10 @@
-// Package auth implements `selective auth login|status|logout`.
+// Package auth implements `sel auth login|status|logout`.
 package auth
 
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,9 +24,28 @@ type LoginOptions struct {
 	Hostname  string
 	WithToken bool // read a token from stdin instead of the browser flow
 	NoBrowser bool
+	Setup     bool // also ask for the setup scope: create suites, read their keys
+	Signup    bool // a new user: the page offers signup first; implies Setup
+	JSON      bool // NDJSON events on Stdout, for agents
 	Version   string
 	Stdin     io.Reader
+	Stdout    io.Writer
 	Stderr    io.Writer
+}
+
+func (o LoginOptions) scope() string {
+	if o.Setup || o.Signup {
+		return "setup"
+	}
+	return ""
+}
+
+func (o LoginOptions) emit(event map[string]any) {
+	if o.JSON && o.Stdout != nil {
+		enc := json.NewEncoder(o.Stdout)
+		enc.SetEscapeHTML(false) // agents copy the URL from the raw line
+		_ = enc.Encode(event)
+	}
 }
 
 // Login signs the CLI in to a host, by default through the browser.
@@ -42,7 +62,7 @@ func Login(opts LoginOptions) error {
 		fmt.Fprintln(opts.Stderr, "! SELECTIVE_TOKEN is set; it takes precedence over the login you're about to store.")
 	}
 
-	var token, email string
+	var token, email, scope string
 	if opts.WithToken {
 		token, err = readToken(opts.Stdin)
 		if err != nil {
@@ -59,9 +79,10 @@ func Login(opts LoginOptions) error {
 	} else {
 		grant, err := browserLogin(host, opts)
 		if err != nil {
+			opts.emit(map[string]any{"event": "error", "error": loginErrorCode(err), "message": err.Error()})
 			return err
 		}
-		token, email = grant.AccessToken, grant.User.Email
+		token, email, scope = grant.AccessToken, grant.User.Email, grant.Scope
 	}
 
 	source, err := credentials.Store(cfg, host, email, token)
@@ -69,6 +90,7 @@ func Login(opts LoginOptions) error {
 		return fmt.Errorf("logged in, but could not save the token: %w", err)
 	}
 	fmt.Fprintf(opts.Stderr, "✓ Logged in to %s as %s\n", host, email)
+	opts.emit(map[string]any{"event": "logged_in", "host": host, "email": email, "scope": scope})
 	if source == credentials.SourceFile {
 		fmt.Fprintf(opts.Stderr, "! No system keychain is available; the token is stored in %s (mode 0600).\n", config.Path())
 	}
@@ -77,17 +99,29 @@ func Login(opts LoginOptions) error {
 
 func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	client := devicelogin.New(host)
-	code, err := client.Start(clientName(opts.Version))
+	client.Signup = opts.Signup
+	code, err := client.Start(clientName(opts.Version), opts.scope())
 	if err != nil {
 		return nil, err
 	}
 
+	opts.emit(map[string]any{
+		"event":      "authorize",
+		"url":        code.VerificationURIComplete,
+		"user_code":  code.UserCode,
+		"expires_in": code.ExpiresIn,
+		"scope":      code.Scope,
+	})
 	fmt.Fprintf(opts.Stderr, "! First copy your one-time code: %s\n", code.UserCode)
 	opened := !opts.NoBrowser && isatty.IsTerminal(os.Stderr.Fd()) && browser.Open(code.VerificationURIComplete)
 	if opened {
 		fmt.Fprintf(opts.Stderr, "Opened %s in your browser.\n", code.VerificationURIComplete)
 	} else {
-		fmt.Fprintf(opts.Stderr, "Open this URL in a browser where you're signed in to Selective:\n  %s\n", code.VerificationURIComplete)
+		action := "sign in, or create an account,"
+		if opts.Signup {
+			action = "create your Selective account with GitHub"
+		}
+		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to %s and authorize the CLI:\n  %s\n", action, code.VerificationURIComplete)
 	}
 	fmt.Fprintln(opts.Stderr, "Waiting for you to authorize the CLI… (Ctrl+C to cancel)")
 
@@ -95,10 +129,24 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	defer stop()
 	grant, err := client.Wait(ctx, code)
 	if errors.Is(err, context.Canceled) {
-		return nil, errors.New("login cancelled")
+		return nil, errCancelled
 	}
 	return grant, err
 }
+
+func loginErrorCode(err error) string {
+	switch {
+	case errors.Is(err, devicelogin.ErrDenied):
+		return "access_denied"
+	case errors.Is(err, devicelogin.ErrExpired):
+		return "expired_token"
+	case errors.Is(err, errCancelled):
+		return "cancelled"
+	}
+	return "login_failed"
+}
+
+var errCancelled = errors.New("login cancelled")
 
 func clientName(version string) string {
 	host, err := os.Hostname()
@@ -120,7 +168,7 @@ func readToken(r io.Reader) (string, error) {
 	}
 	token := strings.TrimSpace(line)
 	if token == "" {
-		return "", errors.New("no token on stdin (usage: selective auth login --with-token < token.txt)")
+		return "", errors.New("no token on stdin (usage: sel auth login --with-token < token.txt)")
 	}
 	if !strings.HasPrefix(token, "sk_live_") {
 		return "", errors.New("that doesn't look like a Selective API token (they start with sk_live_)")
@@ -141,7 +189,7 @@ func Status(hostname string, stdout io.Writer) error {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: selective auth login", host)
+		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: sel auth login", host)
 		if host != config.DefaultHost {
 			fmt.Fprintf(stdout, " --hostname %s", host)
 		}
@@ -152,13 +200,16 @@ func Status(hostname string, stdout io.Writer) error {
 	me, err := api.New(host, cred.Token).Me()
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
-		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: selective auth login\n", host)
+		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: sel auth login\n", host)
 		return errSilent
 	case err != nil:
 		return err
 	}
 	fmt.Fprintf(stdout, "%s\n  ✓ Logged in as %s\n  Organizations: %s\n  Token: %s (from %s)\n",
 		host, me.Email, strings.Join(me.OrgSlugs, ", "), mask(cred.Token), cred.Source)
+	if len(me.Scopes) > 0 {
+		fmt.Fprintf(stdout, "  Scopes: %s\n", strings.Join(me.Scopes, " "))
+	}
 	return nil
 }
 
@@ -208,10 +259,10 @@ var errSilent = errors.New("")
 // IsSilent reports whether err was already explained to the user.
 func IsSilent(err error) bool { return errors.Is(err, errSilent) }
 
-// LegacyTokenLogin supports `selective auth --token sk_live_…` from before
+// LegacyTokenLogin supports `sel auth --token sk_live_…` from before
 // `auth login` existed.
 func LegacyTokenLogin(token, hostname, version string, stderr io.Writer) error {
-	fmt.Fprintln(stderr, "! `selective auth --token` is deprecated: use `selective auth login`, or `selective auth login --with-token < file` for scripts.")
+	fmt.Fprintln(stderr, "! `sel auth --token` is deprecated: use `sel auth login`, or `sel auth login --with-token < file` for scripts.")
 	return Login(LoginOptions{
 		Hostname:  hostname,
 		WithToken: true,

@@ -38,7 +38,7 @@ main() {
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
 
-  echo "Downloading selective ${VERSION} (${OS}/${ARCH})..."
+  echo "Downloading sel ${VERSION} (${OS}/${ARCH})..."
   curl -fsSL "$URL" -o "${TMP}/${ARCHIVE}"
   curl -fsSL "$CHECKSUM_URL" -o "${TMP}/checksums.txt"
 
@@ -52,8 +52,8 @@ main() {
   fi
 
   tar -xzf "${ARCHIVE}"
-  install -m 755 selective "${INSTALL_DIR}/selective"
-  echo "Installed selective ${VERSION} to ${INSTALL_DIR}/selective"
+  install -m 755 sel "${INSTALL_DIR}/sel"
+  echo "Installed sel ${VERSION} to ${INSTALL_DIR}/sel"
 }
 
 main "$@"

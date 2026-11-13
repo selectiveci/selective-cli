@@ -15,6 +15,8 @@ func TestNormalizeHost(t *testing.T) {
 		"127.0.0.1:4100":                   "http://127.0.0.1:4100",
 		"http://selective.test:8080":       "http://selective.test:8080",
 		"  staging.selective.ci  ":         "https://staging.selective.ci",
+		"wss://app.selective.ci":           "https://app.selective.ci",
+		"ws://localhost:4000":              "http://localhost:4000",
 	}
 	for in, want := range cases {
 		got, err := NormalizeHost(in)
