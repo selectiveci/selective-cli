@@ -148,6 +148,8 @@ func loginErrorCode(err error) string {
 
 var errCancelled = errors.New("login cancelled")
 
+func IsCancelled(err error) bool { return errors.Is(err, errCancelled) }
+
 func clientName(version string) string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {

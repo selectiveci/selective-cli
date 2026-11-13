@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -9,10 +10,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -175,6 +178,51 @@ func TestDeviceLoginFailuresExitByContractCode(t *testing.T) {
 				t.Errorf("exit %d last line %q, want exit %d and error %q", res.exit, last, tc.exit, tc.code)
 			}
 		})
+	}
+}
+
+func TestInterruptingDeviceLoginExitsOneThirty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/device/code" {
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device","expires_in":600,"interval":1}`))
+			return
+		}
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+	}))
+	t.Cleanup(srv.Close)
+	cmd := exec.Command(os.Args[0], "auth", "login", "--no-browser", "--json")
+	cmd.Env = append(os.Environ(),
+		"SELECTIVE_TEST_RUN_MAIN=1",
+		"SELECTIVE_HOST="+srv.URL,
+		"SELECTIVE_TOKEN=tok",
+		"SELECTIVE_CONFIG_DIR="+t.TempDir(),
+	)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	watchdog := time.AfterFunc(20*time.Second, func() { _ = cmd.Process.Kill() })
+	defer watchdog.Stop()
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), `"event":"authorize"`) {
+			break
+		}
+	}
+
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	for scanner.Scan() {
+	}
+	_ = cmd.Wait()
+
+	if got := cmd.ProcessState.ExitCode(); got != 130 {
+		t.Errorf("exit %d, want 130", got)
 	}
 }
 
