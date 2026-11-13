@@ -91,7 +91,7 @@ func (r *run) loop(ctx context.Context, frames <-chan inbound) (Summary, error) 
 		{"command": "test_manifest"},
 	} {
 		if err := r.send(command); err != nil {
-			return r.sum, err
+			return r.sum, r.abort(err)
 		}
 	}
 	for {
