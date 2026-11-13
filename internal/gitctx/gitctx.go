@@ -23,15 +23,25 @@ func Detect() (*Context, error) {
 	return &Context{Repo: repo, Commit: commit}, nil
 }
 
-// Repo is "owner/name" of this checkout's origin remote.
+// Repo is the path of this checkout's origin remote: "owner/name" on
+// GitHub, "group/subgroup/name" on GitLab.
 func Repo() (string, error) { return gitRemoteSlug() }
 
-func gitRemoteSlug() (string, error) {
+// Origin is this checkout's origin remote: its path and, when the host says
+// so, its provider ("github" or "gitlab"; empty when unknown).
+func Origin() (path, provider string, err error) {
 	out, err := run("git", "remote", "get-url", "origin")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return parseSlug(strings.TrimSpace(out))
+	url := strings.TrimSpace(out)
+	path, err = parseSlug(url)
+	return path, providerOf(url), err
+}
+
+func gitRemoteSlug() (string, error) {
+	path, _, err := Origin()
+	return path, err
 }
 
 func gitHEAD() (string, error) {
@@ -54,28 +64,54 @@ func run(name string, args ...string) (string, error) {
 	return string(out), nil
 }
 
-// parseSlug extracts "owner/repo" from HTTPS or SSH remote URLs.
+// parseSlug extracts the repository path from an SSH or HTTPS remote URL:
+// everything after the host, so GitLab's nested groups survive.
 func parseSlug(url string) (string, error) {
-	url = strings.TrimSuffix(url, ".git")
+	url = strings.TrimSuffix(strings.TrimSuffix(url, "/"), ".git")
 
-	// SSH: git@github.com:owner/repo
-	if strings.HasPrefix(url, "git@") {
-		parts := strings.SplitN(url, ":", 2)
-		if len(parts) == 2 {
-			return parts[1], nil
+	// scp-like SSH: git@host:owner/repo
+	if !strings.Contains(url, "://") {
+		if at := strings.Index(url, "@"); at >= 0 {
+			url = url[at+1:]
 		}
+		if parts := strings.SplitN(url, ":", 2); len(parts) == 2 && parts[1] != "" {
+			return strings.Trim(parts[1], "/"), nil
+		}
+		return "", fmt.Errorf("cannot parse repo slug from %q", url)
 	}
 
-	// HTTPS: https://github.com/owner/repo
-	if strings.Contains(url, "github.com/") {
-		idx := strings.Index(url, "github.com/")
-		return url[idx+len("github.com/"):], nil
+	// scheme://[user@]host[:port]/path
+	rest := url[strings.Index(url, "://")+3:]
+	slash := strings.Index(rest, "/")
+	if slash < 0 {
+		return "", fmt.Errorf("cannot parse repo slug from %q", url)
 	}
+	path := strings.Trim(rest[slash+1:], "/")
+	if strings.Count(path, "/") < 1 {
+		return "", fmt.Errorf("cannot parse repo slug from %q", url)
+	}
+	return path, nil
+}
 
-	// Fallback: assume last two path components
-	parts := strings.Split(strings.Trim(url, "/"), "/")
-	if len(parts) >= 2 {
-		return strings.Join(parts[len(parts)-2:], "/"), nil
+// providerOf names the provider a remote's host belongs to. Self-managed
+// GitLab is recognized only when "gitlab" is in its host name.
+func providerOf(url string) string {
+	host := url
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
 	}
-	return "", fmt.Errorf("cannot parse repo slug from %q", url)
+	if i := strings.Index(host, "@"); i >= 0 {
+		host = host[i+1:]
+	}
+	if i := strings.IndexAny(host, ":/"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.ToLower(host)
+	switch {
+	case host == "github.com":
+		return "github"
+	case strings.Contains(host, "gitlab"):
+		return "gitlab"
+	}
+	return ""
 }
