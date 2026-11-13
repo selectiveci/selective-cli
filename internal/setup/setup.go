@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -156,9 +157,9 @@ func (e *Env) Suites(org string) error {
 		if s.LastRunAt != nil {
 			last = s.LastRunAt.Local().Format("2006-01-02 15:04")
 		}
-		rows = append(rows, []string{s.Name, deref(s.Repo), deref(s.Type), last, s.ID})
+		rows = append(rows, []string{s.Name, deref(s.Repo), deref(s.Type), dash(s.SelectionMode), last, s.ID})
 	}
-	e.table("NAME\tREPOSITORY\tFRAMEWORK\tLAST RUN\tID", rows)
+	e.table("NAME\tREPOSITORY\tFRAMEWORK\tSELECTION\tLAST RUN\tID", rows)
 	return nil
 }
 
@@ -186,6 +187,60 @@ func (e *Env) CreateSuite(org, name, repo, framework string) error {
 	}[result]
 	fmt.Fprintf(e.Stdout, "✓ %s suite %q for %s (id %s)\n", verb, suite.Name, deref(suite.Repo), suite.ID)
 	return nil
+}
+
+// SelectionModes are what --selection accepts.
+var SelectionModes = []string{"off", "shadow", "live"}
+
+// Configure changes a suite's settings.
+func (e *Env) Configure(org, suite string, settings api.SuiteSettings) error {
+	if settings.SelectionMode == "" && settings.SelectionOnDefaultBranch == nil {
+		return errors.New("say what to change, e.g. --selection shadow")
+	}
+	if m := settings.SelectionMode; m != "" && !slices.Contains(SelectionModes, m) {
+		return fmt.Errorf("--selection must be one of: %s", strings.Join(SelectionModes, ", "))
+	}
+	s, err := e.findSuite(org, suite)
+	if err != nil {
+		return err
+	}
+	updated, previous, err := e.Client.ConfigureSuite(org, s.ID, settings)
+	if err != nil {
+		return err
+	}
+	if e.JSON {
+		return e.json(map[string]any{"suite": updated, "previous": previous})
+	}
+	if settings.SelectionMode != "" {
+		if previous.SelectionMode == updated.SelectionMode {
+			fmt.Fprintf(e.Stdout, "✓ Selection for %q is already %s\n", updated.Name, updated.SelectionMode)
+		} else {
+			fmt.Fprintf(e.Stdout, "✓ Selection for %q: %s → %s\n", updated.Name, dash(previous.SelectionMode), updated.SelectionMode)
+		}
+	}
+	if settings.SelectionOnDefaultBranch != nil {
+		was, now := defaultBranch(previous.SelectionOnDefaultBranch), defaultBranch(updated.SelectionOnDefaultBranch)
+		if was == now {
+			fmt.Fprintf(e.Stdout, "✓ Default-branch runs for %q already: %s\n", updated.Name, now)
+		} else {
+			fmt.Fprintf(e.Stdout, "✓ Default-branch runs for %q: %s → %s\n", updated.Name, was, now)
+		}
+	}
+	return nil
+}
+
+// DefaultBranchModes are what --default-branch accepts.
+var DefaultBranchModes = []string{"full", "select"}
+
+func defaultBranch(selects *bool) string {
+	switch {
+	case selects == nil:
+		return "-"
+	case *selects:
+		return "select"
+	default:
+		return "full"
+	}
 }
 
 // KeyOptions say where `suites key` sends the key.

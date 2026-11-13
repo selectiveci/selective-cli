@@ -2,7 +2,9 @@
 set -e
 
 REPO="selectiveci/selective-cli"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+if [ -z "$INSTALL_DIR" ]; then
+  if [ -w /usr/local/bin ]; then INSTALL_DIR=/usr/local/bin; else INSTALL_DIR="$HOME/.local/bin"; fi
+fi
 
 detect_os() {
   case "$(uname -s)" in
@@ -52,8 +54,13 @@ main() {
   fi
 
   tar -xzf "${ARCHIVE}"
+  mkdir -p "$INSTALL_DIR"
   install -m 755 sel "${INSTALL_DIR}/sel"
   echo "Installed sel ${VERSION} to ${INSTALL_DIR}/sel"
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) echo "Add ${INSTALL_DIR} to your PATH to run sel" >&2 ;;
+  esac
 }
 
 main "$@"
