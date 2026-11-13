@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"maps"
 	"os"
 	"reflect"
 	"sort"
@@ -56,7 +57,11 @@ func EventLine(w io.Writer, name string, fields map[string]any) error {
 func Error(w io.Writer, err contract.Coded) error {
 	fields := []field{{"error", string(err.ErrorCode())}, {"message", err.Error()}}
 	if f, ok := err.(contract.Fielded); ok {
-		fields = append(fields, sorted(f.ErrorFields())...)
+		extras := maps.Clone(f.ErrorFields())
+		for _, reserved := range []string{"v", "error", "message"} {
+			delete(extras, reserved)
+		}
+		fields = append(fields, sorted(extras)...)
 	}
 	return line(w, fields...)
 }

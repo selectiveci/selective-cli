@@ -104,3 +104,16 @@ func TestIsTerminalCountsAnMSYSTerminal(t *testing.T) {
 		t.Error("IsTerminal = true for a buffer, want false")
 	}
 }
+
+func TestErrorDropsExtraFieldsThatReuseReservedKeys(t *testing.T) {
+	extras := map[string]any{"v": 2, "error": "other", "message": "other", "retry_after_s": 7}
+
+	got := capture(t, func(b *bytes.Buffer) error {
+		return Error(b, &contract.Error{Code: contract.RateLimited, Message: "slow down", Fields: extras})
+	})
+
+	want := `{"v":1,"error":"rate_limited","message":"slow down","retry_after_s":7}` + "\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
