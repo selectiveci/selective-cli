@@ -4,7 +4,6 @@ package auth
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/devicelogin"
+	"github.com/selectiveci/selective-cli/internal/format"
 )
 
 type LoginOptions struct {
@@ -43,9 +43,9 @@ func (o LoginOptions) scope() string {
 
 func (o LoginOptions) emit(event map[string]any) {
 	if o.JSON && o.Stdout != nil {
-		enc := json.NewEncoder(o.Stdout)
-		enc.SetEscapeHTML(false) // agents copy the URL from the raw line
-		_ = enc.Encode(event)
+		name, _ := event["event"].(string)
+		delete(event, "event")
+		_ = format.EventLine(o.Stdout, name, event)
 	}
 }
 

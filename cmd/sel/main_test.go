@@ -208,7 +208,9 @@ func TestInterruptingDeviceLoginExitsOneThirty(t *testing.T) {
 	watchdog := time.AfterFunc(20*time.Second, func() { _ = cmd.Process.Kill() })
 	defer watchdog.Stop()
 	scanner := bufio.NewScanner(stdout)
+	var lines []string
 	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
 		if strings.Contains(scanner.Text(), `"event":"authorize"`) {
 			break
 		}
@@ -218,11 +220,17 @@ func TestInterruptingDeviceLoginExitsOneThirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
 	}
 	_ = cmd.Wait()
 
 	if got := cmd.ProcessState.ExitCode(); got != 130 {
 		t.Errorf("exit %d, want 130", got)
+	}
+	for _, line := range lines {
+		if !strings.HasPrefix(line, `{"v":1,"event":"`) {
+			t.Errorf("event line %q does not start with {\"v\":1,\"event\"", line)
+		}
 	}
 }
 
