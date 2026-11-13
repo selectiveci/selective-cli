@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/config"
 	"github.com/selectiveci/selective-cli/internal/credentials"
@@ -106,6 +108,32 @@ func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
 	return stream(host, cred.Token, buildID, fmtFlag)
 }
 
+var pingInterval = 30 * time.Second
+
+func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, interval time.Duration, timedOut *atomic.Bool) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		pctx, pcancel := context.WithTimeout(ctx, interval)
+		err := conn.Ping(pctx)
+		expired := pctx.Err() == context.DeadlineExceeded
+		pcancel()
+		if err == nil {
+			continue
+		}
+		if expired && ctx.Err() == nil {
+			timedOut.Store(true)
+			cancel()
+		}
+		return
+	}
+}
+
 func stream(host, token, buildID, fmtFlag string) (int, error) {
 	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
@@ -118,22 +146,25 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	header := http.Header{}
 	header.Set("X-Selective-Token", token)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		return 4, fmt.Errorf("could not connect to Selective: %w", err)
 	}
 	defer func() { _ = conn.CloseNow() }()
 
+	interval := pingInterval
+	var timedOut atomic.Bool
+	go keepAlive(ctx, cancel, conn, interval, &timedOut)
+
 	fw := format.NewWriter(os.Stdout, fmtFlag)
 
-	var failCount int
-	var flakyCount int
-
+	var summary map[string]any
+	sawFailure := false
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			// Normal close — server closed after summary
 			break
 		}
 
@@ -141,29 +172,39 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 			fmt.Fprintf(os.Stderr, "format error: %v\n", writeErr)
 		}
 
-		// Track outcome for exit code
 		var ev map[string]any
-		if jsonErr := json.Unmarshal(data, &ev); jsonErr == nil {
+		if json.Unmarshal(data, &ev) == nil {
 			switch ev["event"] {
 			case "test_fail":
-				failCount++
+				sawFailure = true
 			case "summary":
-				if f, ok := ev["flaky"].(float64); ok {
-					flakyCount = int(f)
-				}
+				summary = ev
 			}
 		}
 	}
 
 	conn.Close(websocket.StatusNormalClosure, "")
 
-	if failCount > 0 && flakyCount == failCount {
-		return 2, nil
+	if summary == nil {
+		if timedOut.Load() {
+			return 4, fmt.Errorf("no response from Selective to a ping within %s; lost the connection before build %s finished", interval, buildID)
+		}
+		return 4, fmt.Errorf("lost the connection to Selective before build %s finished", buildID)
 	}
-	if failCount > 0 {
-		return 1, nil
+	return summaryExitCode(summary, sawFailure), nil
+}
+
+func summaryExitCode(summary map[string]any, sawFailure bool) int {
+	failed, _ := summary["failed"].(float64)
+	flaky, _ := summary["flaky"].(float64)
+	switch {
+	case failed > 0:
+		return 1
+	case flaky > 0 || sawFailure:
+		return 2
+	default:
+		return 0
 	}
-	return 0, nil
 }
 
 func shortSHA(sha string) string {

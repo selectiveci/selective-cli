@@ -100,6 +100,6 @@ Output is NDJSON when piped and readable when on a terminal
 |---|---|
 | 0 | all tests passed |
 | 1 | real test failures |
-| 2 | only flaky failures |
+| 2 | passed, but a test failed before passing on retry |
 | 3 | no build found for this commit |
 | 4 | authentication or network error |

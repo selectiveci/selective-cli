@@ -177,7 +177,7 @@ Run from inside a git repository — sel tail auto-detects the repo and HEAD com
 Exit codes:
   0  all tests passed
   1  real test failures
-  2  only flaky failures (safe to proceed)
+  2  passed, but a test failed before passing on retry (safe to proceed)
   3  no build found for this commit
   4  authentication or network error`,
 		RunE: func(cmd *cobra.Command, args []string) error {
