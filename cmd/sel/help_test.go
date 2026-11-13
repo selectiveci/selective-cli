@@ -56,7 +56,7 @@ func TestHelpJSONListsTheCommandTree(t *testing.T) {
 			flags[c.Path] = nil
 		}
 	}
-	for _, path := range []string{"auth", "auth login", "auth signup", "auth status", "auth logout", "orgs", "repos", "suites", "suites create", "suites key", "tail", "version", "help"} {
+	for _, path := range []string{"auth", "auth login", "auth signup", "auth status", "auth logout", "orgs", "repos", "suites", "suites configure", "suites create", "suites key", "tail", "version", "help"} {
 		if _, ok := flags[path]; !ok {
 			t.Errorf("%q missing from help --json", path)
 		}
