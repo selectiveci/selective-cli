@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -13,9 +14,10 @@ import (
 )
 
 const (
-	OutcomeFull    = "full"
-	defaultTimeout = 30 * time.Minute
-	closeGrace     = 2 * time.Second
+	OutcomeFull      = "full"
+	defaultTimeout   = 30 * time.Minute
+	defaultHeartbeat = 30 * time.Second
+	closeGrace       = 2 * time.Second
 )
 
 type Case struct {
@@ -39,8 +41,10 @@ type Selection struct {
 type Selector func(context.Context, Manifest) (Selection, error)
 
 type Options struct {
-	Selector Selector
-	Timeout  time.Duration
+	Selector       Selector
+	Passes         bool
+	Timeout        time.Duration
+	HeartbeatEvery time.Duration
 }
 
 type Summary struct {
@@ -62,6 +66,9 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, events io.Writer, opt
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultTimeout
 	}
+	if opts.HeartbeatEvery <= 0 {
+		opts.HeartbeatEvery = defaultHeartbeat
+	}
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	r := &run{ctx: ctx, opts: opts, out: json.NewEncoder(out), events: events, start: time.Now()}
@@ -76,6 +83,7 @@ type run struct {
 	events      io.Writer
 	writeErr    error
 	start       time.Time
+	quiet       *time.Timer
 	manifested  bool
 	closed      bool
 	outstanding map[string]bool
@@ -94,10 +102,16 @@ func (r *run) loop(ctx context.Context, frames <-chan inbound) (Summary, error) 
 			return r.sum, r.abort(err)
 		}
 	}
+	r.quiet = time.NewTimer(r.opts.HeartbeatEvery)
+	defer r.quiet.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return r.sum, r.abort(ctx.Err())
+		case <-r.quiet.C:
+			if err := r.heartbeat(); err != nil {
+				return r.sum, r.abort(err)
+			}
 		case frame := <-frames:
 			if frame.err != nil {
 				return r.sum, r.abort(runnerLost(frame.err))
@@ -155,7 +169,11 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	for _, c := range *raw.TestCases {
 		manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
 	}
-	selection, err := r.opts.Selector(ctx, manifest)
+	r.event("build_start", buildStartFields(raw.Tree))
+	if r.writeErr != nil {
+		return r.writeErr
+	}
+	selection, err := r.selectWithHeartbeats(ctx, manifest)
 	if err != nil {
 		return err
 	}
@@ -187,8 +205,12 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 
 func (r *run) onResult(data json.RawMessage) error {
 	var res struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID           string   `json:"id"`
+		Status       string   `json:"status"`
+		FilePath     string   `json:"file_path"`
+		LineNumber   int      `json:"line_number"`
+		RunTime      float64  `json:"run_time"`
+		FailureLines []string `json:"failure_message_lines"`
 	}
 	if err := decode(data, &res); err != nil {
 		return err
@@ -199,15 +221,22 @@ func (r *run) onResult(data json.RawMessage) error {
 	switch res.Status {
 	case "failed":
 		r.sum.Failed++
+		fields := caseFields(res.ID, res.FilePath, res.LineNumber, res.RunTime)
+		fields["error"] = strings.Join(res.FailureLines, "\n")
+		r.event("test_fail", fields)
 	case "pending":
 		r.sum.Pending++
 	case "passed":
 		r.sum.Passed++
+		if r.opts.Passes {
+			r.event("test_pass", caseFields(res.ID, res.FilePath, res.LineNumber, res.RunTime))
+		}
 	default:
 		return contract.Errorf(contract.RunnerError, "the test runner sent status %q for %s", res.Status, res.ID)
 	}
 	delete(r.outstanding, res.ID)
 	r.completed++
+	r.event("progress", r.progressFields())
 	if len(r.outstanding) == 0 {
 		return r.close()
 	}
@@ -256,8 +285,38 @@ func (r *run) abort(cause error) error {
 }
 
 func (r *run) event(name string, fields map[string]any) {
+	r.quiet.Reset(r.opts.HeartbeatEvery)
 	if err := format.EventLine(r.events, name, fields); err != nil && r.writeErr == nil {
 		r.writeErr = contract.Errorf(contract.InternalError, "could not write the event stream: %v", err)
+	}
+}
+
+func (r *run) heartbeat() error {
+	r.event("heartbeat", map[string]any{"elapsed_s": int(time.Since(r.start).Seconds())})
+	return r.writeErr
+}
+
+func (r *run) selectWithHeartbeats(ctx context.Context, manifest Manifest) (Selection, error) {
+	type answer struct {
+		selection Selection
+		err       error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		selection, err := r.opts.Selector(ctx, manifest)
+		answered <- answer{selection, err}
+	}()
+	for {
+		select {
+		case a := <-answered:
+			return a.selection, a.err
+		case <-r.quiet.C:
+			if err := r.heartbeat(); err != nil {
+				return Selection{}, err
+			}
+		case <-ctx.Done():
+			return Selection{}, ctx.Err()
+		}
 	}
 }
 
