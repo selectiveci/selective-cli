@@ -472,7 +472,7 @@ selection missed on a pull request is caught when it merges:
 				selects := defaultBranch == "select"
 				settings.SelectionOnDefaultBranch = &selects
 			default:
-				return fmt.Errorf("--default-branch must be one of: %s", strings.Join(setup.DefaultBranchModes, ", "))
+				return contract.Errorf(contract.UsageError, "--default-branch must be one of: %s", strings.Join(setup.DefaultBranchModes, ", "))
 			}
 			env, org, err := f.env(true)
 			if err != nil {

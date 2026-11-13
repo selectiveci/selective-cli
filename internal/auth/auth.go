@@ -16,6 +16,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/browser"
 	"github.com/selectiveci/selective-cli/internal/config"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/devicelogin"
 )
@@ -70,7 +71,7 @@ func Login(opts LoginOptions) error {
 		}
 		me, err := api.New(host, token).Me()
 		if errors.Is(err, api.ErrUnauthorized) {
-			return fmt.Errorf("that token was rejected by %s", host)
+			return contract.Errorf(contract.Unauthorized, "that token was rejected by %s", host)
 		}
 		if err != nil {
 			return err
@@ -168,10 +169,10 @@ func readToken(r io.Reader) (string, error) {
 	}
 	token := strings.TrimSpace(line)
 	if token == "" {
-		return "", errors.New("no token on stdin (usage: sel auth login --with-token < token.txt)")
+		return "", contract.Errorf(contract.UsageError, "no token on stdin (usage: sel auth login --with-token < token.txt)")
 	}
 	if !strings.HasPrefix(token, "sk_live_") {
-		return "", errors.New("that doesn't look like a Selective API token (they start with sk_live_)")
+		return "", contract.Errorf(contract.UsageError, "that doesn't look like a Selective API token (they start with sk_live_)")
 	}
 	return token, nil
 }
@@ -224,7 +225,7 @@ func Logout(hostname string, stderr io.Writer) error {
 		return err
 	}
 	if os.Getenv("SELECTIVE_TOKEN") != "" {
-		return errors.New("SELECTIVE_TOKEN is set; unset it (logout doesn't revoke tokens it didn't store)")
+		return contract.Errorf(contract.UsageError, "SELECTIVE_TOKEN is set; unset it (logout doesn't revoke tokens it didn't store)")
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
