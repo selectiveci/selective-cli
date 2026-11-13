@@ -1,0 +1,412 @@
+package localrun
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/format"
+)
+
+type fakeClient struct {
+	t        *testing.T
+	commands chan map[string]any
+	frames   *io.PipeWriter
+}
+
+func (c *fakeClient) next(want string) map[string]any {
+	c.t.Helper()
+	select {
+	case cmd := <-c.commands:
+		if cmd["command"] != want {
+			c.t.Errorf("expected command %q, got %v", want, cmd)
+		}
+		return cmd
+	case <-time.After(3 * time.Second):
+		c.t.Errorf("no %q command within 3s", want)
+		return map[string]any{}
+	}
+}
+
+func (c *fakeClient) send(frameType string, data map[string]any) {
+	line, _ := json.Marshal(map[string]any{"type": frameType, "data": data})
+	_, _ = c.frames.Write(append(line, '\n'))
+}
+
+func (c *fakeClient) result(id, status string) {
+	data := map[string]any{"id": id, "status": status, "file_path": "./spec/" + id + "_spec.rb", "line_number": 7, "run_time": 0.0123}
+	if status == "failed" {
+		data["failure_message_lines"] = []string{"expected 1", "got 2"}
+	}
+	c.send("test_case_result", data)
+}
+
+func (c *fakeClient) handshake(cases ...string) {
+	c.next("connected")
+	configure := c.next("configure_test_map")
+	if configure["tree"] != true || configure["record"] != false {
+		c.t.Errorf("configure_test_map must ask for the tree and not record: %v", configure)
+	}
+	c.next("test_manifest")
+	var testCases []map[string]any
+	for _, id := range cases {
+		testCases = append(testCases, map[string]any{"id": id, "file_path": "./spec/" + id + "_spec.rb", "line_number": 7})
+	}
+	c.send("test_manifest", map[string]any{
+		"test_cases":    testCases,
+		"test_map_tree": map[string]any{"sha": "abc123", "prefix": "", "files": map[string]string{"app/a.rb": "b1"}, "dirty": []string{"app/a.rb"}},
+	})
+}
+
+func (c *fakeClient) finish() {
+	c.next("close")
+	c.send("report_at_finish", map[string]any{"connection_retries": 0})
+}
+
+type outcome struct {
+	events   []map[string]any
+	summary  Summary
+	err      error
+	commands []map[string]any
+}
+
+func (o outcome) names() []string {
+	var names []string
+	for _, e := range o.events {
+		names = append(names, e["event"].(string))
+	}
+	return names
+}
+
+func (o outcome) named(name string) []map[string]any {
+	var out []map[string]any
+	for _, e := range o.events {
+		if e["event"] == name {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func selecting(ids ...string) Selector {
+	return func(context.Context, Manifest) (Selection, error) {
+		return Selection{Outcome: "select", Selected: ids, ChangedFiles: 1, Source: "map"}, nil
+	}
+}
+
+func exercise(t *testing.T, opts Options, script func(*fakeClient)) outcome {
+	t.Helper()
+	if opts.Timeout == 0 {
+		opts.Timeout = 3 * time.Second
+	}
+	toClientR, toClientW := io.Pipe()
+	fromClientR, fromClientW := io.Pipe()
+	client := &fakeClient{t: t, commands: make(chan map[string]any, 64), frames: fromClientW}
+	go func() {
+		scanner := bufio.NewScanner(toClientR)
+		for scanner.Scan() {
+			var cmd map[string]any
+			_ = json.Unmarshal(scanner.Bytes(), &cmd)
+			client.commands <- cmd
+		}
+	}()
+	scripted := make(chan struct{})
+	go func() {
+		defer close(scripted)
+		script(client)
+		fromClientW.Close()
+	}()
+	var events bytes.Buffer
+	sum, err := Run(context.Background(), fromClientR, toClientW, &events, opts)
+	toClientW.Close()
+	fromClientR.Close()
+	<-scripted
+	out := outcome{summary: sum, err: err}
+	for _, line := range strings.Split(strings.TrimSpace(events.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var e map[string]any
+		if jerr := json.Unmarshal([]byte(line), &e); jerr != nil {
+			t.Fatalf("event line is not JSON: %q", line)
+		}
+		if e["v"] != float64(1) {
+			t.Errorf("event line lacks v:1: %q", line)
+		}
+		out.events = append(out.events, e)
+	}
+	for len(client.commands) > 0 {
+		out.commands = append(out.commands, <-client.commands)
+	}
+	return out
+}
+
+func codeOf(err error) contract.Code {
+	if coded, ok := err.(contract.Coded); ok {
+		return coded.ErrorCode()
+	}
+	return ""
+}
+
+func TestRunStreamsSelectedTestsAndSummarises(t *testing.T) {
+	var seen Manifest
+	selector := func(_ context.Context, m Manifest) (Selection, error) {
+		seen = m
+		return selecting("a", "b")(context.Background(), m)
+	}
+	var batch []any
+	out := exercise(t, Options{Selector: selector}, func(c *fakeClient) {
+		c.handshake("a", "b", "c")
+		batch, _ = c.next("run_test_cases")["test_case_ids"].([]any)
+		c.result("a", "passed")
+		c.result("b", "pending")
+		c.finish()
+	})
+	if out.err != nil {
+		t.Fatalf("Run: %v", out.err)
+	}
+	if !reflect.DeepEqual(batch, []any{"a", "b"}) {
+		t.Errorf("run_test_cases ids = %v", batch)
+	}
+	if len(seen.Cases) != 3 || seen.Cases[2] != (Case{ID: "c", FilePath: "./spec/c_spec.rb"}) || !strings.Contains(string(seen.Tree), `"sha":"abc123"`) {
+		t.Errorf("selector saw %+v", seen)
+	}
+	want := []string{"build_start", "selection", "progress", "progress", "summary"}
+	if !reflect.DeepEqual(out.names(), want) {
+		t.Fatalf("events = %v, want %v", out.names(), want)
+	}
+	start := out.events[0]
+	if start["local"] != true || start["commit"] != "abc123" || start["dirty"] != true || start["build_id"] != nil {
+		t.Errorf("build_start = %v", start)
+	}
+	selection := out.events[1]
+	if selection["outcome"] != "select" || selection["selected"] != float64(2) || selection["skipped"] != float64(1) || selection["total"] != float64(3) || selection["changed_files"] != float64(1) || selection["source"] != "map" || selection["cause"] != nil {
+		t.Errorf("selection = %v", selection)
+	}
+	last := out.events[4]
+	if last["passed"] != float64(1) || last["pending"] != float64(1) || last["failed"] != float64(0) || last["selected"] != float64(2) {
+		t.Errorf("summary = %v", last)
+	}
+	if got := out.named("progress")[1]; got["completed"] != float64(2) || got["total"] != float64(2) || got["percent"] != float64(100) {
+		t.Errorf("progress = %v", got)
+	}
+}
+
+func TestRunTurnsAFailedResultIntoATailShapedTestFail(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a")}, func(c *fakeClient) {
+		c.handshake("a")
+		c.next("run_test_cases")
+		c.result("a", "failed")
+		c.finish()
+	})
+	fails := out.named("test_fail")
+	if len(fails) != 1 {
+		t.Fatalf("test_fail events = %v", out.events)
+	}
+	want := map[string]any{"v": float64(1), "event": "test_fail", "node": "local", "id": "a", "file": "./spec/a_spec.rb", "line": float64(7), "ms": float64(12), "error": "expected 1\ngot 2"}
+	if !reflect.DeepEqual(fails[0], want) {
+		t.Errorf("test_fail = %v, want %v", fails[0], want)
+	}
+	if out.summary.Failed != 1 {
+		t.Errorf("summary = %+v", out.summary)
+	}
+	if out.names()[len(out.names())-1] != "summary" {
+		t.Errorf("summary is not the last event: %v", out.names())
+	}
+}
+
+func TestRunEmitsTestPassOnlyWhenAsked(t *testing.T) {
+	for _, passes := range []bool{false, true} {
+		t.Run(fmt.Sprintf("passes=%v", passes), func(t *testing.T) {
+			out := exercise(t, Options{Selector: selecting("a"), Passes: passes}, func(c *fakeClient) {
+				c.handshake("a")
+				c.next("run_test_cases")
+				c.result("a", "passed")
+				c.finish()
+			})
+			got := out.named("test_pass")
+			if passes != (len(got) == 1) || (!passes && len(got) != 0) {
+				t.Fatalf("test_pass events = %v", got)
+			}
+			if passes && (got[0]["id"] != "a" || got[0]["node"] != "local" || got[0]["ms"] != float64(12)) {
+				t.Errorf("test_pass = %v", got[0])
+			}
+		})
+	}
+}
+
+func TestRunRunsEverythingOnAFullOutcome(t *testing.T) {
+	selector := func(context.Context, Manifest) (Selection, error) {
+		return Selection{Outcome: OutcomeFull, Cause: "no_map"}, nil
+	}
+	var batch []any
+	out := exercise(t, Options{Selector: selector}, func(c *fakeClient) {
+		c.handshake("a", "b")
+		batch, _ = c.next("run_test_cases")["test_case_ids"].([]any)
+		c.result("a", "passed")
+		c.result("b", "passed")
+		c.finish()
+	})
+	if !reflect.DeepEqual(batch, []any{"a", "b"}) {
+		t.Errorf("a full outcome must run every manifest id, got %v", batch)
+	}
+	if got := out.named("selection")[0]; got["outcome"] != "full" || got["cause"] != "no_map" || got["skipped"] != float64(0) {
+		t.Errorf("selection = %v", got)
+	}
+}
+
+func TestRunClosesWithoutRunningWhenNothingIsSelected(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting()}, func(c *fakeClient) {
+		c.handshake("a")
+		c.finish()
+	})
+	if out.err != nil || out.summary.Selected != 0 || out.summary.Skipped != 1 {
+		t.Fatalf("err=%v summary=%+v", out.err, out.summary)
+	}
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "summary"}) {
+		t.Errorf("events = %v", got)
+	}
+}
+
+func TestRunDoesNotCloseOnADuplicateResult(t *testing.T) {
+	var early map[string]any
+	out := exercise(t, Options{Selector: selecting("a", "b")}, func(c *fakeClient) {
+		c.handshake("a", "b")
+		c.next("run_test_cases")
+		c.result("a", "passed")
+		c.result("a", "passed")
+		select {
+		case early = <-c.commands:
+		case <-time.After(150 * time.Millisecond):
+		}
+		c.result("b", "passed")
+		c.finish()
+	})
+	if early != nil {
+		t.Fatalf("closed early on a duplicate result: %v", early)
+	}
+	if out.err != nil || len(out.named("progress")) != 2 {
+		t.Errorf("err=%v progress=%v", out.err, out.named("progress"))
+	}
+}
+
+func TestRunReadsAManifestLargerThanAScannerLine(t *testing.T) {
+	files := map[string]string{}
+	for i := 0; i < 6000; i++ {
+		files[fmt.Sprintf("app/models/file_%d.rb", i)] = strings.Repeat("a", 40)
+	}
+	var treeBytes int
+	selector := func(_ context.Context, m Manifest) (Selection, error) {
+		treeBytes = len(m.Tree)
+		return Selection{Outcome: "select"}, nil
+	}
+	out := exercise(t, Options{Selector: selector}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		c.send("test_manifest", map[string]any{"test_cases": []any{}, "test_map_tree": map[string]any{"sha": "s", "files": files}})
+		c.finish()
+	})
+	if out.err != nil || treeBytes < 200_000 {
+		t.Fatalf("err=%v tree bytes=%d", out.err, treeBytes)
+	}
+}
+
+func TestRunReportsARunnerThatDiesMidRun(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "b")}, func(c *fakeClient) {
+		c.handshake("a", "b")
+		c.next("run_test_cases")
+		c.result("a", "failed")
+	})
+	if codeOf(out.err) != RunnerError {
+		t.Fatalf("err = %v, want code runner_error", out.err)
+	}
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "test_fail", "progress"}) {
+		t.Errorf("events before the death = %v", got)
+	}
+	var terminal bytes.Buffer
+	if err := format.Error(&terminal, out.err.(contract.Coded)); err != nil || !strings.HasPrefix(terminal.String(), `{"v":1,"error":"runner_error","message":"`) {
+		t.Errorf("terminal object = %q (%v)", terminal.String(), err)
+	}
+}
+
+func TestRunReportsAnUnreadableFrame(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a")}, func(c *fakeClient) {
+		c.next("connected")
+		_, _ = c.frames.Write([]byte("not json\n"))
+	})
+	if codeOf(out.err) != RunnerError {
+		t.Fatalf("err = %v", out.err)
+	}
+}
+
+func TestRunTimesOutWhenResultsStayShortOfTheIdsSent(t *testing.T) {
+	var closed map[string]any
+	started := time.Now()
+	out := exercise(t, Options{Selector: selecting("a", "b"), Timeout: 150 * time.Millisecond}, func(c *fakeClient) {
+		c.handshake("a", "b")
+		c.next("run_test_cases")
+		c.result("a", "passed")
+		closed = c.next("close")
+		time.Sleep(10 * time.Millisecond)
+	})
+	if codeOf(out.err) != contract.Timeout || contract.ExitFor(codeOf(out.err), 0) != contract.ExitTimeout {
+		t.Fatalf("err = %v", out.err)
+	}
+	if !strings.Contains(out.err.Error(), "1 of 2") || closed["command"] != "close" {
+		t.Errorf("message=%q close=%v", out.err, closed)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Errorf("took %s", time.Since(started))
+	}
+}
+
+func TestRunClosesTheRunnerWhenSelectionFails(t *testing.T) {
+	selector := func(context.Context, Manifest) (Selection, error) {
+		return Selection{}, contract.Errorf(contract.SuiteNotFound, "no such suite")
+	}
+	var closed bool
+	out := exercise(t, Options{Selector: selector}, func(c *fakeClient) {
+		c.handshake("a")
+		c.next("close")
+		closed = true
+	})
+	if codeOf(out.err) != contract.SuiteNotFound || !closed {
+		t.Fatalf("err=%v closed=%v", out.err, closed)
+	}
+}
+
+func TestRunEmitsAHeartbeatWhileTheStreamIsQuiet(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting(), HeartbeatEvery: 20 * time.Millisecond}, func(c *fakeClient) {
+		c.next("connected")
+		c.next("configure_test_map")
+		c.next("test_manifest")
+		time.Sleep(120 * time.Millisecond)
+		c.send("test_manifest", map[string]any{"test_cases": []any{}})
+		c.finish()
+	})
+	beats := out.named("heartbeat")
+	if len(beats) == 0 || out.names()[0] != "heartbeat" {
+		t.Fatalf("events = %v", out.names())
+	}
+	if _, ok := beats[0]["elapsed_s"]; !ok {
+		t.Errorf("heartbeat = %v", beats[0])
+	}
+	keys := make([]string, 0)
+	for k := range beats[0] {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if !reflect.DeepEqual(keys, []string{"elapsed_s", "event", "v"}) {
+		t.Errorf("heartbeat keys = %v", keys)
+	}
+}
