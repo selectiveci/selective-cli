@@ -9,13 +9,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
+
+	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 var (
-	ErrDenied  = errors.New("the login was denied in the browser")
-	ErrExpired = errors.New("the code expired before it was approved; run sel auth login again")
+	ErrDenied  = contract.Errorf(contract.ApprovalDenied, "the login was denied in the browser")
+	ErrExpired = contract.Errorf(contract.ApprovalExpired, "the code expired before it was approved; run sel auth login again")
 )
 
 // Code is what the server hands out to start a login.
@@ -79,7 +83,7 @@ func (c *Client) Start(clientName, scope string) (*Code, error) {
 		return nil, err
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("could not start login: server returned %d", status)
+		return nil, statusError(status, fmt.Sprintf("could not start login: server returned %d", status))
 	}
 	if code.Interval <= 0 {
 		code.Interval = 5
@@ -116,6 +120,10 @@ func (c *Client) Wait(ctx context.Context, code *Code) (*Grant, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			var refusal *api.Error
+			if errors.As(err, &refusal) {
+				return nil, err
+			}
 			// A dropped connection mid-wait isn't fatal; try again next tick.
 			if err := c.Sleep(ctx, interval); err != nil {
 				return nil, err
@@ -144,7 +152,7 @@ func (c *Client) Wait(ctx context.Context, code *Code) (*Grant, error) {
 		case "expired_token":
 			return nil, ErrExpired
 		default:
-			return nil, fmt.Errorf("login failed: %s (HTTP %d)", orUnknown(body.Error), status)
+			return nil, statusError(status, fmt.Sprintf("login failed: %s (HTTP %d)", orUnknown(body.Error), status))
 		}
 	}
 }
@@ -165,10 +173,21 @@ func (c *Client) post(ctx context.Context, path string, payload any, out any) (i
 		return 0, fmt.Errorf("could not reach %s: %w", c.Host, err)
 	}
 	defer resp.Body.Close()
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil && resp.StatusCode < 500 {
-		return resp.StatusCode, fmt.Errorf("unexpected response from %s: %w", path, err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, fmt.Errorf("could not read the response from %s: %w", path, err)
+	}
+	if err := json.Unmarshal(body, out); err != nil && resp.StatusCode < 500 {
+		if resp.StatusCode < 400 {
+			return resp.StatusCode, fmt.Errorf("unexpected response from %s: %w", path, err)
+		}
+		return resp.StatusCode, statusError(resp.StatusCode, fmt.Sprintf("unexpected response from %s: %v", path, err))
 	}
 	return resp.StatusCode, nil
+}
+
+func statusError(status int, message string) error {
+	return &api.Error{Status: status, Code: api.CodeForStatus(status), Message: message}
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

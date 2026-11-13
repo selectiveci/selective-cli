@@ -4,7 +4,6 @@ package auth
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/devicelogin"
+	"github.com/selectiveci/selective-cli/internal/format"
 )
 
 type LoginOptions struct {
@@ -43,9 +43,9 @@ func (o LoginOptions) scope() string {
 
 func (o LoginOptions) emit(event map[string]any) {
 	if o.JSON && o.Stdout != nil {
-		enc := json.NewEncoder(o.Stdout)
-		enc.SetEscapeHTML(false) // agents copy the URL from the raw line
-		_ = enc.Encode(event)
+		name, _ := event["event"].(string)
+		delete(event, "event")
+		_ = format.EventLine(o.Stdout, name, event)
 	}
 }
 
@@ -106,6 +106,9 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 		return nil, err
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	opts.emit(map[string]any{
 		"event":      "authorize",
 		"url":        code.VerificationURIComplete,
@@ -125,9 +128,6 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to %s and authorize the CLI:\n  %s\n", action, code.VerificationURIComplete)
 	}
 	fmt.Fprintln(opts.Stderr, "Waiting for you to authorize the CLI… (Ctrl+C to cancel)")
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	grant, err := client.Wait(ctx, code)
 	if errors.Is(err, context.Canceled) {
 		return nil, errCancelled
@@ -136,11 +136,10 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 }
 
 func loginErrorCode(err error) string {
+	var coded contract.Coded
 	switch {
-	case errors.Is(err, devicelogin.ErrDenied):
-		return "access_denied"
-	case errors.Is(err, devicelogin.ErrExpired):
-		return "expired_token"
+	case errors.As(err, &coded):
+		return string(coded.ErrorCode())
 	case errors.Is(err, errCancelled):
 		return "cancelled"
 	}
@@ -148,6 +147,8 @@ func loginErrorCode(err error) string {
 }
 
 var errCancelled = errors.New("login cancelled")
+
+func IsCancelled(err error) bool { return errors.Is(err, errCancelled) }
 
 func clientName(version string) string {
 	host, err := os.Hostname()

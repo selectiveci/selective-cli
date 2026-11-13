@@ -3,6 +3,7 @@ package format
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -33,6 +34,25 @@ func IsTerminal(w io.Writer) bool {
 func JSONMode(flags interface{ GetBool(string) (bool, error) }, stdout io.Writer) bool {
 	asked, _ := flags.GetBool("json")
 	return asked || !IsTerminal(stdout)
+}
+
+func Document(w io.Writer, v any) error {
+	body, err := encode(v)
+	if err != nil {
+		return err
+	}
+	if len(body) < 2 || body[0] != '{' {
+		return fmt.Errorf("a JSON document must be an object, got %s", body)
+	}
+	var buf bytes.Buffer
+	buf.WriteString(`{"v":1`)
+	if len(body) > 2 {
+		buf.WriteByte(',')
+	}
+	buf.Write(body[1:])
+	buf.WriteByte('\n')
+	_, err = w.Write(buf.Bytes())
+	return err
 }
 
 func Resource(w io.Writer, key string, v any) error {

@@ -3,7 +3,6 @@
 package setup
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/config"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
+	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
 )
 
@@ -61,10 +61,7 @@ func Connect(hostname string, forceJSON bool) (*Env, error) {
 }
 
 func (e *Env) json(v any) error {
-	enc := json.NewEncoder(e.Stdout)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+	return format.Document(e.Stdout, v)
 }
 
 func (e *Env) table(header string, rows [][]string) {
@@ -83,7 +80,7 @@ func (e *Env) Orgs() error {
 		return err
 	}
 	if e.JSON {
-		return e.json(map[string]any{"organizations": orgs})
+		return format.List(e.Stdout, "organizations", orgs, nil)
 	}
 	rows := [][]string{}
 	for _, o := range orgs {
@@ -125,7 +122,10 @@ func (e *Env) Repos(org string) error {
 		return err
 	}
 	if e.JSON {
-		return e.json(repos)
+		return e.json(struct {
+			*api.Repos
+			NextCursor *string `json:"next_cursor"`
+		}{repos, nil})
 	}
 	if len(repos.Repos) == 0 {
 		fmt.Fprintf(e.Stdout, "The Selective GitHub App can't see any repositories yet. Add them at:\n  %s\n", repos.InstallURL)
@@ -151,7 +151,7 @@ func (e *Env) Suites(org string) error {
 		return err
 	}
 	if e.JSON {
-		return e.json(map[string]any{"suites": suites})
+		return format.List(e.Stdout, "suites", suites, nil)
 	}
 	rows := [][]string{}
 	for _, s := range suites {

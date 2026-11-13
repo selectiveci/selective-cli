@@ -113,7 +113,46 @@ func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 	}
 }
 
-func TestJSONLoginReportsADenial(t *testing.T) {
+func TestJSONLoginErrorEventCarriesTheContractCode(t *testing.T) {
+	cases := []struct {
+		name        string
+		tokenStatus int
+		tokenBody   string
+		code        string
+	}{
+		{"denied", 400, `{"error":"access_denied"}`, "approval_denied"},
+		{"expired", 400, `{"error":"expired_token"}`, "approval_expired"},
+		{"server fault", 500, `{"error":"server_error"}`, "server_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setup(t)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/device/code":
+					_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device?code=ABCD-EFGH","expires_in":600,"interval":1}`))
+				case "/api/v1/device/token":
+					w.WriteHeader(tc.tokenStatus)
+					_, _ = w.Write([]byte(tc.tokenBody))
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			out := &bytes.Buffer{}
+			err := Login(LoginOptions{Hostname: srv.URL, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}})
+			if err == nil {
+				t.Fatal("login succeeded")
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			if len(lines) != 2 || !strings.HasPrefix(lines[1], `{"v":1,"event":"error"`) || !strings.Contains(lines[1], `"error":"`+tc.code+`"`) {
+				t.Fatalf("stdout = %q", out.String())
+			}
+		})
+	}
+}
+
+func TestJSONLoginEventsAllCarryTheContractVersion(t *testing.T) {
 	setup(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -121,20 +160,24 @@ func TestJSONLoginReportsADenial(t *testing.T) {
 		case "/api/v1/device/code":
 			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device?code=ABCD-EFGH","expires_in":600,"interval":1}`))
 		case "/api/v1/device/token":
-			w.WriteHeader(400)
-			_, _ = w.Write([]byte(`{"error":"access_denied"}`))
+			_, _ = w.Write([]byte(`{"access_token":"sk_live_test","user":{"email":"ben@example.com","org_slugs":["acme"]}}`))
 		}
 	}))
 	t.Cleanup(srv.Close)
 
 	out := &bytes.Buffer{}
-	err := Login(LoginOptions{Hostname: srv.URL, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}})
-	if err == nil {
-		t.Fatal("login succeeded")
+	if err := Login(LoginOptions{Hostname: srv.URL, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
 	}
+
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 2 || !strings.Contains(lines[1], `"event":"error"`) || !strings.Contains(lines[1], `"error":"access_denied"`) {
-		t.Fatalf("stdout = %q", out.String())
+	if len(lines) != 2 {
+		t.Fatalf("stdout = %q, want an authorize and a logged_in event", out.String())
+	}
+	for i, event := range []string{"authorize", "logged_in"} {
+		if !strings.HasPrefix(lines[i], `{"v":1,"event":"`+event+`"`) {
+			t.Errorf("line %d = %q, want an object starting {\"v\":1,\"event\":%q", i, lines[i], event)
+		}
 	}
 }
 

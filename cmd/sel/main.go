@@ -58,6 +58,10 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	if auth.IsSilent(err) {
 		return contract.ExitFor(contract.Unauthorized, 0)
 	}
+	if auth.IsCancelled(err) {
+		fmt.Fprintf(stderr, "Error: %s\n", err)
+		return contract.ExitInterrupted
+	}
 	coded := classify(err, entered)
 	if format.JSONMode(cmd.Flags(), stdout) || jsonFlagGiven(args) {
 		_ = format.Error(stdout, coded)
