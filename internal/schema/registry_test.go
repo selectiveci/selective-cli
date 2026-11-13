@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -92,6 +93,22 @@ func TestExitSevenMeaningCoversPendingAndExpiredApprovals(t *testing.T) {
 			if !strings.Contains(strings.ToLower(e.Meaning), word) {
 				t.Errorf("exit 7 meaning %q does not mention %q", e.Meaning, word)
 			}
+		}
+	}
+}
+
+func TestEveryExitMeaningNamesTheCodesMappedToIt(t *testing.T) {
+	codes := map[string]int{"runner_error": contract.ExitFailures, "stale_key": contract.ExitUsage}
+	for _, e := range Errors() {
+		codes[e.Code] = e.Exit
+	}
+	meanings := map[int]string{}
+	for _, e := range ExitCodes() {
+		meanings[e.Code] = e.Meaning
+	}
+	for code, exit := range codes {
+		if !regexp.MustCompile(`\b` + code + `\b`).MatchString(meanings[exit]) {
+			t.Errorf("exit %d meaning %q does not name %q", exit, meanings[exit], code)
 		}
 	}
 }
