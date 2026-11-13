@@ -733,3 +733,45 @@ func TestRunFailsFastWhenBuildStartCannotBeWritten(t *testing.T) {
 		t.Fatalf("err=%v after %s, want internal_error before the selector or the deadline", out.err, time.Since(started))
 	}
 }
+
+type stuckWriter struct {
+	release <-chan struct{}
+	on      string
+}
+
+func (s *stuckWriter) Write(b []byte) (int, error) {
+	if strings.Contains(string(b), s.on) {
+		<-s.release
+		return 0, io.ErrClosedPipe
+	}
+	return len(b), nil
+}
+
+func TestRunTimesOutWhenACommandWriteBlocks(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	framesIn, framesOut := io.Pipe()
+	defer framesOut.Close()
+	go func() {
+		manifest := `{"type":"test_manifest","data":{"test_cases":[{"id":"a","file_path":"./a.rb"}]}}` + "\n"
+		_, _ = framesOut.Write([]byte(manifest))
+	}()
+	type ended struct {
+		err error
+		at  time.Duration
+	}
+	finished := make(chan ended, 1)
+	started := time.Now()
+	go func() {
+		_, err := Run(context.Background(), framesIn, &stuckWriter{release: release, on: "run_test_cases"}, io.Discard, Options{Selector: selecting("a"), Timeout: 200 * time.Millisecond})
+		finished <- ended{err, time.Since(started)}
+	}()
+	select {
+	case got := <-finished:
+		if codeOf(got.err) != contract.Timeout || got.at > time.Second {
+			t.Fatalf("err=%v after %s, want a timeout within the deadline", got.err, got.at)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run is stuck in a blocked command write past its timeout")
+	}
+}
