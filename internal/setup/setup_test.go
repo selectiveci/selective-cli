@@ -322,3 +322,33 @@ func TestEveryJSONWriterCarriesTheContractVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestEveryJSONListEndsWithANullNextCursor(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(*Env) error
+	}{
+		{"orgs", func(e *Env) error { return e.Orgs() }},
+		{"repos", func(e *Env) error { return e.Repos("acme") }},
+		{"suites", func(e *Env) error { return e.Suites("acme") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+			e.JSON = true
+
+			if err := tc.run(e); err != nil {
+				t.Fatal(err)
+			}
+
+			var doc map[string]any
+			if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+				t.Fatal(err)
+			}
+			cursor, present := doc["next_cursor"]
+			if !present || cursor != nil {
+				t.Errorf("stdout = %q, want next_cursor present and null", out.String())
+			}
+		})
+	}
+}

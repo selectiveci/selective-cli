@@ -80,7 +80,7 @@ func (e *Env) Orgs() error {
 		return err
 	}
 	if e.JSON {
-		return e.json(map[string]any{"organizations": orgs})
+		return format.List(e.Stdout, "organizations", orgs, nil)
 	}
 	rows := [][]string{}
 	for _, o := range orgs {
@@ -122,7 +122,10 @@ func (e *Env) Repos(org string) error {
 		return err
 	}
 	if e.JSON {
-		return e.json(repos)
+		return e.json(struct {
+			*api.Repos
+			NextCursor *string `json:"next_cursor"`
+		}{repos, nil})
 	}
 	if len(repos.Repos) == 0 {
 		fmt.Fprintf(e.Stdout, "The Selective GitHub App can't see any repositories yet. Add them at:\n  %s\n", repos.InstallURL)
@@ -148,7 +151,7 @@ func (e *Env) Suites(org string) error {
 		return err
 	}
 	if e.JSON {
-		return e.json(map[string]any{"suites": suites})
+		return format.List(e.Stdout, "suites", suites, nil)
 	}
 	rows := [][]string{}
 	for _, s := range suites {
