@@ -7,35 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
-
-// ErrUnauthorized means the token was rejected (revoked, mistyped, expired).
-var ErrUnauthorized = errors.New("unauthorized")
-
-// Error is a refusal the server explained.
-type Error struct {
-	Status     int
-	Code       string `json:"error"`
-	Message    string `json:"message"`
-	Scope      string `json:"scope"`
-	InstallURL string `json:"install_url"`
-}
-
-func (e *Error) Error() string {
-	switch {
-	case e.Code == "insufficient_scope":
-		return fmt.Sprintf("this login can't do that (it needs the %q scope); run: sel auth login --setup", e.Scope)
-	case e.Message != "":
-		return e.Message
-	case e.Code != "":
-		return fmt.Sprintf("server refused: %s (HTTP %d)", e.Code, e.Status)
-	default:
-		return fmt.Sprintf("server returned %d", e.Status)
-	}
-}
 
 type Client struct {
 	Host  string
@@ -90,21 +68,24 @@ func (c *Client) do(method, path string, body any, want int, out any) error {
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("could not reach %s: %w", c.Host, err)
+		return networkError(c.Host, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return ErrUnauthorized
-	}
-	if resp.StatusCode != want && !(want == http.StatusOK && resp.StatusCode == http.StatusCreated) {
-		apiErr := &Error{Status: resp.StatusCode}
-		_ = json.NewDecoder(resp.Body).Decode(apiErr)
-		return apiErr
+	acceptable := resp.StatusCode == want ||
+		resp.StatusCode == http.StatusAccepted ||
+		(want == http.StatusOK && resp.StatusCode == http.StatusCreated)
+	if !acceptable {
+		return decodeError(resp)
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			return fmt.Errorf("unexpected response from %s: %w", path, err)
+			code := contract.ServerError
+			var netErr net.Error
+			if errors.As(err, &netErr) {
+				code = contract.NetworkError
+			}
+			return &Error{Status: resp.StatusCode, Code: code, Message: fmt.Sprintf("unexpected response from %s: %v", path, err), cause: err}
 		}
 	}
 	return nil
