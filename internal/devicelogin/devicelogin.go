@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -118,6 +120,10 @@ func (c *Client) Wait(ctx context.Context, code *Code) (*Grant, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			var refusal *api.Error
+			if errors.As(err, &refusal) {
+				return nil, err
+			}
 			// A dropped connection mid-wait isn't fatal; try again next tick.
 			if err := c.Sleep(ctx, interval); err != nil {
 				return nil, err
@@ -167,7 +173,11 @@ func (c *Client) post(ctx context.Context, path string, payload any, out any) (i
 		return 0, fmt.Errorf("could not reach %s: %w", c.Host, err)
 	}
 	defer resp.Body.Close()
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil && resp.StatusCode < 500 {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, fmt.Errorf("could not read the response from %s: %w", path, err)
+	}
+	if err := json.Unmarshal(body, out); err != nil && resp.StatusCode < 500 {
 		if resp.StatusCode < 400 {
 			return resp.StatusCode, fmt.Errorf("unexpected response from %s: %w", path, err)
 		}

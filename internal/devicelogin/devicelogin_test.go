@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,6 +228,83 @@ func TestConnectionResetMidBodyStaysANetworkError(t *testing.T) {
 	var opErr *net.OpError
 	if !errors.As(err, &opErr) {
 		t.Fatalf("err = %v, want a *net.OpError in the chain", err)
+	}
+}
+
+func TestNonJSONClientErrorsWhilePollingEndThePollImmediately(t *testing.T) {
+	cases := []struct {
+		status int
+		code   contract.Code
+	}{
+		{404, contract.NotFound},
+		{429, contract.RateLimited},
+	}
+	for _, tc := range cases {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/device/code" {
+					_, _ = w.Write([]byte(`{"device_code":"dc_x","user_code":"BCDF-GHJK","verification_uri_complete":"http://x/device","expires_in":600,"interval":5}`))
+					return
+				}
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte("<html>proxy page</html>"))
+			}))
+			t.Cleanup(srv.Close)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			sleeps := 0
+			c := client(srv.URL, new([]time.Duration))
+			c.Sleep = func(ctx context.Context, _ time.Duration) error {
+				sleeps++
+				if sleeps >= 3 {
+					cancel()
+				}
+				return ctx.Err()
+			}
+			code, _ := c.Start("x", "")
+
+			_, err := c.Wait(ctx, code)
+
+			coded := codedAs(t, err)
+			if coded.ErrorCode() != tc.code || sleeps != 0 {
+				t.Errorf("code %q after %d sleeps, want %q with none (err: %v)", coded.ErrorCode(), sleeps, tc.code, err)
+			}
+		})
+	}
+}
+
+func TestTransportAndReadFailuresWhilePollingAreRetried(t *testing.T) {
+	polls := 0
+	c := New("http://stub.invalid")
+	c.Now = func() time.Time { return time.Unix(0, 0) }
+	var slept []time.Duration
+	c.Sleep = func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/api/v1/device/code" {
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"device_code":"dc_x","user_code":"BCDF-GHJK","verification_uri_complete":"http://x/device","expires_in":600,"interval":5}`))}, nil
+		}
+		polls++
+		switch polls {
+		case 1:
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		case 2:
+			return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(resetBody{})}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"access_token":"sk_live_new","user":{"email":"ben@example.com"}}`))}, nil
+	})}
+	code, err := c.Start("x", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grant, err := c.Wait(context.Background(), code)
+
+	if err != nil || grant.AccessToken != "sk_live_new" || polls != 3 || len(slept) != 2 {
+		t.Fatalf("grant %+v err %v after %d polls and %d sleeps, want a grant on the third poll after two retries", grant, err, polls, len(slept))
 	}
 }
 
