@@ -1,9 +1,12 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 func TestNormalizeHost(t *testing.T) {
@@ -74,5 +77,16 @@ func TestResolveHostPrecedence(t *testing.T) {
 	t.Setenv("SELECTIVE_HOST", "")
 	if h, _ := (&Config{}).ResolveHost(""); h != DefaultHost {
 		t.Errorf("default not used: %s", h)
+	}
+}
+
+func TestBadHostnamesAreUsageErrors(t *testing.T) {
+	for _, raw := range []string{"", "http://", "ftp://example.com"} {
+		_, err := NormalizeHost(raw)
+
+		var coded contract.Coded
+		if !errors.As(err, &coded) || coded.ErrorCode() != contract.UsageError {
+			t.Errorf("NormalizeHost(%q) error = %v, want a usage_error", raw, err)
+		}
 	}
 }
