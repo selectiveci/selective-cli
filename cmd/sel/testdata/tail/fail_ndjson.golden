@@ -1,0 +1,5 @@
+{"event":"build_start","build_id":"b","commit":"abc1234def","suites":[{"id":"s1","name":"rspec"}],"total":10}
+{"event":"selection","run_id":"r1","suite":"rspec","outcome":"selected","applied":true,"cause":null}
+{"event":"test_fail","node":"n1","file":"spec/a_spec.rb","line":12,"error":"expected true, got false & <more>","preceding_on_node":[{"file":"spec/b_spec.rb","line":3}]}
+{"event":"progress","completed":4,"total":10,"percent":40,"failed":1}
+{"event":"summary","passed":9,"failed":1,"flaky":0,"ms":2500}

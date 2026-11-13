@@ -1,0 +1,4 @@
+{"event":"build_start","build_id":"b","commit":"abc1234def","suites":[{"id":"s1","name":"rspec"}],"total":10}
+{"event":"selection","run_id":"r1","suite":"rspec","outcome":"selected","applied":true,"cause":null}
+{"event":"progress","completed":4,"total":10,"percent":40,"failed":1}
+{"event":"summary","passed":10,"failed":0,"flaky":0,"ms":2500}

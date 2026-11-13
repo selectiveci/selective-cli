@@ -1,10 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"slices"
 
 	"github.com/selectiveci/selective-cli/internal/auth"
+	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/tail"
 	"github.com/spf13/cobra"
@@ -14,22 +19,68 @@ var version = "dev"
 var commit = "none"
 
 func main() {
+	os.Exit(run(newRoot(), os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func newRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:               "sel",
 		Short:             "Selective CI — AI-first test intelligence CLI",
 		Long:              "Stream live test results from Selective CI builds directly to your terminal or agent.",
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	}
+	root.PersistentFlags().Bool("json", false, "JSON output (the default when stdout isn't a terminal)")
 
 	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), versionCmd())
 
 	root.SilenceUsage = true
 	root.SilenceErrors = true
-	if err := root.Execute(); err != nil {
-		if !auth.IsSilent(err) {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	return root
+}
+
+func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
+	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	entered := false
+	markEntered(root, &entered)
+
+	cmd, err := root.ExecuteC()
+	if err == nil {
+		return contract.ExitOK
+	}
+	if auth.IsSilent(err) {
+		return contract.ExitFor(contract.Unauthorized, 0)
+	}
+	coded := classify(err, entered)
+	if format.JSONMode(cmd.Flags(), stdout) || slices.Contains(args, "--json") {
+		_ = format.Error(stdout, coded)
+	}
+	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
+	return coded.ExitCode()
+}
+
+func classify(err error, entered bool) contract.Coded {
+	var coded contract.Coded
+	switch {
+	case !entered:
+		return contract.Errorf(contract.UsageError, "%s", err.Error())
+	case errors.As(err, &coded):
+		return coded
+	default:
+		return contract.Errorf(contract.InternalError, "%s", err.Error())
+	}
+}
+
+func markEntered(c *cobra.Command, entered *bool) {
+	if run := c.RunE; run != nil {
+		c.RunE = func(cmd *cobra.Command, args []string) error {
+			*entered = true
+			return run(cmd, args)
 		}
-		os.Exit(1)
+	}
+	for _, sub := range c.Commands() {
+		markEntered(sub, entered)
 	}
 }
 
