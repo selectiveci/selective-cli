@@ -148,6 +148,8 @@ type Suite struct {
 	LastRunAt *time.Time `json:"last_run_at"`
 	// SelectionMode is off, shadow or live; empty from servers that predate it.
 	SelectionMode string `json:"selection_mode,omitempty"`
+	// SelectionOnDefaultBranch is nil from servers that predate it.
+	SelectionOnDefaultBranch *bool `json:"selection_on_default_branch,omitempty"`
 }
 
 func (c *Client) Suites(org string) ([]Suite, error) {
@@ -183,7 +185,8 @@ func (c *Client) SuiteAPIKey(org, suiteID string) (string, error) {
 
 // SuiteSettings are the settings `ConfigureSuite` can change. Empty fields stay as they are.
 type SuiteSettings struct {
-	SelectionMode string `json:"selection_mode,omitempty"`
+	SelectionMode            string `json:"selection_mode,omitempty"`
+	SelectionOnDefaultBranch *bool  `json:"selection_on_default_branch,omitempty"`
 }
 
 // ConfigureSuite changes a suite's settings and returns the suite with the

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/auth"
@@ -366,6 +367,7 @@ One of the two is required.`,
 func suitesConfigureCmd() *cobra.Command {
 	var f setupFlags
 	var settings api.SuiteSettings
+	var defaultBranch string
 	cmd := &cobra.Command{
 		Use:   "configure SUITE",
 		Short: "Change a suite's settings, such as test selection",
@@ -375,11 +377,26 @@ owner or admin of the organization.
   --selection off      every test runs
   --selection shadow   Selective decides which tests to run but runs them all,
                        so you can see what it would have skipped
-  --selection live     only the selected tests run`,
+  --selection live     only the selected tests run
+
+Runs on the repository's default branch run the full suite, so anything
+selection missed on a pull request is caught when it merges:
+
+  --default-branch full     run every test there (the default)
+  --default-branch select   select there too`,
 		Example: `  sel suites configure web-rspec --selection shadow
-  sel suites configure web-rspec --selection live`,
+  sel suites configure web-rspec --selection live
+  sel suites configure web-rspec --default-branch select`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch defaultBranch {
+			case "":
+			case "full", "select":
+				selects := defaultBranch == "select"
+				settings.SelectionOnDefaultBranch = &selects
+			default:
+				return fmt.Errorf("--default-branch must be one of: %s", strings.Join(setup.DefaultBranchModes, ", "))
+			}
 			env, org, err := f.env(true)
 			if err != nil {
 				return err
@@ -389,5 +406,6 @@ owner or admin of the organization.
 	}
 	f.bind(cmd, true)
 	cmd.Flags().StringVar(&settings.SelectionMode, "selection", "", "Test selection: off, shadow or live")
+	cmd.Flags().StringVar(&defaultBranch, "default-branch", "", "Default-branch runs: full or select")
 	return cmd
 }
