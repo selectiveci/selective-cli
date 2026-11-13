@@ -44,6 +44,14 @@ func TestDocumentShapes(t *testing.T) {
 		{"error with extras", capture(t, func(b *bytes.Buffer) error {
 			return Error(b, &contract.Error{Code: contract.RateLimited, Message: "slow down", Fields: map[string]any{"retry_after_s": 7}})
 		}), `{"v":1,"error":"rate_limited","message":"slow down","retry_after_s":7}` + "\n"},
+		{"document keeps its fields in order", capture(t, func(b *bytes.Buffer) error {
+			return Document(b, struct {
+				Zed   string `json:"zed"`
+				Alpha int    `json:"alpha"`
+			}{"z", 1})
+		}), `{"v":1,"zed":"z","alpha":1}` + "\n"},
+		{"empty document", capture(t, func(b *bytes.Buffer) error { return Document(b, map[string]any{}) }),
+			`{"v":1}` + "\n"},
 		{"html is not escaped", capture(t, func(b *bytes.Buffer) error { return Resource(b, "x", "a & <b>") }),
 			`{"v":1,"x":"a & <b>"}` + "\n"},
 	}
@@ -116,5 +124,12 @@ func TestErrorDropsExtraFieldsThatReuseReservedKeys(t *testing.T) {
 	want := `{"v":1,"error":"rate_limited","message":"slow down","retry_after_s":7}` + "\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDocumentRefusesAnythingButAnObject(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Document(&buf, []int{1}); err == nil || buf.Len() != 0 {
+		t.Fatalf("err = %v, wrote %q", err, buf.String())
 	}
 }

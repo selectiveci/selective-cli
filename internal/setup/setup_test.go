@@ -27,7 +27,15 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 			_, _ = w.Write([]byte(orgs))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "GET":
 			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null},{"id":"s-2","name":"Bare","type":"rspec","repo":null,"last_run_at":null}]}`))
+		case r.URL.Path == "/api/v1/orgs/acme/repos":
+			_, _ = w.Write([]byte(`{"github_account":"acme","install_url":"http://x/acme/github/install","repos":[{"full_name":"acme/web","private":true}]}`))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "POST":
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["name"] == "New" {
+				_, _ = w.Write([]byte(`{"suite":{"id":"s-3","name":"New","type":"rspec","repo":"acme/web","last_run_at":null},"result":"created"}`))
+				return
+			}
 			w.WriteHeader(422)
 			_, _ = w.Write([]byte(`{"error":"repo_not_installed","message":"The Selective GitHub App can't see this repository.","install_url":"http://x/acme/github/install"}`))
 		case r.URL.Path == "/api/v1/orgs/acme/suites/s-1" && r.Method == "PATCH":
@@ -275,5 +283,42 @@ func TestConnectWithoutALoginIsUnauthorized(t *testing.T) {
 
 	if got := codeOf(err); got != contract.Unauthorized {
 		t.Errorf("code = %q, want %q (err: %v)", got, contract.Unauthorized, err)
+	}
+}
+
+func TestEveryJSONWriterCarriesTheContractVersion(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(*Env) error
+	}{
+		{"orgs", func(e *Env) error { return e.Orgs() }},
+		{"repos", func(e *Env) error { return e.Repos("acme") }},
+		{"suites", func(e *Env) error { return e.Suites("acme") }},
+		{"suites create", func(e *Env) error { return e.CreateSuite("acme", "New", "acme/web", "") }},
+		{"suites configure", func(e *Env) error {
+			return e.Configure("acme", "s-1", api.SuiteSettings{SelectionMode: "shadow"})
+		}},
+		{"suites key", func(e *Env) error {
+			e.RunGh = func(string, ...string) error { return nil }
+			return e.Key("acme", "s-1", KeyOptions{GithubSecret: "SELECTIVE_API_KEY"})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+			e.JSON = true
+
+			if err := tc.run(e); err != nil {
+				t.Fatal(err)
+			}
+
+			var doc map[string]any
+			if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+				t.Fatalf("stdout %q is not one JSON object: %v", out.String(), err)
+			}
+			if doc["v"] != float64(1) || strings.Count(out.String(), "\n") != 1 {
+				t.Errorf("stdout = %q, want one line carrying \"v\":1", out.String())
+			}
+		})
 	}
 }
