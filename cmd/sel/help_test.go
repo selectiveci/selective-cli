@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -166,5 +167,15 @@ func TestUseArgsProbeCatchesAMismatch(t *testing.T) {
 	}
 	if !arityAgrees(t, cmd, []schema.Arg{{Name: "KEY", Required: true}}) {
 		t.Error("ExactArgs(1) with KEY in Use failed the probe")
+	}
+}
+
+func TestHelpSchemaFailureExitsInternal(t *testing.T) {
+	root := newRoot()
+	root.AddCommand(&cobra.Command{Use: "bad", Annotations: map[string]string{"exit_codes": "42"}, Run: func(*cobra.Command, []string) {}})
+	var stdout, stderr bytes.Buffer
+	code := run(root, []string{"help", "--json"}, &stdout, &stderr)
+	if code != contract.ExitInternal || !strings.Contains(stdout.String(), `"error":"internal_error"`) {
+		t.Errorf("exit %d, stdout %q", code, stdout.String())
 	}
 }

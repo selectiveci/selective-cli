@@ -63,3 +63,8 @@ func find(root *cobra.Command, args []string) (*cobra.Command, error) {
 func unknownCommand(args []string) error {
 	return contract.Errorf(contract.UsageError, "unknown command %q", strings.Join(args, " "))
 }
+
+func installHelp(root *cobra.Command) {
+	root.SetHelpCommand(helpCmd())
+	root.InitDefaultHelpCmd()
+}
