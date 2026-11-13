@@ -146,6 +146,8 @@ type Suite struct {
 	Type      *string    `json:"type"`
 	Repo      *string    `json:"repo"`
 	LastRunAt *time.Time `json:"last_run_at"`
+	// SelectionMode is off, shadow or live; empty from servers that predate it.
+	SelectionMode string `json:"selection_mode,omitempty"`
 }
 
 func (c *Client) Suites(org string) ([]Suite, error) {
@@ -177,4 +179,20 @@ func (c *Client) SuiteAPIKey(org, suiteID string) (string, error) {
 	}
 	err := c.do("GET", "/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(suiteID)+"/api_key", nil, http.StatusOK, &out)
 	return out.APIKey, err
+}
+
+// SuiteSettings are the settings `ConfigureSuite` can change. Empty fields stay as they are.
+type SuiteSettings struct {
+	SelectionMode string `json:"selection_mode,omitempty"`
+}
+
+// ConfigureSuite changes a suite's settings and returns the suite with the
+// settings it had before.
+func (c *Client) ConfigureSuite(org, suiteID string, settings SuiteSettings) (*Suite, SuiteSettings, error) {
+	var out struct {
+		Suite    Suite         `json:"suite"`
+		Previous SuiteSettings `json:"previous"`
+	}
+	err := c.do("PATCH", "/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(suiteID), settings, http.StatusOK, &out)
+	return &out.Suite, out.Previous, err
 }
