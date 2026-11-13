@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -83,6 +87,18 @@ func TestRuntimeErrorsExitByCode(t *testing.T) {
 			contract.Errorf(contract.Timeout, "gave up after 5s"),
 			8,
 			`{"v":1,"error":"timeout","message":"gave up after 5s"}` + "\n",
+		},
+		{
+			"untyped url error from a command",
+			fmt.Errorf("browser login: %w", &url.Error{Op: "Post", URL: "https://selective.test/device", Err: errors.New("connection refused")}),
+			4,
+			`{"v":1,"error":"network_error","message":"browser login: Post \"https://selective.test/device\": connection refused"}` + "\n",
+		},
+		{
+			"untyped net error from a command",
+			&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("no route to host")},
+			4,
+			`{"v":1,"error":"network_error","message":"dial tcp: no route to host"}` + "\n",
 		},
 		{
 			"unclassified error",

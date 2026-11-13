@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"slices"
 
@@ -62,11 +63,14 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 
 func classify(err error, entered bool) contract.Coded {
 	var coded contract.Coded
+	var netErr net.Error
 	switch {
 	case !entered:
 		return contract.Errorf(contract.UsageError, "%s", err.Error())
 	case errors.As(err, &coded):
 		return coded
+	case errors.As(err, &netErr):
+		return contract.Errorf(contract.NetworkError, "%s", err.Error())
 	default:
 		return contract.Errorf(contract.InternalError, "%s", err.Error())
 	}
