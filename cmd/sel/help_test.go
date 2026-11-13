@@ -44,7 +44,7 @@ func helpDocument(t *testing.T, args ...string) helpOutput {
 
 func TestHelpJSONListsTheCommandTree(t *testing.T) {
 	out := helpDocument(t, "--json")
-	if out.V != 1 || out.Help.Binary != "selective" {
+	if out.V != 1 || out.Help.Binary != "sel" {
 		t.Errorf("envelope = v%d %q", out.V, out.Help.Binary)
 	}
 	flags := map[string][]string{}
@@ -56,7 +56,7 @@ func TestHelpJSONListsTheCommandTree(t *testing.T) {
 			flags[c.Path] = nil
 		}
 	}
-	for _, path := range []string{"auth", "auth login", "auth status", "auth logout", "tail", "version", "help"} {
+	for _, path := range []string{"auth", "auth login", "auth signup", "auth status", "auth logout", "orgs", "repos", "suites", "suites create", "suites key", "tail", "version", "help"} {
 		if _, ok := flags[path]; !ok {
 			t.Errorf("%q missing from help --json", path)
 		}
