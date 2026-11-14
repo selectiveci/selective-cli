@@ -158,6 +158,7 @@ var scannedPackages = []string{
 	"internal/doctor",
 	"internal/runs",
 	"internal/setup",
+	"internal/wait",
 }
 
 var exemptPackages = map[string]string{
