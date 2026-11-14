@@ -16,9 +16,12 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if os.Getenv("SELECTIVE_TEST_RUN_MAIN") == "1" {
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "__transport", os.Getenv("SELECTIVE_TEST_RUN_MAIN") == "1":
 		main()
 		return
+	case os.Getenv("FAKE_RUNNER") == "1":
+		os.Exit(fakeRunner())
 	}
 	os.Exit(m.Run())
 }
