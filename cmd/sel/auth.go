@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/selectiveci/selective-cli/internal/auth"
+	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +43,12 @@ func authLoginCmd() *cobra.Command {
 	var opts auth.LoginOptions
 
 	cmd := &cobra.Command{
-		Use:   "login",
+		Use: "login",
+		Annotations: map[string]string{
+			"exit_codes": "0,3,4,5,6,7,9,130",
+			"events":     "authorize,logged_in",
+			"mcp":        "skip",
+		},
 		Short: "Log in through your browser",
 		Long: `Log in to Selective.
 
@@ -84,7 +90,12 @@ For scripts, pass a token on stdin instead:
 func authSignupCmd() *cobra.Command {
 	opts := auth.LoginOptions{Signup: true}
 	cmd := &cobra.Command{
-		Use:   "signup",
+		Use: "signup",
+		Annotations: map[string]string{
+			"exit_codes": "0,3,4,5,6,7,9,130",
+			"events":     "authorize,logged_in",
+			"mcp":        "skip",
+		},
 		Short: "Create a Selective account and log in",
 		Long: `Create a Selective account with GitHub and log the CLI in to it.
 
@@ -110,11 +121,13 @@ who already has an account can still sign in from there.`,
 func authStatusCmd() *cobra.Command {
 	var hostname string
 	cmd := &cobra.Command{
-		Use:   "status",
-		Short: "Show who you're logged in as",
-		Args:  cobra.NoArgs,
+		Use:         "status",
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9"},
+		Short:       "Show who you're logged in as",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return auth.Status(hostname, os.Stdout)
+			out := cmd.OutOrStdout()
+			return auth.Status(hostname, format.JSONMode(cmd.Flags(), out), out)
 		},
 	}
 	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server")
@@ -124,9 +137,10 @@ func authStatusCmd() *cobra.Command {
 func authLogoutCmd() *cobra.Command {
 	var hostname string
 	cmd := &cobra.Command{
-		Use:   "logout",
-		Short: "Revoke this machine's token and forget it",
-		Args:  cobra.NoArgs,
+		Use:         "logout",
+		Annotations: map[string]string{"exit_codes": "0,5,9"},
+		Short:       "Revoke this machine's token and forget it",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return auth.Logout(hostname, os.Stderr)
 		},

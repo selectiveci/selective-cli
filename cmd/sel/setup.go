@@ -32,9 +32,10 @@ func (f *setupFlags) env(withOrg bool) (*setup.Env, string, error) {
 func orgsCmd() *cobra.Command {
 	var f setupFlags
 	cmd := &cobra.Command{
-		Use:   "orgs",
-		Short: "List your organizations",
-		Args:  cobra.NoArgs,
+		Use:         "orgs",
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9"},
+		Short:       "List your organizations",
+		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, _, err := f.env(false)
 			if err != nil {
@@ -50,8 +51,9 @@ func orgsCmd() *cobra.Command {
 func reposCmd() *cobra.Command {
 	var f setupFlags
 	cmd := &cobra.Command{
-		Use:   "repos",
-		Short: "List the repositories Selective's GitHub App can see",
+		Use:         "repos",
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9"},
+		Short:       "List the repositories Selective's GitHub App can see",
 		Long: `List the repositories a suite can be created for: the ones the
 organization's Selective GitHub App installation can see. The output ends
 with the URL where a signed-in user can add more.`,
