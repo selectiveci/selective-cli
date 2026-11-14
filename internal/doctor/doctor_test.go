@@ -343,3 +343,18 @@ func TestServerCheckCapsEachHTTPCallAtTenSeconds(t *testing.T) {
 		t.Errorf("HTTP timeout = %s, want 10s", got)
 	}
 }
+
+func TestAServerThatEchoesTheTokenNeverGetsItIntoTheReportOrTheError(t *testing.T) {
+	for name, status := range map[string]int{"rejected": 401, "broken": 500} {
+		t.Run(name, func(t *testing.T) {
+			echo := `{"error":"unauthorized","message":"bad token ` + token + `"}`
+			report := run(t, serve(t, with("/api/v1/me", reply(status, echo))), Options{})
+
+			raw, _ := json.Marshal(report)
+			text := string(raw) + report.Err().Error()
+			if strings.Contains(text, token) || !strings.Contains(text, "bad token [redacted]") {
+				t.Errorf("report and error text: %s", text)
+			}
+		})
+	}
+}
