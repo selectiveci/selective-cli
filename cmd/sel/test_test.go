@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/localrun"
@@ -88,5 +89,25 @@ func TestTransportStdioKeepsRelayingAfterSIGINT(t *testing.T) {
 	_, _ = io.WriteString(stdin, "exit\n")
 	if err := cmd.Wait(); err != nil {
 		t.Errorf("seat exit after exit line: %v, want 0", err)
+	}
+}
+
+func TestOnDiskCaseSpellsEachPathPartAsTheDirectoryHasIt(t *testing.T) {
+	tree := fstest.MapFS{
+		"tests/test_calc.py": {},
+		"Docs/a.md":          {},
+		"docs/b.md":          {},
+	}
+	cases := map[string]string{
+		"TESTS":               "tests",
+		"Tests/Test_Calc.PY":  "tests/test_calc.py",
+		"docs":                "docs",
+		"tests/missing/Thing": "tests/missing/Thing",
+		".":                   ".",
+	}
+	for given, want := range cases {
+		if got := onDiskCase(tree, given); got != want {
+			t.Errorf("onDiskCase(%q) = %q, want %q", given, got, want)
+		}
 	}
 }

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -183,9 +186,28 @@ func candidatePaths(root string, args []string) ([]string, error) {
 		if _, err := os.Stat(abs); err != nil {
 			return nil, contract.Errorf(contract.UsageError, "no such path: %s", arg)
 		}
-		paths = append(paths, filepath.ToSlash(rel))
+		paths = append(paths, onDiskCase(os.DirFS(root), filepath.ToSlash(rel)))
 	}
 	return paths, nil
+}
+
+func onDiskCase(fsys fs.FS, rel string) string {
+	if rel == "." {
+		return rel
+	}
+	var spelled []string
+	dir := "."
+	for _, name := range strings.Split(rel, "/") {
+		entries, _ := fs.ReadDir(fsys, dir)
+		if !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
+			if i := slices.IndexFunc(entries, func(e fs.DirEntry) bool { return strings.EqualFold(e.Name(), name) }); i >= 0 {
+				name = entries[i].Name()
+			}
+		}
+		spelled = append(spelled, name)
+		dir = path.Join(dir, name)
+	}
+	return strings.Join(spelled, "/")
 }
 
 func planTest(paths []string, f testFlags) (testPlan, error) {
