@@ -140,16 +140,22 @@ func renderList(env *setup.Env, opts ListOptions, page *api.FlakesPage) error {
 		return err
 	}
 	for _, notice := range page.Notices {
-		text, known := noticeText[notice]
-		if !known {
-			text = notice
-		}
-		fmt.Fprintf(env.Stderr, "Notice: %s\n", text)
+		fmt.Fprintf(env.Stderr, "Notice: %s\n", noticeSentence(notice, len(page.Flakes)))
 	}
 	if page.NextCursor != nil {
 		fmt.Fprintf(env.Stderr, "More results: %s\n", continueCommand(opts, *page.NextCursor))
 	}
 	return nil
+}
+
+func noticeSentence(notice string, count int) string {
+	if notice == paginationStoppedEarly {
+		return fmt.Sprintf("stopped early after %d flakes; run the command below to continue", count)
+	}
+	if text, known := noticeText[notice]; known {
+		return text
+	}
+	return notice
 }
 
 func renderTable(env *setup.Env, rows []json.RawMessage) error {
