@@ -88,8 +88,10 @@ polls until the build exists (10m when given without a value; write
 it. --timeout DURATION caps the whole run, waiting included.
 
 A build that already has failures replays them first, so a late sel tail
-sees every failure. While connected, 30 s without a line prints a heartbeat:
-an NDJSON line on stdout, or a note on stderr in pretty mode.
+sees them. The replay is capped: when it is cut short, a replay_truncated
+event reports how many failures were shown (shown) out of the total.
+While connected, 30 s without a line prints a heartbeat: an NDJSON line on
+stdout, or a note on stderr in pretty mode.
 
 Exit codes:
   0  all tests passed
