@@ -52,6 +52,15 @@ func check(t *testing.T, r *Report, name string) Check {
 	return Check{}
 }
 
+func coded(t *testing.T, r *Report) contract.Coded {
+	t.Helper()
+	c, ok := r.Err().(contract.Coded)
+	if !ok {
+		t.Fatalf("Err() = %v, want a coded error for %s", r.Err(), shape(r))
+	}
+	return c
+}
+
 func exitOf(r *Report) int {
 	c, ok := r.Err().(contract.Coded)
 	if !ok {
