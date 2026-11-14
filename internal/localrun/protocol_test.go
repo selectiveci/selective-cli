@@ -88,6 +88,15 @@ func (c *fakeClient) next(want string) map[string]any {
 	}
 }
 
+func (c *fakeClient) readCommands(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		var cmd map[string]any
+		_ = json.Unmarshal(scanner.Bytes(), &cmd)
+		c.commands <- cmd
+	}
+}
+
 func (c *fakeClient) send(frameType string, data map[string]any) {
 	line, _ := json.Marshal(map[string]any{"type": frameType, "data": data})
 	_, _ = c.frames.Write(append(line, '\n'))
@@ -180,14 +189,7 @@ func exerciseWriting(t *testing.T, opts Options, wrap func(io.Writer) io.Writer,
 	toClientR, toClientW := io.Pipe()
 	fromClientR, fromClientW := io.Pipe()
 	client := &fakeClient{t: t, commands: make(chan map[string]any, 64), frames: fromClientW}
-	go func() {
-		scanner := bufio.NewScanner(toClientR)
-		for scanner.Scan() {
-			var cmd map[string]any
-			_ = json.Unmarshal(scanner.Bytes(), &cmd)
-			client.commands <- cmd
-		}
-	}()
+	go client.readCommands(toClientR)
 	scripted := make(chan struct{})
 	go func() {
 		defer close(scripted)
