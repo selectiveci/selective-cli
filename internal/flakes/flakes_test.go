@@ -107,6 +107,19 @@ func TestListKeepsUncomputedMetricsAbsentAndComputedZerosPresent(t *testing.T) {
 	}
 }
 
+func TestListTextMatchesGolden(t *testing.T) {
+	s := &stub{pages: map[string]string{"": page(measuredFlake+","+unmeasuredFlake+","+zeroFlake, `"next-1"`, `["approximate_ranking","metrics_unavailable"]`)}}
+	env, out, errOut := s.env(t, false)
+
+	err := List(env, ListOptions{Org: "acme", Hostname: "http://h", FlakesQuery: api.FlakesQuery{Suite: "web rspec", Sort: "rate", Limit: 3, Search: "it's"}})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "list.txt", out.String())
+	assertGolden(t, "list.stderr.txt", errOut.String())
+}
+
 func TestListFollowsEveryCursorThroughShortPagesAndUnionsNotices(t *testing.T) {
 	s := &stub{pages: map[string]string{
 		"":   page(measuredFlake, `"c2"`, `["approximate_ranking"]`),
@@ -214,6 +227,27 @@ func TestListCapsAutoPaginationByFlakeCountSoShortPagesStillReachTheAdvertisedTo
 	}
 	if next == nil || *next != "more" || !slices.Contains(notices, "pagination_stopped_early") {
 		t.Errorf("next_cursor %v notices %v, want the cursor kept and pagination_stopped_early", next, notices)
+	}
+}
+
+func TestListTextExplainsAnEarlyStopAndKeepsTheContinuation(t *testing.T) {
+	row := `{"id":"x","status":"flaking","test":{"name":"t"},"suite":{"name":"s"},"last_seen_at":"2026-11-12T16:30:00Z"}`
+	body := `{"flakes":[` + strings.TrimSuffix(strings.Repeat(row+",", 11), ",") + `],"next_cursor":"more","notices":[]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	var errOut bytes.Buffer
+	env := &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &bytes.Buffer{}, Stderr: &errOut}
+
+	if err := List(env, ListOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Notice: stopped early after 20009 flakes; run the command below to continue\nMore results: sel flakes list --org 'acme' --cursor 'more'\n"
+	if !strings.HasSuffix(errOut.String(), want) {
+		t.Errorf("stderr %q, want suffix %q", errOut, want)
 	}
 }
 
