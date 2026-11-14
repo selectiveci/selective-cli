@@ -255,7 +255,6 @@ var commandsWithoutExitCodes = map[string]bool{
 	"suites configure": true,
 	"suites create":    true,
 	"suites key":       true,
-	"tail":             true,
 	"version":          true,
 }
 

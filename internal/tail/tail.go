@@ -3,6 +3,7 @@ package tail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,101 +12,68 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/selectiveci/selective-cli/internal/config"
-	"github.com/selectiveci/selective-cli/internal/credentials"
+	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
 	"nhooyr.io/websocket"
 )
 
-type BuildLookup struct {
-	BuildID    string `json:"build_id"`
-	Status     string `json:"status"`
-	RunCount   int    `json:"run_count"`
-	SuiteCount int    `json:"suite_count"`
+type Options struct {
+	RunID  string
+	Commit string
+	Format string
 }
 
-func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
-	u := fmt.Sprintf("%s/api/v1/builds/lookup?repo=%s&sha=%s", baseURL, url.QueryEscape(repo), url.QueryEscape(sha))
-	req, err := http.NewRequest("GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("network error: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return nil, nil // no build found
-	}
-	if resp.StatusCode == 401 {
-		return nil, fmt.Errorf("authentication failed — run: sel auth")
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+func Run(client *api.Client, opts Options) (int, error) {
+	if opts.Format == "" {
+		opts.Format = format.DefaultFormat()
 	}
 
-	var build BuildLookup
-	if err := json.NewDecoder(resp.Body).Decode(&build); err != nil {
-		return nil, fmt.Errorf("unexpected response: %w", err)
+	buildID := opts.RunID
+	if buildID == "" {
+		repo, sha, err := detect(opts.Commit)
+		if err != nil {
+			return refuse(err)
+		}
+		buildID, err = findBuild(client, repo, sha)
+		if err != nil {
+			return refuse(err)
+		}
 	}
-	return &build, nil
+
+	return stream(client.Host, client.Token, buildID, opts.Format)
 }
 
-// Run executes `sel tail` with the given options.
-// Returns an exit code: 0=all pass, 1=failures, 2=only flaky, 3=no build, 4=auth/network error.
-func Run(runID, commitSHA, fmtFlag, hostname string) (int, error) {
-	cfg, err := config.Load()
+func refuse(err error) (int, error) {
+	var coded contract.Coded
+	if errors.As(err, &coded) {
+		return coded.ExitCode(), err
+	}
+	return contract.ExitInternal, err
+}
+
+func detect(commit string) (repo, sha string, err error) {
+	ctx, err := gitctx.Detect()
 	if err != nil {
-		return 4, fmt.Errorf("could not load config: %w", err)
+		return "", "", contract.Errorf(contract.UsageError, "git detection failed: %v; run in a git repo or pass --run-id", err)
 	}
-	host, err := cfg.ResolveHost(hostname)
+	if commit == "" {
+		commit = ctx.Commit
+	}
+	return ctx.Repo, commit, nil
+}
+
+func findBuild(client *api.Client, repo, sha string) (string, error) {
+	build, err := client.LookupBuild(repo, sha)
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+		return "", contract.Errorf(contract.NoBuild, "no build for repo %q commit %s; push your branch and wait for CI to start, then re-run sel tail", repo, shortSHA(sha))
+	}
 	if err != nil {
-		return 4, err
+		return "", err
 	}
-	cred, err := credentials.Lookup(cfg, host)
-	if err != nil {
-		return 4, fmt.Errorf("not logged in to %s — run: sel auth login", host)
-	}
-
-	var repo string
-
-	if runID == "" {
-		ctx, err := gitctx.Detect()
-		if err != nil {
-			return 4, fmt.Errorf("git detection failed: %w\n\nRun in a git repo or pass --run-id", err)
-		}
-		repo = ctx.Repo
-		if commitSHA == "" {
-			commitSHA = ctx.Commit
-		}
-	}
-
-	var buildID string
-	if runID != "" {
-		buildID = runID
-	} else {
-		build, err := LookupBuild(host, cred.Token, repo, commitSHA)
-		if err != nil {
-			return 4, err
-		}
-		if build == nil {
-			fmt.Fprintf(os.Stderr, "No build found for repo %q commit %s\n", repo, shortSHA(commitSHA))
-			fmt.Fprintf(os.Stderr, "Push your branch and wait for CI to start, then re-run sel tail.\n")
-			return 3, nil
-		}
-		buildID = build.BuildID
-	}
-
-	if fmtFlag == "" {
-		fmtFlag = format.DefaultFormat()
-	}
-
-	return stream(host, cred.Token, buildID, fmtFlag)
+	return build.BuildID, nil
 }
 
 var pingInterval = 30 * time.Second
@@ -150,7 +118,7 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
-		return 4, fmt.Errorf("could not connect to Selective: %w", err)
+		return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "could not connect to Selective: %v", err)
 	}
 	defer func() { _ = conn.CloseNow() }()
 
@@ -187,9 +155,9 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 
 	if summary == nil {
 		if timedOut.Load() {
-			return 4, fmt.Errorf("no response from Selective to a ping within %s; lost the connection before build %s finished", interval, buildID)
+			return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "no response from Selective to a ping within %s; lost the connection before build %s finished", interval, buildID)
 		}
-		return 4, fmt.Errorf("lost the connection to Selective before build %s finished", buildID)
+		return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "lost the connection to Selective before build %s finished", buildID)
 	}
 	return summaryExitCode(summary, sawFailure), nil
 }
