@@ -101,3 +101,14 @@ func TestASecretInAStepsTextNeverReachesTheReportOrTheError(t *testing.T) {
 		t.Errorf("a = %+v, err %v", a, report.Err())
 	}
 }
+
+func TestARunWhoseDeadlineHasAlreadyPassedFailsWithTimeoutInsteadOfPassing(t *testing.T) {
+	report := runSteps(t, 0, stub("a", "", OK, ""), stub("b", "a", OK, ""))
+
+	if got, want := shape(report), "a=fail b=skip"+laterTrailer; got != want {
+		t.Errorf("checks = %s, want %s", got, want)
+	}
+	if a := check(t, report, "a"); a.Code != contract.Timeout || report.Status != "fail" || exitOf(report) != 8 {
+		t.Errorf("a = %+v, status %q, exit %d", a, report.Status, exitOf(report))
+	}
+}

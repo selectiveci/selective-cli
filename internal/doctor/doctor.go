@@ -66,6 +66,7 @@ func Run(opts Options) *Report {
 
 	s := &state{opts: opts}
 	blockedBy := map[string]string{}
+	expired := false
 	report := &Report{Status: "pass"}
 	for _, st := range steps {
 		var c Check
@@ -73,12 +74,16 @@ func Run(opts Options) *Report {
 		case by != "":
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because " + by + " failed"}
 			blockedBy[st.name] = by
-		case ctx.Err() != nil:
+		case expired:
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because the run's timeout expired"}
+		case ctx.Err() != nil:
+			c = timedOut(st.name, opts.Timeout)
+			blockedBy[st.name], expired = st.name, true
 		default:
 			c = runWithin(ctx, s, st)
 			if c.Status == Fail {
 				blockedBy[st.name] = st.name
+				expired = c.Code == contract.Timeout
 			}
 		}
 		report.Checks = append(report.Checks, c)
@@ -100,8 +105,12 @@ func runWithin(ctx context.Context, s *state, st step) Check {
 	case c := <-done:
 		return c
 	case <-ctx.Done():
-		return fail(st.name, contract.Timeout, fmt.Sprintf("did not finish within %s", s.opts.Timeout), "")
+		return timedOut(st.name, s.opts.Timeout)
 	}
+}
+
+func timedOut(name string, limit time.Duration) Check {
+	return fail(name, contract.Timeout, fmt.Sprintf("did not finish within %s", limit), "")
 }
 
 func (c Check) redact(secret string) Check {
