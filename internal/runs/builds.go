@@ -2,6 +2,7 @@ package runs
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/format"
@@ -41,6 +42,7 @@ func fetchBuilds(client *api.Client, org string, opts BuildsOptions) (*api.Build
 		query.Limit = pageSize
 	}
 	var last *api.BuildsPage
+	var notices []string
 	builds, next, stoppedEarly, err := walk(opts.Cursor, opts.All, func(cursor string) ([]json.RawMessage, *string, error) {
 		query.Cursor = cursor
 		page, err := client.Builds(org, query)
@@ -48,6 +50,11 @@ func fetchBuilds(client *api.Client, org string, opts BuildsOptions) (*api.Build
 			return nil, nil, err
 		}
 		last = page
+		for _, notice := range page.Notices {
+			if !slices.Contains(notices, notice) {
+				notices = append(notices, notice)
+			}
+		}
 		return page.Builds, page.NextCursor, nil
 	})
 	if err != nil {
@@ -58,6 +65,7 @@ func fetchBuilds(client *api.Client, org string, opts BuildsOptions) (*api.Build
 		last.Builds = []json.RawMessage{}
 	}
 	last.NextCursor = next
+	last.Notices = notices
 	if stoppedEarly {
 		last.Notices = append(last.Notices, paginationStoppedEarly)
 	}
