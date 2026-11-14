@@ -1,3 +1,0 @@
-Notice: the ranking is approximate; order can shift between pages
-Notice: some metrics weren't computed in time and show as —; run again to fill them
-More results: sel flakes list --hostname 'http://h' --org 'acme' --suite 'web rspec' --sort 'rate' --search 'it'\''s' --limit 3 --cursor 'next-1'

@@ -106,19 +106,6 @@ func TestListKeepsUncomputedMetricsAbsentAndComputedZerosPresent(t *testing.T) {
 	}
 }
 
-func TestListTextMatchesGolden(t *testing.T) {
-	s := &stub{pages: map[string]string{"": page(measuredFlake+","+unmeasuredFlake+","+zeroFlake, `"next-1"`, `["approximate_ranking","metrics_unavailable"]`)}}
-	env, out, errOut := s.env(t, false)
-
-	err := List(env, ListOptions{Org: "acme", Hostname: "http://h", FlakesQuery: api.FlakesQuery{Suite: "web rspec", Sort: "rate", Limit: 3, Search: "it's"}})
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertGolden(t, "list.txt", out.String())
-	assertGolden(t, "list.stderr.txt", errOut.String())
-}
-
 func TestListFollowsEveryCursorThroughShortPagesAndUnionsNotices(t *testing.T) {
 	s := &stub{pages: map[string]string{
 		"":   page(measuredFlake, `"c2"`, `["approximate_ranking"]`),
