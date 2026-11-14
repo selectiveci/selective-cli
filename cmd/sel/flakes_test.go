@@ -38,6 +38,25 @@ func TestFlakesListPrintsTheDocumentWithoutInventingMetrics(t *testing.T) {
 	}
 }
 
+func TestFlakesShowAndPromptPrintTheirDocumentsWhenPiped(t *testing.T) {
+	show := flakesServer(t, 200, `{"flake":`+flakeRows+`}`)
+	prompt := flakesServer(t, 200, `{"prompt":{"flake_id":"`+flakeID+`","text":"Fix it\n"}}`)
+
+	shown := runBinary(t, t.TempDir(), show.URL, "flakes", "show", flakeID)
+	prompted := runBinary(t, t.TempDir(), prompt.URL, "flakes", "prompt", flakeID)
+	raw := runBinary(t, t.TempDir(), prompt.URL, "flakes", "prompt", flakeID, "--text")
+
+	if shown.exit != 0 || shown.stdout != `{"v":1,"flake":`+flakeRows+`}`+"\n" {
+		t.Errorf("show: exit %d stdout %q", shown.exit, shown.stdout)
+	}
+	if prompted.exit != 0 || prompted.stdout != `{"v":1,"prompt":{"flake_id":"`+flakeID+`","text":"Fix it\n"}}`+"\n" {
+		t.Errorf("prompt: exit %d stdout %q", prompted.exit, prompted.stdout)
+	}
+	if raw.exit != 0 || raw.stdout != "Fix it\n" {
+		t.Errorf("prompt --text: exit %d stdout %q", raw.exit, raw.stdout)
+	}
+}
+
 func TestFlakesRefusalsExitByCode(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -47,10 +66,13 @@ func TestFlakesRefusalsExitByCode(t *testing.T) {
 		exit   int
 		code   string
 	}{
+		{"unknown flake", 404, `{"error":"not_found","message":"Flake not found."}`, []string{"flakes", "show", flakeID}, 3, "not_found"},
+		{"unknown flake prompt", 404, `{"error":"not_found","message":"Flake not found."}`, []string{"flakes", "prompt", flakeID}, 3, "not_found"},
 		{"other org", 404, `{"error":"organization_not_found","message":"No such organization."}`, []string{"flakes", "list", "--org", "other"}, 3, "organization_not_found"},
 		{"bad enum", 422, `{"error":"invalid_request","message":"sort must be one of: impactful, rate, recent, count."}`, []string{"flakes", "list", "--org", "acme", "--sort", "bogus"}, 5, "invalid_request"},
 		{"bad token", 401, `{"error":"unauthorized","message":"Invalid token."}`, []string{"flakes", "list", "--org", "acme"}, 4, "unauthorized"},
-		{"insufficient scope", 403, `{"error":"insufficient_scope","message":"This token can't read."}`, []string{"flakes", "list", "--org", "acme"}, 6, "insufficient_scope"},
+		{"read-only scope missing", 403, `{"error":"insufficient_scope","message":"This token can't read."}`, []string{"flakes", "show", flakeID}, 6, "insufficient_scope"},
+		{"missing id", 200, `{}`, []string{"flakes", "show"}, 5, "usage_error"},
 		{"zero limit", 200, `{}`, []string{"flakes", "list", "--org", "acme", "--limit=0"}, 5, "usage_error"},
 		{"negative limit", 200, `{}`, []string{"flakes", "list", "--org", "acme", "--limit=-1"}, 5, "usage_error"},
 	}
@@ -65,13 +87,32 @@ func TestFlakesRefusalsExitByCode(t *testing.T) {
 	}
 }
 
+func TestFlakesPromptTextWithJSONIsAUsageErrorAndFetchesNothing(t *testing.T) {
+	requested := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "flakes", "prompt", flakeID, "--text", "--json")
+
+	assertRefusal(t, res, 5, "usage_error")
+	if requested {
+		t.Error("the server was called before the conflicting flags were refused")
+	}
+}
+
 func TestFlakesCommandsAreInTheSchemaWithTheirExitCodes(t *testing.T) {
 	code, all, _ := execute("help", "--json")
 	if code != 0 {
 		t.Fatalf("help --json exit %d", code)
 	}
-	_, stdout, _ := execute("help", "flakes", "list", "--json")
-	if !strings.Contains(all, `"path":"flakes list"`) || !strings.Contains(stdout, `"exit_codes":[0,3,4,5,6]`) {
-		t.Errorf("flakes list missing from help --json, or exit codes wrong: %s", stdout)
+	for _, name := range []string{"list", "show", "prompt"} {
+		_, stdout, _ := execute("help", "flakes", name, "--json")
+
+		if !strings.Contains(all, `"path":"flakes `+name+`"`) || !strings.Contains(stdout, `"exit_codes":[0,3,4,5,6]`) {
+			t.Errorf("%s: missing from help --json, or exit codes wrong: %s", name, stdout)
+		}
 	}
 }

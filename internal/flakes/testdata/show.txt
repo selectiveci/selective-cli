@@ -1,0 +1,15 @@
+checkout flow
+  spec/checkout_spec.rb
+
+ID:           11111111-1111-4111-8111-111111111111
+Status:       flaking
+Suite:        web-rspec (acme)
+Flake rate:   12.5%
+Retry cost:   4.5 min
+Impact:       8.3
+Occurrences:  7 (first seen 2026-11-01 08:00, last seen 2026-11-12 16:30 UTC)
+
+Recent failures:
+  2026-11-12 16:30  main  abcdef0  build b-77  ada
+    expected 200, got 500
+  2026-11-11 10:00  fix/cart  0123456  build b-70  —

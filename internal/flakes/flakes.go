@@ -3,6 +3,7 @@ package flakes
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,14 +36,25 @@ type ListOptions struct {
 }
 
 type flake struct {
-	ID           string
-	Status       string
-	Test         struct{ Name string }
-	Suite        struct{ Name string }
-	LastSeenAt   string   `json:"last_seen_at"`
-	FlakeRate    *float64 `json:"flake_rate"`
-	RetryMinutes *float64 `json:"retry_minutes"`
-	ImpactScore  *float64 `json:"impact_score"`
+	ID              string
+	Status          string
+	Test            struct{ Name, Path string }
+	Suite           struct{ Name string }
+	FirstSeenAt     string   `json:"first_seen_at"`
+	LastSeenAt      string   `json:"last_seen_at"`
+	FlakeRate       *float64 `json:"flake_rate"`
+	RetryMinutes    *float64 `json:"retry_minutes"`
+	ImpactScore     *float64 `json:"impact_score"`
+	OccurrenceCount int      `json:"occurrence_count"`
+	OrgSlug         string   `json:"org_slug"`
+	Occurrences     []struct {
+		DetectedAt     string  `json:"detected_at"`
+		Branch         string  `json:"branch"`
+		CommitSHA      string  `json:"commit_sha"`
+		BuildID        string  `json:"build_id"`
+		Actor          *string `json:"actor"`
+		FailureMessage *string `json:"failure_message"`
+	}
 }
 
 func List(env *setup.Env, opts ListOptions) error {
@@ -54,6 +66,38 @@ func List(env *setup.Env, opts ListOptions) error {
 		return format.Document(env.Stdout, page)
 	}
 	return renderList(env, opts, page)
+}
+
+func Show(env *setup.Env, id string, history *int) error {
+	raw, err := env.Client.Flake(id, history)
+	if err != nil {
+		return err
+	}
+	if env.JSON {
+		return format.Document(env.Stdout, struct {
+			Flake json.RawMessage `json:"flake"`
+		}{raw})
+	}
+	var f flake
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return unexpected(err)
+	}
+	renderShow(env.Stdout, f)
+	return nil
+}
+
+func Prompt(env *setup.Env, id string, text bool) error {
+	prompt, err := env.Client.FlakePrompt(id)
+	if err != nil {
+		return err
+	}
+	if text || !env.JSON {
+		_, err := io.WriteString(env.Stdout, prompt.Text)
+		return err
+	}
+	return format.Document(env.Stdout, struct {
+		Prompt *api.FlakePrompt `json:"prompt"`
+	}{prompt})
 }
 
 func fetchList(client *api.Client, opts ListOptions) (*api.FlakesPage, error) {
@@ -128,6 +172,25 @@ func renderTable(env *setup.Env, rows []json.RawMessage) error {
 	return w.Flush()
 }
 
+func renderShow(w io.Writer, f flake) {
+	fmt.Fprintf(w, "%s\n  %s\n\n", f.Test.Name, f.Test.Path)
+	fmt.Fprintf(w, "ID:           %s\nStatus:       %s\nSuite:        %s (%s)\n", f.ID, f.Status, f.Suite.Name, f.OrgSlug)
+	fmt.Fprintf(w, "Flake rate:   %s\nRetry cost:   %s\nImpact:       %s\n",
+		measure(f.FlakeRate, 100, "%.1f%%"), measure(f.RetryMinutes, 1, "%.1f min"), measure(f.ImpactScore, 1, "%.1f"))
+	fmt.Fprintf(w, "Occurrences:  %d (first seen %s, last seen %s UTC)\n", f.OccurrenceCount, utc(f.FirstSeenAt), utc(f.LastSeenAt))
+	if len(f.Occurrences) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nRecent failures:\n")
+	for _, o := range f.Occurrences {
+		fmt.Fprintf(w, "  %s  %s  %.7s  build %s  %s\n", utc(o.DetectedAt), o.Branch, o.CommitSHA, o.BuildID, orUnknown(o.Actor))
+		if o.FailureMessage != nil {
+			line, _, _ := strings.Cut(strings.TrimSpace(*o.FailureMessage), "\n")
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+	}
+}
+
 func continueCommand(opts ListOptions, cursor string) string {
 	parts := []string{"sel flakes list"}
 	for _, flag := range []struct{ name, value string }{
@@ -158,6 +221,13 @@ func measure(v *float64, scale float64, layout string) string {
 		return unknown
 	}
 	return fmt.Sprintf(layout, *v*scale)
+}
+
+func orUnknown(s *string) string {
+	if s == nil {
+		return unknown
+	}
+	return *s
 }
 
 func utc(iso string) string {
