@@ -232,7 +232,7 @@ func (e *Env) Configure(org, suite string, settings api.SuiteSettings) error {
 			Previous api.SuiteSettings `json:"previous"`
 			Result   string            `json:"result"`
 			DryRun   bool              `json:"dry_run"`
-		}{updated, previous, configureResult(settings, previous), false})
+		}{updated, previous, configureResult(settings, previous, updated), false})
 	}
 	if settings.SelectionMode != "" {
 		if previous.SelectionMode == updated.SelectionMode {
@@ -397,10 +397,10 @@ func dash(s string) string {
 	return s
 }
 
-func configureResult(requested, previous api.SuiteSettings) string {
-	modeSame := requested.SelectionMode == "" || requested.SelectionMode == previous.SelectionMode
+func configureResult(requested, previous api.SuiteSettings, updated *api.Suite) string {
+	modeSame := requested.SelectionMode == "" || previous.SelectionMode == updated.SelectionMode
 	branchSame := requested.SelectionOnDefaultBranch == nil ||
-		(previous.SelectionOnDefaultBranch != nil && *requested.SelectionOnDefaultBranch == *previous.SelectionOnDefaultBranch)
+		defaultBranch(previous.SelectionOnDefaultBranch) == defaultBranch(updated.SelectionOnDefaultBranch)
 	if modeSame && branchSame {
 		return "unchanged"
 	}

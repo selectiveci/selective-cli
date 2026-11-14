@@ -34,7 +34,7 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 		case r.URL.Path == "/api/v1/orgs":
 			_, _ = w.Write([]byte(orgs))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "GET":
-			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null},{"id":"s-2","name":"Bare","type":"rspec","repo":null,"last_run_at":null}]}`))
+			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null},{"id":"s-2","name":"Bare","type":"rspec","repo":null,"last_run_at":null},{"id":"s-4","name":"Ignores","type":"rspec","repo":"acme/web","last_run_at":null}]}`))
 		case r.URL.Path == "/api/v1/orgs/acme/repos":
 			_, _ = w.Write([]byte(`{"github_account":"acme","install_url":"http://x/acme/github/install","repos":[{"full_name":"acme/web","private":true}]}`))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "POST":
@@ -52,6 +52,8 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 			mode, _ := body["selection_mode"].(string)
 			selects, _ := body["selection_on_default_branch"].(bool)
 			_, _ = fmt.Fprintf(w, `{"suite":{"id":"s-1","name":"RSpec","selection_mode":%q,"selection_on_default_branch":%t},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`, mode, selects)
+		case r.URL.Path == "/api/v1/orgs/acme/suites/s-4" && r.Method == "PATCH":
+			_, _ = w.Write([]byte(`{"suite":{"id":"s-4","name":"Ignores","selection_mode":"off","selection_on_default_branch":false},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/orgs/acme/suites/s-") && strings.HasSuffix(r.URL.Path, "/api_key"):
 			_, _ = w.Write([]byte(`{"api_key":"` + secretKey + `"}`))
 		default:
@@ -452,6 +454,38 @@ func TestConfigureJSONReportsTheContractResult(t *testing.T) {
 			}
 			if doc.Result != tc.want || doc.V != 1 || doc.Suite["name"] != "RSpec" || doc.Previous["selection_mode"] != "off" || doc.DryRun == nil || *doc.DryRun {
 				t.Errorf("stdout = %q, want result %q and dry_run false", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigureReportsWhatTheServerReturnedNotWhatWasAsked(t *testing.T) {
+	yes := true
+	cases := []struct {
+		name     string
+		settings api.SuiteSettings
+		wantText string
+	}{
+		{"mode ignored", api.SuiteSettings{SelectionMode: "shadow"}, `Selection for "Ignores" is already off`},
+		{"default branch ignored", api.SuiteSettings{SelectionOnDefaultBranch: &yes}, `Default-branch runs for "Ignores" already: full`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+			e.JSON = true
+			if err := e.Configure("acme", "s-4", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); !strings.Contains(got, `"result":"unchanged"`) {
+				t.Errorf("json stdout = %q, want result unchanged", got)
+			}
+
+			e, out = env(t, oneOrg)
+			if err := e.Configure("acme", "s-4", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); !strings.Contains(got, tc.wantText) {
+				t.Errorf("text stdout = %q, want %q", got, tc.wantText)
 			}
 		})
 	}
