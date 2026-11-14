@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -308,5 +309,18 @@ func TestPollRunsTheCheckAtTheLimitWithAShortGraceRatherThanSkippingIt(t *testin
 
 	if err != nil || len(budgets) != 2 || budgets[1] != FinalCheckGrace {
 		t.Errorf("err=%v budgets=%v, want nil and a final check given the %s grace", err, budgets, FinalCheckGrace)
+	}
+}
+
+func TestPollPassesThroughADeadlineErrorThatIsNotTheBudgets(t *testing.T) {
+	stalled := fmt.Errorf("lookup: %w", context.DeadlineExceeded)
+
+	err := Poll(context.Background(), Options{For: "build", Limit: time.Hour}, func(context.Context) (bool, time.Duration, error) {
+		return false, 0, stalled
+	})
+
+	var expired *ExpiredError
+	if errors.As(err, &expired) || !errors.Is(err, stalled) {
+		t.Errorf("err=%v, want the check's own deadline error, not *ExpiredError", err)
 	}
 }
