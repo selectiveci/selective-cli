@@ -87,6 +87,22 @@ func TestFlakesRefusalsExitByCode(t *testing.T) {
 	}
 }
 
+func TestFlakesPromptTextWithJSONIsAUsageErrorAndFetchesNothing(t *testing.T) {
+	requested := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "flakes", "prompt", flakeID, "--text", "--json")
+
+	assertRefusal(t, res, 5, "usage_error")
+	if requested {
+		t.Error("the server was called before the conflicting flags were refused")
+	}
+}
+
 func TestFlakesCommandsAreInTheSchemaWithTheirExitCodes(t *testing.T) {
 	code, all, _ := execute("help", "--json")
 	if code != 0 {

@@ -107,12 +107,15 @@ func flakesPromptCmd() *cobra.Command {
 		Short: "Print the prompt that asks an agent to fix a flake",
 		Long: `Print the prompt the dashboard's copy button gives, exactly as the server
 wrote it. On a terminal that is the raw text; piped, or with --json, it is
-a JSON document. --text always prints the raw text, with nothing added, so
-it pipes straight into an agent.`,
+a JSON document. --text prints the raw text, with nothing added, even
+when piped, so it pipes straight into an agent; it can't be combined with --json.`,
 		Example:     "  sel flakes prompt 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f --text | my-agent",
 		Args:        cobra.ExactArgs(1),
 		Annotations: flakeReadAnnotations,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if text && f.json {
+				return contract.Errorf(contract.UsageError, "use --text or --json, not both")
+			}
 			env, _, err := f.env(false)
 			if err != nil {
 				return err
