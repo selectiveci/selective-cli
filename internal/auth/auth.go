@@ -191,6 +191,13 @@ type StatusInfo struct {
 	Token       StatusToken `json:"token"`
 }
 
+func loginCommand(host string) string {
+	if host == config.DefaultHost {
+		return "sel auth login"
+	}
+	return "sel auth login --hostname " + host
+}
+
 func tokenSource(s credentials.Source) string {
 	switch s {
 	case credentials.SourceEnv:
@@ -215,13 +222,9 @@ func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
 		if jsonMode {
-			return contract.Errorf(contract.Unauthorized, "not logged in to %s; run: sel auth login", host)
+			return contract.Errorf(contract.Unauthorized, "not logged in to %s; run: %s", host, loginCommand(host))
 		}
-		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: sel auth login", host)
-		if host != config.DefaultHost {
-			fmt.Fprintf(stdout, " --hostname %s", host)
-		}
-		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: %s\n", host, loginCommand(host))
 		return errSilent
 	}
 
@@ -229,7 +232,7 @@ func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
 		if jsonMode {
-			return contract.Errorf(contract.Unauthorized, "the stored token was rejected by %s (revoked?); run: sel auth login", host)
+			return contract.Errorf(contract.Unauthorized, "the stored token was rejected by %s (revoked?); run: %s", host, loginCommand(host))
 		}
 		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: sel auth login\n", host)
 		return errSilent
