@@ -59,7 +59,8 @@ token is stored in your system keychain and appears on your API tokens
 page, where you can revoke it.
 
 --setup also lets the CLI create suites and read their API keys, for
-setting a repository up. --json writes events to stdout as they happen
+setting a repository up. --write also lets it make changes: revoke tokens,
+and the write commands as they ship. --json writes events to stdout as they happen
 (first the URL to open, then the login), for an agent to read while the
 command waits.
 
@@ -68,6 +69,7 @@ For scripts, pass a token on stdin instead:
   sel auth login --with-token < token.txt`,
 		Example: `  sel auth login
   sel auth login --setup --json
+  sel auth login --write
   sel auth login --hostname staging.selective.ci
   sel auth login --hostname localhost:4000`,
 		Args: cobra.NoArgs,
@@ -83,6 +85,7 @@ For scripts, pass a token on stdin instead:
 	cmd.Flags().BoolVar(&opts.WithToken, "with-token", false, "Read an API token from stdin instead of using the browser")
 	cmd.Flags().BoolVar(&opts.NoBrowser, "no-browser", false, "Print the URL instead of opening a browser")
 	cmd.Flags().BoolVar(&opts.Setup, "setup", false, "Also allow creating suites and reading their API keys")
+	cmd.Flags().BoolVar(&opts.Write, "write", false, "Also allow changes (revoke tokens, and the write commands as they ship)")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Write login events to stdout as JSON lines")
 	return cmd
 }
