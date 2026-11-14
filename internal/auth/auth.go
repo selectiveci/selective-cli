@@ -26,6 +26,7 @@ type LoginOptions struct {
 	WithToken bool // read a token from stdin instead of the browser flow
 	NoBrowser bool
 	Setup     bool // also ask for the setup scope: create suites, read their keys
+	Write     bool
 	Signup    bool // a new user: the page offers signup first; implies Setup
 	JSON      bool // NDJSON events on Stdout, for agents
 	Version   string
@@ -35,10 +36,14 @@ type LoginOptions struct {
 }
 
 func (o LoginOptions) scope() string {
-	if o.Setup || o.Signup {
-		return "setup"
+	var scopes []string
+	if o.Write {
+		scopes = append(scopes, "write")
 	}
-	return ""
+	if o.Setup || o.Signup {
+		scopes = append(scopes, "setup")
+	}
+	return strings.Join(scopes, " ")
 }
 
 func (o LoginOptions) emit(event map[string]any) {
