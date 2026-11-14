@@ -66,6 +66,16 @@ func (fw *Writer) writePretty(raw []byte) error {
 		commit, _ := ev["commit"].(string)
 		fmt.Fprintf(fw.w, "\n  Build %s  commit %s\n\n", buildID, shortSHA(commit))
 
+	case "selection":
+		if ids, listed := ev["ids"].([]any); listed {
+			selected, _ := ev["selected"].(float64)
+			total, _ := ev["total"].(float64)
+			fmt.Fprintf(fw.w, "  %d of %d tests would run\n", int(selected), int(total))
+			for _, id := range ids {
+				fmt.Fprintf(fw.w, "    %v\n", id)
+			}
+		}
+
 	case "test_pass":
 		node := fw.nodeStyle(ev["node"])
 		file, _ := ev["file"].(string)
