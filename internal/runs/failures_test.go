@@ -162,3 +162,50 @@ func TestFailuresWithNoneWritesAnEmptyArrayInJSONAndAHintInText(t *testing.T) {
 		t.Errorf("stdout %q, stderr %q", textOut, textErr)
 	}
 }
+
+func TestFailuresTextKeepsTheContinuationWhenSuiteFilteringEmptiesThePage(t *testing.T) {
+	s := &stub{pages: map[string]string{"": page(failedRow, `"next-1"`)}}
+	jsonEnv, jsonOut, _ := s.env(t, true)
+	textEnv, textOut, textErr := s.env(t, false)
+	opts := FailuresOptions{Build: "b-1", Suite: "api-minitest", Limit: 1}
+
+	if err := Failures(jsonEnv, opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := Failures(textEnv, opts); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(jsonOut.String(), `"failures":[]`) || !strings.HasSuffix(jsonOut.String(), `"next_cursor":"next-1"}`+"\n") {
+		t.Errorf("json = %s", jsonOut)
+	}
+	want := "More results: sel failures 'b-1' --suite 'api-minitest' --limit 1 --cursor 'next-1'\n"
+	if textOut.Len() != 0 || !strings.HasSuffix(textErr.String(), want) {
+		t.Errorf("stdout %q, stderr %q, want stderr ending %q", textOut, textErr, want)
+	}
+}
+
+func TestFailuresContinuationKeepsHostnameAndOrgAndShellQuotesEveryValue(t *testing.T) {
+	cases := map[string]string{
+		"$VERSION":    `'$VERSION'`,
+		"$(id)":       `'$(id)'`,
+		"it's `x`":    `'it'\''s ` + "`x`" + `'`,
+		"two  words;": `'two  words;'`,
+	}
+	for suite, quoted := range cases {
+		t.Run(suite, func(t *testing.T) {
+			s := &stub{pages: map[string]string{"": page(failedRow, `"c$2"`)}}
+			env, _, errOut := s.env(t, false)
+
+			err := Failures(env, FailuresOptions{Build: "b-1", Hostname: "http://h:4000", Org: "ac me", Suite: suite, Limit: 1})
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "More results: sel failures 'b-1' --hostname 'http://h:4000' --org 'ac me' --suite " + quoted + " --limit 1 --cursor 'c$2'\n"
+			if !strings.HasSuffix(errOut.String(), want) {
+				t.Errorf("stderr %q, want suffix %q", errOut, want)
+			}
+		})
+	}
+}

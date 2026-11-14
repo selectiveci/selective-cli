@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/runs"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/spf13/cobra"
@@ -38,7 +39,11 @@ A build ID that exists in several of your organizations needs --org.`,
 			"exit_codes": "0,3,4,5,6",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("limit") && opts.Limit < 1 {
+				return contract.Errorf(contract.UsageError, "--limit must be at least 1")
+			}
 			opts.Build = args[0]
+			opts.Hostname = hostname
 			if opts.Org == "" {
 				opts.Org = os.Getenv("SELECTIVE_ORG")
 			}

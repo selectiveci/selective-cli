@@ -19,12 +19,13 @@ const (
 )
 
 type FailuresOptions struct {
-	Build   string
-	Org     string
-	Suite   string
-	Outcome string
-	Limit   int
-	Cursor  string
+	Build    string
+	Hostname string
+	Org      string
+	Suite    string
+	Outcome  string
+	Limit    int
+	Cursor   string
 }
 
 func Failures(env *setup.Env, opts FailuresOptions) error {
@@ -89,8 +90,15 @@ func renderFailures(env *setup.Env, opts FailuresOptions, page *api.FailuresPage
 			fmt.Fprintf(env.Stderr, "The build is archived: %d failed and %d flaky results were counted, but their details were deleted. Restore the run to see them.\n",
 				page.ArchivedFailedCount, page.ArchivedFlakyFailedCount)
 		}
-		return
+	} else {
+		renderTable(env, page)
 	}
+	if page.NextCursor != nil {
+		fmt.Fprintf(env.Stderr, "More results: %s\n", continueCommand(opts, page))
+	}
+}
+
+func renderTable(env *setup.Env, page *api.FailuresPage) {
 	w := tabwriter.NewWriter(env.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "OUTCOME\tSUITE\tLOCATION\tATTEMPTS\tERROR")
 	hasProvisional := false
@@ -106,26 +114,28 @@ func renderFailures(env *setup.Env, opts FailuresOptions, page *api.FailuresPage
 	if hasProvisional {
 		fmt.Fprintf(env.Stderr, "%s the build is still running or a rerun is pending; this may yet pass.\n", provisionalMarks)
 	}
-	if page.NextCursor != nil {
-		fmt.Fprintf(env.Stderr, "More results: %s\n", continueCommand(opts, page))
-	}
 }
 
 func continueCommand(opts FailuresOptions, page *api.FailuresPage) string {
-	parts := []string{"sel failures", page.BuildID}
-	if opts.Org != "" {
-		parts = append(parts, "--org", opts.Org)
-	}
-	if opts.Outcome != "" {
-		parts = append(parts, "--outcome", opts.Outcome)
-	}
-	if opts.Suite != "" {
-		parts = append(parts, "--suite", fmt.Sprintf("%q", opts.Suite))
+	parts := []string{"sel failures", shellQuote(page.BuildID)}
+	for _, flag := range []struct{ name, value string }{
+		{"--hostname", opts.Hostname},
+		{"--org", opts.Org},
+		{"--outcome", opts.Outcome},
+		{"--suite", opts.Suite},
+	} {
+		if flag.value != "" {
+			parts = append(parts, flag.name, shellQuote(flag.value))
+		}
 	}
 	if opts.Limit > 0 {
 		parts = append(parts, "--limit", strconv.Itoa(opts.Limit))
 	}
-	return strings.Join(append(parts, "--cursor", *page.NextCursor), " ")
+	return strings.Join(append(parts, "--cursor", shellQuote(*page.NextCursor)), " ")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func describeOutcome(outcome string) string {

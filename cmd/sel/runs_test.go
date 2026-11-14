@@ -68,3 +68,15 @@ func TestFailuresListsItsExitCodesInTheSchema(t *testing.T) {
 		t.Errorf("exit %d stdout %s", code, stdout)
 	}
 }
+
+func TestFailuresRejectsALimitBelowOne(t *testing.T) {
+	srv := failuresServer(t, 200, `{"build_id":"b-1","status":"completed","archived":false,"archived_failed_count":0,"archived_flaky_failed_count":0,"failures":[],"next_cursor":null}`)
+
+	for _, limit := range []string{"0", "-1"} {
+		t.Run(limit, func(t *testing.T) {
+			res := runBinary(t, t.TempDir(), srv.URL, "failures", "b-1", "--limit="+limit, "--json")
+
+			assertRefusal(t, res, 5, "usage_error")
+		})
+	}
+}
