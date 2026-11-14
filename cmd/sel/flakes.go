@@ -11,11 +11,15 @@ var flakeReadAnnotations = map[string]string{"exit_codes": "0,3,4,5,6"}
 func flakesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "flakes",
-		Short: "List flaky tests",
-		Long:  "Read the organization's flaky tests.",
-		Args:  cobra.NoArgs,
+		Short: "List flaky tests and read their details and AI prompts",
+		Long: `Read the organization's flaky tests.
+
+  sel flakes list    List flakes, ranked, with their flake rate and cost
+  sel flakes show    One flake's metrics and recent failures
+  sel flakes prompt  The prompt that asks an agent to fix a flake`,
+		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(flakesListCmd())
+	cmd.AddCommand(flakesListCmd(), flakesShowCmd(), flakesPromptCmd())
 	return cmd
 }
 
@@ -65,5 +69,59 @@ short pages. Metrics it did not compute in time are absent from a flake
 	cmd.Flags().StringVar(&opts.Search, "search", "", "Only tests whose name or path matches")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "Return one page of at most this many flakes (max 200)")
 	cmd.Flags().StringVar(&opts.Cursor, "cursor", "", "Continue from a next_cursor")
+	return cmd
+}
+
+func flakesShowCmd() *cobra.Command {
+	var f setupFlags
+	var history int
+	cmd := &cobra.Command{
+		Use:         "show FLAKE",
+		Short:       "Show one flake with its recent failures",
+		Example:     "  sel flakes show 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f --history 20",
+		Args:        cobra.ExactArgs(1),
+		Annotations: flakeReadAnnotations,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _, err := f.env(false)
+			if err != nil {
+				return err
+			}
+			env.Stdout, env.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			var recent *int
+			if cmd.Flags().Changed("history") {
+				recent = &history
+			}
+			return flakes.Show(env, args[0], recent)
+		},
+	}
+	f.bind(cmd, false)
+	cmd.Flags().IntVar(&history, "history", 0, "How many recent failures to include (server default 10, max 50)")
+	return cmd
+}
+
+func flakesPromptCmd() *cobra.Command {
+	var f setupFlags
+	var text bool
+	cmd := &cobra.Command{
+		Use:   "prompt FLAKE",
+		Short: "Print the prompt that asks an agent to fix a flake",
+		Long: `Print the prompt the dashboard's copy button gives, exactly as the server
+wrote it. On a terminal that is the raw text; piped, or with --json, it is
+a JSON document. --text always prints the raw text, with nothing added, so
+it pipes straight into an agent.`,
+		Example:     "  sel flakes prompt 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f --text | my-agent",
+		Args:        cobra.ExactArgs(1),
+		Annotations: flakeReadAnnotations,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, _, err := f.env(false)
+			if err != nil {
+				return err
+			}
+			env.Stdout, env.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			return flakes.Prompt(env, args[0], text)
+		},
+	}
+	f.bind(cmd, false)
+	cmd.Flags().BoolVar(&text, "text", false, "Print the raw text even when piped")
 	return cmd
 }
