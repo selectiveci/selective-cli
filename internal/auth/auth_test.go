@@ -274,6 +274,22 @@ func TestLoggedInEventNamesTheHostAndUserAndNeverCarriesTheToken(t *testing.T) {
 	}
 }
 
+func TestStatusAndLogoutWithAnUnreadableConfigAreUsageErrors(t *testing.T) {
+	setup(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("SELECTIVE_CONFIG_DIR"), "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]error{
+		"status": Status("", true, &bytes.Buffer{}),
+		"logout": Logout(LogoutOptions{Stderr: &bytes.Buffer{}}),
+	}
+	for name, err := range cases {
+		if got := codeOf(err); got != contract.UsageError {
+			t.Errorf("%s: code = %q, want %q (err: %v)", name, got, contract.UsageError, err)
+		}
+	}
+}
+
 func TestLoginWithAnUnreadableConfigIsAUsageError(t *testing.T) {
 	setup(t)
 	if err := os.WriteFile(filepath.Join(os.Getenv("SELECTIVE_CONFIG_DIR"), "config.json"), []byte("{not json"), 0o600); err != nil {
