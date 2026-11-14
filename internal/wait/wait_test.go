@@ -217,3 +217,29 @@ func TestRetryAfterReadsTheSecondsAnErrorCarries(t *testing.T) {
 		})
 	}
 }
+
+func TestPollCountsElapsedFromTheOriginWhenOneIsGiven(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	var out bytes.Buffer
+	check, _ := doneAfter(2, nil)
+
+	err := Poll(context.Background(), Options{For: "build", Limit: time.Hour, Origin: clock.now.Add(-100 * time.Second), Out: &out, Clock: clock}, check)
+
+	want := `{"v":1,"event":"waiting","elapsed_s":100,"for":"build"}` + "\n" +
+		`{"v":1,"event":"waiting","elapsed_s":102,"for":"build"}` + "\n"
+	if err != nil || out.String() != want {
+		t.Errorf("err=%v out=%q, want nil and %q", err, out.String(), want)
+	}
+}
+
+func TestPollKeepsItsLimitFromItsOwnStartWhenAnOriginIsGiven(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	check, _ := doneAfter(1000, nil)
+
+	err := Poll(context.Background(), Options{Limit: 10 * time.Second, Origin: clock.now.Add(-100 * time.Second), Clock: clock}, check)
+
+	var expired *ExpiredError
+	if !errors.As(err, &expired) || clock.now != time.Unix(1010, 0) {
+		t.Errorf("err=%v now=%v, want expiry exactly 10s after Poll began", err, clock.now)
+	}
+}
