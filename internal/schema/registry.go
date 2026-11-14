@@ -49,6 +49,8 @@ var events = []Event{
 	{"rerun_started", "cli"},
 	{"done", "cli"},
 	{"test_pass", "cli"},
+	{"authorize", "cli"},
+	{"logged_in", "cli"},
 }
 
 func ExitCodes() []ExitCode { return slices.Clone(exitCodes) }
