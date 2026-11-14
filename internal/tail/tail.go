@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -71,9 +72,9 @@ func refuse(err error) (int, error) {
 
 func waitingOutput(format string) io.Writer {
 	if format == "ndjson" {
-		return os.Stdout
+		return outWriter
 	}
-	return os.Stderr
+	return errWriter
 }
 
 func detect(commit string) (repo, sha string, err error) {
@@ -135,7 +136,40 @@ func deadlineCause(ctx context.Context, err error) error {
 	return err
 }
 
-var pingInterval = 30 * time.Second
+var (
+	pingInterval      = 30 * time.Second
+	heartbeatInterval = 30 * time.Second
+	outWriter         = io.Writer(os.Stdout)
+	errWriter         = io.Writer(os.Stderr)
+)
+
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+func heartbeats(ctx context.Context, interval time.Duration, lastLine *atomic.Int64, started time.Time, emit func(elapsedS int)) {
+	for {
+		idle := time.Since(time.Unix(0, lastLine.Load()))
+		if idle >= interval {
+			emit(int(time.Since(started).Seconds()))
+			idle = 0
+		}
+		timer := time.NewTimer(interval - idle)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
 
 func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, interval time.Duration, timedOut *atomic.Bool) {
 	ticker := time.NewTicker(interval)
@@ -166,7 +200,7 @@ func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, 
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	// Phoenix serves a socket mounted at /api/v1/tail on /api/v1/tail/websocket;
 	// the bare path is a 404, so tail never connected before this.
-	wsURL = fmt.Sprintf("%s/api/v1/tail/websocket?build_id=%s", wsURL, url.QueryEscape(buildID))
+	wsURL = fmt.Sprintf("%s/api/v1/tail/websocket?build_id=%s&replay=1&v=1", wsURL, url.QueryEscape(buildID))
 
 	// The token goes in a header, not the URL: URLs end up in proxy and
 	// access logs.
@@ -188,7 +222,24 @@ func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, 
 	var timedOut atomic.Bool
 	go keepAlive(ctx, cancel, conn, interval, &timedOut)
 
-	fw := format.NewWriter(os.Stdout, fmtFlag)
+	out := &syncWriter{w: outWriter}
+	fw := format.NewWriter(out, fmtFlag)
+
+	started := time.Now()
+	var lastLine atomic.Int64
+	lastLine.Store(started.UnixNano())
+	heartbeatCtx, stopHeartbeats := context.WithCancel(ctx)
+	heartbeatsDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatsDone)
+		heartbeats(heartbeatCtx, heartbeatInterval, &lastLine, started, func(elapsedS int) {
+			if fmtFlag == "ndjson" {
+				_ = format.EventLine(out, "heartbeat", map[string]any{"elapsed_s": elapsedS})
+				return
+			}
+			fmt.Fprintf(errWriter, "still running; nothing new for %s (%ds elapsed)\n", heartbeatInterval, elapsedS)
+		})
+	}()
 
 	var summary map[string]any
 	sawFailure := false
@@ -197,6 +248,7 @@ func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, 
 		if err != nil {
 			break
 		}
+		lastLine.Store(time.Now().UnixNano())
 
 		if writeErr := fw.Write(data); writeErr != nil {
 			fmt.Fprintf(os.Stderr, "format error: %v\n", writeErr)
@@ -213,6 +265,8 @@ func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, 
 		}
 	}
 
+	stopHeartbeats()
+	<-heartbeatsDone
 	conn.Close(websocket.StatusNormalClosure, "")
 
 	if summary == nil {

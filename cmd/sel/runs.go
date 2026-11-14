@@ -86,6 +86,10 @@ polls until the build exists (10m when given without a value; write
 --wait=5s, not --wait 5s), printing a waiting line per poll, then streams
 it. --timeout DURATION caps the whole run, waiting included.
 
+A build that already has failures replays them first, so a late sel tail
+sees every failure. While connected, 30 s without a line prints a heartbeat:
+an NDJSON line on stdout, or a note on stderr in pretty mode.
+
 Exit codes:
   0  all tests passed
   1  real test failures
@@ -100,7 +104,7 @@ Exit codes:
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
 			"exit_codes":   "0,1,2,3,4,5,8",
-			"events":       "build_start,selection,progress,test_fail,summary,waiting",
+			"events":       "build_start,selection,progress,test_fail,summary,replay_truncated,waiting,heartbeat",
 			"wait_default": defaultTailWait,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
