@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/update"
 )
@@ -25,8 +26,12 @@ type noticeEnv struct {
 	status    int
 }
 
+func cacheJSON(extra string) string {
+	return `{"latest_version":"0.3.0","checked_at":"` + time.Now().UTC().Format(time.RFC3339) + `"` + extra + `}`
+}
+
 func outdated() noticeEnv {
-	return noticeEnv{build: "0.1.0", cache: `{"latest_version":"0.3.0"}`, stdoutTTY: true, stderrTTY: true, status: 200}
+	return noticeEnv{build: "0.1.0", cache: cacheJSON(""), stdoutTTY: true, stderrTTY: true, status: 200}
 }
 
 type noticeRun struct {
@@ -148,7 +153,7 @@ func TestStdoutIsByteIdenticalWithTheNoticeOnOrOff(t *testing.T) {
 
 func TestBelowTheMinimumSaysNoLongerSupported(t *testing.T) {
 	env := outdated()
-	env.cache = `{"latest_version":"0.3.0","server_min_version":"0.2.0"}`
+	env.cache = cacheJSON(`,"server_min_version":"0.2.0"`)
 
 	got := env.run(t, "orgs")
 
