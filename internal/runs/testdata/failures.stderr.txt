@@ -1,0 +1,2 @@
+* the build is still running or a rerun is pending; this may yet pass.
+More results: sel failures b-1 --outcome all --limit 2 --cursor next-1
