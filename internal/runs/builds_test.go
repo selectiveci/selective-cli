@@ -222,7 +222,6 @@ func TestBuildsWithoutAllNeverAddsTheStoppedEarlyNotice(t *testing.T) {
 	}
 }
 
-<<<<<<< ours
 func TestBuildPrintsTheDetailAsTheServerSentIt(t *testing.T) {
 	s := &buildsStub{detail: buildDetail}
 	env, out := s.env(t)
@@ -249,7 +248,9 @@ func TestBuildSendsNoOrgWhenNoneWasGiven(t *testing.T) {
 
 	if len(s.queries) != 1 || len(s.queries[0]) != 0 {
 		t.Errorf("queries = %v", s.queries)
-=======
+	}
+}
+
 func noticedPage(rows, next, notices string) string {
 	return `{"builds":[` + rows + `],"next_cursor":` + next + `,"notices":` + notices + `}`
 }
@@ -307,6 +308,5 @@ func TestBuildsAllAddsTheStoppedEarlyNoticeAfterTheServersOwn(t *testing.T) {
 
 	if got := noticesOf(t, out); !slices.Equal(got, []string{"metrics_unavailable", "pagination_stopped_early"}) {
 		t.Errorf("notices = %v, want the server's then pagination_stopped_early", got)
->>>>>>> theirs
 	}
 }
