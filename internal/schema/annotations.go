@@ -30,13 +30,14 @@ func annotate(node *Command, c *cobra.Command) error {
 		}
 		node.Events = append(node.Events, name)
 	}
-	for _, key := range []string{"mutates", "destructive"} {
+	for _, key := range []string{"mutates", "destructive", "sends_paths"} {
 		if v, ok := c.Annotations[key]; ok && v != "true" {
 			fail("%s must be \"true\" or absent, got %q", key, v)
 		}
 	}
 	node.Mutates = c.Annotations["mutates"] == "true"
 	node.Destructive = c.Annotations["destructive"] == "true"
+	node.SendsPaths = c.Annotations["sends_paths"] == "true"
 	if v, ok := c.Annotations["wait_default"]; ok {
 		if _, err := time.ParseDuration(v); err != nil || c.Flags().Lookup("wait") == nil {
 			fail("wait_default %q needs a duration and a --wait flag", v)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ type Options struct {
 	Selector       Selector
 	Passes         bool
 	List           bool
+	Paths          []string
 	Timeout        time.Duration
 	HeartbeatEvery time.Duration
 }
@@ -170,7 +172,9 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	}
 	manifest := Manifest{Tree: raw.Tree}
 	for _, c := range *raw.TestCases {
-		manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
+		if underAny(c.FilePath, r.opts.Paths) {
+			manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
+		}
 	}
 	r.event("build_start", buildStartFields(raw.Tree))
 	if r.writeErr != nil {
@@ -209,6 +213,19 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 		return r.close()
 	}
 	return r.send(map[string]any{"command": "run_test_cases", "test_case_ids": ids})
+}
+
+func underAny(file string, paths []string) bool {
+	if len(paths) == 0 {
+		return true
+	}
+	file = path.Clean(file)
+	for _, p := range paths {
+		if p == "." || file == p || strings.HasPrefix(file, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *run) onResult(data json.RawMessage) error {

@@ -47,7 +47,7 @@ var languages = map[localrun.Framework]string{localrun.RSpec: "ruby", localrun.M
 func testCmd() *cobra.Command {
 	var f testFlags
 	cmd := &cobra.Command{
-		Use:   "test",
+		Use:   "test [PATH...]",
 		Short: "Run the tests a change affects, on this machine",
 		Long: `Run the tests that the change in this checkout affects, using the suite's
 recorded test map to pick them.
@@ -56,7 +56,8 @@ The suite is the one in the organization whose repository is this checkout's
 origin remote; --suite names one. The change is every tracked file that differs from the merge base of HEAD and
 --against, committed or not; untracked files are left out. --against defaults
 to the remote's default branch (origin/HEAD, else origin/main, else
-origin/master).
+origin/master). PATH arguments, relative to the current directory, limit which
+tests are candidates; the git diff still decides which of them run.
 
 Changed file paths and test ids are sent to Selective; file contents are not.
 A map that cannot speak for the change runs every test, and the selection
@@ -66,13 +67,9 @@ summary.`,
 		Example: `  sel test
   sel test --against origin/main --json
   sel test --list
+  sel test app/models/user.rb
   sel test --suite 3f9c -- -k slow`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
-				return contract.Errorf(contract.UsageError, "unexpected argument %q; pass framework arguments after --", args[0])
-			}
-			return nil
-		},
+		Args: cobra.ArbitraryArgs,
 		Annotations: map[string]string{
 			"exit_codes":  "0,1,3,4,5,6,8,130",
 			"events":      "build_start,selection,test_fail,progress,heartbeat,summary",
@@ -97,6 +94,7 @@ summary.`,
 
 type testPlan struct {
 	root      string
+	paths     []string
 	framework localrun.Framework
 	selector  localrun.Selector
 }
@@ -107,6 +105,10 @@ type plannedTest struct {
 }
 
 func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
+	paths, frameworkArgs := args, []string(nil)
+	if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+		paths, frameworkArgs = args[:dash], args[dash:]
+	}
 	if f.timeout <= 0 {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
@@ -132,7 +134,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	}
 	planned := make(chan plannedTest, 1)
 	go func() {
-		plan, err := planTest(args, f)
+		plan, err := planTest(paths, f)
 		planned <- plannedTest{plan, err}
 	}()
 	var plan testPlan
@@ -151,8 +153,8 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(signalled, f.timeout)
 	defer cancel()
-	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: args, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, List: f.list, Timeout: f.timeout})
+	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, List: f.list, Paths: plan.paths, Timeout: f.timeout})
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
@@ -166,10 +168,14 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	return 0, nil
 }
 
-func planTest(args []string, f testFlags) (testPlan, error) {
+func planTest(paths []string, f testFlags) (testPlan, error) {
 	root, err := os.Getwd()
 	if err != nil {
 		return testPlan{}, contract.Errorf(contract.InternalError, "%v", err)
+	}
+	candidates, err := candidatePaths(root, paths)
+	if err != nil {
+		return testPlan{}, err
 	}
 	framework, err := localrun.DetectFramework(root, f.framework)
 	if err != nil {
@@ -191,7 +197,7 @@ func planTest(args []string, f testFlags) (testPlan, error) {
 	if err != nil {
 		return testPlan{}, err
 	}
-	return testPlan{root: root, framework: framework, selector: selectTests(env.Client, org, suite, framework, changed)}, nil
+	return testPlan{root: root, paths: candidates, framework: framework, selector: selectTests(env.Client, org, suite, framework, changed)}, nil
 }
 
 func resolveSuite(client *api.Client, org, flag string) (string, error) {
