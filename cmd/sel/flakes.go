@@ -27,8 +27,9 @@ func flakesListCmd() *cobra.Command {
 		Short: "List flaky tests",
 		Long: `List the organization's flaky tests, most impactful first.
 
-Without --limit, pages are fetched until next_cursor is null (up to 20000
-flakes, after which next_cursor is set). With --limit N, one page of at
+Without --limit, pages are fetched until next_cursor is null. The walk stops
+early after 20000 flakes or 2000 requests, whichever comes first: next_cursor
+is then set and notices carries pagination_stopped_early. With --limit N, one page of at
 most N (max 200) is returned, and next_cursor (when not null) goes to
 --cursor for the next page. Pass the same filters with the cursor.
 
