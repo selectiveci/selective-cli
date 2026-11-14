@@ -58,7 +58,7 @@ func (o LoginOptions) emit(event map[string]any) {
 func Login(opts LoginOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("could not load config: %w", err)
+		return contract.Errorf(contract.UsageError, "could not load config: %v", err)
 	}
 	host, err := cfg.ResolveHost(opts.Hostname)
 	if err != nil {
@@ -218,7 +218,7 @@ func tokenSource(s credentials.Source) string {
 func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return contract.Errorf(contract.UsageError, "could not load config: %v", err)
 	}
 	host, err := cfg.ResolveHost(hostname)
 	if err != nil {
@@ -288,7 +288,7 @@ func (o LogoutOptions) report(host string, revoked bool, result string) error {
 func Logout(opts LogoutOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return contract.Errorf(contract.UsageError, "could not load config: %v", err)
 	}
 	host, err := cfg.ResolveHost(opts.Hostname)
 	if err != nil {

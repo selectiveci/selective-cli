@@ -156,6 +156,7 @@ var scannedPackages = []string{
 	"internal/config",
 	"internal/devicelogin",
 	"internal/doctor",
+	"internal/runs",
 	"internal/setup",
 }
 
