@@ -6,7 +6,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
-var defaultBaseCandidates = []string{"origin/main", "origin/master"}
+var defaultBaseCandidates = []string{"refs/remotes/origin/main", "refs/remotes/origin/master"}
 
 func ChangedFiles(dir, against string) ([]string, error) {
 	if _, ok := gitOutput(dir, "rev-parse", "--show-toplevel"); !ok {
@@ -22,7 +22,7 @@ func ChangedFiles(dir, against string) ([]string, error) {
 	if !ok {
 		return nil, contract.Errorf(contract.UsageError, "no merge base between HEAD and %q; pass --against REF with a branch this one grew from", against)
 	}
-	listing, ok := gitOutput(dir, "-c", "diff.relative=false", "diff", "--name-only", "-z", "--no-renames", strings.TrimSpace(base))
+	listing, ok := gitOutput(dir, "-c", "diff.relative=false", "diff", "--ignore-submodules=none", "--name-only", "-z", "--no-renames", strings.TrimSpace(base))
 	if !ok {
 		return nil, contract.Errorf(contract.InternalError, "git diff against %s failed", strings.TrimSpace(base))
 	}
@@ -37,7 +37,7 @@ func ChangedFiles(dir, against string) ([]string, error) {
 
 func defaultBase(dir string) (string, bool) {
 	candidates := defaultBaseCandidates
-	if ref, ok := gitOutput(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); ok {
+	if ref, ok := gitOutput(dir, "symbolic-ref", "refs/remotes/origin/HEAD"); ok {
 		candidates = append([]string{strings.TrimSpace(ref)}, candidates...)
 	}
 	for _, candidate := range candidates {
