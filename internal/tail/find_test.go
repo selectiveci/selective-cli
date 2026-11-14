@@ -81,6 +81,7 @@ func TestFindBuildStopsPollingOnAnErrorThatIsNotAMissingBuild(t *testing.T) {
 }
 
 func TestFindBuildWithoutAWaitSurfacesARateLimitInsteadOfNoBuild(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	client, calls := lookupServer(t, rateLimited)
 
 	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{})
