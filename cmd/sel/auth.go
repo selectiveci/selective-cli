@@ -139,15 +139,24 @@ func authStatusCmd() *cobra.Command {
 
 func authLogoutCmd() *cobra.Command {
 	var hostname string
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:         "logout",
-		Annotations: map[string]string{"exit_codes": "0,5,9"},
+		Annotations: map[string]string{"exit_codes": "0,5,9", "mutates": "true"},
 		Short:       "Revoke this machine's token and forget it",
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return auth.Logout(hostname, os.Stderr)
+			out := cmd.OutOrStdout()
+			return auth.Logout(auth.LogoutOptions{
+				Hostname: hostname,
+				DryRun:   dryRun,
+				JSON:     format.JSONMode(cmd.Flags(), out),
+				Stdout:   out,
+				Stderr:   os.Stderr,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report what would happen without revoking or forgetting the token")
 	return cmd
 }

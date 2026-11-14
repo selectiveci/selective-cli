@@ -261,13 +261,36 @@ func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	return nil
 }
 
-// Logout revokes the token on the server, then forgets it locally.
-func Logout(hostname string, stderr io.Writer) error {
+type LogoutOptions struct {
+	Hostname string
+	DryRun   bool
+	JSON     bool
+	Stdout   io.Writer
+	Stderr   io.Writer
+}
+
+type LogoutInfo struct {
+	Host    string `json:"host"`
+	Revoked *bool  `json:"revoked,omitempty"`
+}
+
+func (o LogoutOptions) report(host string, revoked bool, result string) error {
+	if !o.JSON {
+		return nil
+	}
+	info := LogoutInfo{Host: host}
+	if !o.DryRun {
+		info.Revoked = &revoked
+	}
+	return format.Write(o.Stdout, "auth", info, result, o.DryRun)
+}
+
+func Logout(opts LogoutOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	host, err := cfg.ResolveHost(hostname)
+	host, err := cfg.ResolveHost(opts.Hostname)
 	if err != nil {
 		return err
 	}
@@ -276,22 +299,25 @@ func Logout(hostname string, stderr io.Writer) error {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		fmt.Fprintf(stderr, "Not logged in to %s.\n", host)
-		return nil
+		fmt.Fprintf(opts.Stderr, "Not logged in to %s.\n", host)
+		return opts.report(host, false, "unchanged")
+	}
+	if opts.DryRun {
+		fmt.Fprintf(opts.Stderr, "Dry run: would log out of %s and revoke the token.\n", host)
+		return opts.report(host, false, "deleted")
 	}
 
 	revokeErr := api.New(host, cred.Token).RevokeCurrent()
 	if err := credentials.Forget(cfg, host); err != nil {
 		return err
 	}
-	switch {
-	case revokeErr == nil, errors.Is(revokeErr, api.ErrUnauthorized):
-		fmt.Fprintf(stderr, "✓ Logged out of %s and revoked the token.\n", host)
-		return nil
-	default:
-		fmt.Fprintf(stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, revokeErr)
-		return nil
+	revoked := revokeErr == nil || errors.Is(revokeErr, api.ErrUnauthorized)
+	if revoked {
+		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s and revoked the token.\n", host)
+	} else {
+		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, revokeErr)
 	}
+	return opts.report(host, revoked, "deleted")
 }
 
 func tokenPrefix(token string) string {

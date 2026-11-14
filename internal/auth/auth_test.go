@@ -66,7 +66,7 @@ func TestWithTokenStatusLogout(t *testing.T) {
 	}
 
 	stderr.Reset()
-	if err := Logout("", &stderr); err != nil {
+	if err := Logout(LogoutOptions{Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
 	if !*revoked {
@@ -108,7 +108,7 @@ func TestStatusWhenTheTokenWasRevokedElsewhere(t *testing.T) {
 func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 	setup(t)
 	t.Setenv("SELECTIVE_TOKEN", "sk_live_env")
-	if err := Logout("", &bytes.Buffer{}); err == nil {
+	if err := Logout(LogoutOptions{Stderr: &bytes.Buffer{}}); err == nil {
 		t.Fatal("logout should refuse to act on SELECTIVE_TOKEN")
 	}
 }
@@ -234,7 +234,7 @@ func TestLoginAndLogoutRefusalsCarryTheirContractCode(t *testing.T) {
 		{"no token on stdin", login(""), contract.UsageError},
 		{"stdin is not a token", login("not-a-token\n"), contract.UsageError},
 		{"server rejects the token", login("sk_live_wrong\n"), contract.Unauthorized},
-		{"logout with an env token", Logout("", &bytes.Buffer{}), contract.UsageError},
+		{"logout with an env token", Logout(LogoutOptions{Stderr: &bytes.Buffer{}}), contract.UsageError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
