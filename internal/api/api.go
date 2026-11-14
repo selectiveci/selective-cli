@@ -17,15 +17,22 @@ import (
 )
 
 type Client struct {
-	Host  string
-	Token string
-	HTTP  *http.Client
-	ctx   context.Context
+	Host    string
+	Token   string
+	HTTP    *http.Client
+	ctx     context.Context
+	noRetry bool
 }
 
 func (c *Client) WithContext(ctx context.Context) *Client {
 	bound := *c
 	bound.ctx = ctx
+	return &bound
+}
+
+func (c *Client) WithoutRetry() *Client {
+	bound := *c
+	bound.noRetry = true
 	return &bound
 }
 
@@ -72,7 +79,7 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 			return err
 		}
 	}
-	retryable := method == http.MethodGet || header.Get("Idempotency-Key") != ""
+	retryable := !c.noRetry && (method == http.MethodGet || header.Get("Idempotency-Key") != "")
 	ctx := c.requestContext()
 	clk := currentClock()
 	for attempt := 1; ; attempt++ {

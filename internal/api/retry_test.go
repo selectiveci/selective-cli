@@ -217,3 +217,24 @@ func TestAKeyedWriteIsRetriedWithTheSameKeyAndBody(t *testing.T) {
 		t.Errorf("err %v requests %+v, want two identical requests %+v", err, rec.reqs, want)
 	}
 }
+
+func TestAClientWithoutRetryMakesOneRequestOnA503(t *testing.T) {
+	clock := useClock(t)
+	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
+
+	_, err := client.WithoutRetry().Me()
+
+	if codeOf(t, err) != contract.ServerError || rec.count() != 1 || len(clock.sleeps) != 0 {
+		t.Errorf("err %v after %d requests and %d waits, want the 503 after 1 and 0", err, rec.count(), len(clock.sleeps))
+	}
+}
+
+func TestWithoutRetryLeavesTheOriginalClientRetrying(t *testing.T) {
+	useClock(t)
+	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
+	client.WithoutRetry()
+
+	if _, err := client.Me(); err != nil || rec.count() != 2 {
+		t.Errorf("err %v after %d requests, want success on the second", err, rec.count())
+	}
+}
