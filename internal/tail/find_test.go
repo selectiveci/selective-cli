@@ -81,13 +81,14 @@ func TestFindBuildStopsPollingOnAnErrorThatIsNotAMissingBuild(t *testing.T) {
 }
 
 func TestFindBuildWithoutAWaitSurfacesARateLimitInsteadOfNoBuild(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	client, calls := lookupServer(t, rateLimited)
 
 	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{})
 
 	var coded contract.Coded
-	if !errors.As(err, &coded) || coded.ErrorCode() != contract.RateLimited || calls.Load() != 1 {
-		t.Errorf("err = %v after %d lookups, want one rate_limited", err, calls.Load())
+	if !errors.As(err, &coded) || coded.ErrorCode() != contract.RateLimited || calls.Load() != 3 {
+		t.Errorf("err = %v after %d lookups, want rate_limited after the client's 3 attempts", err, calls.Load())
 	}
 }
 
@@ -108,6 +109,7 @@ func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
 }
 
 func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
