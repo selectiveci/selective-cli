@@ -17,15 +17,22 @@ import (
 )
 
 type Client struct {
-	Host  string
-	Token string
-	HTTP  *http.Client
-	ctx   context.Context
+	Host    string
+	Token   string
+	HTTP    *http.Client
+	ctx     context.Context
+	noRetry bool
 }
 
 func (c *Client) WithContext(ctx context.Context) *Client {
 	bound := *c
 	bound.ctx = ctx
+	return &bound
+}
+
+func (c *Client) WithoutRetry() *Client {
+	bound := *c
+	bound.noRetry = true
 	return &bound
 }
 

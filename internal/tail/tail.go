@@ -100,6 +100,7 @@ func lookupOnce(ctx context.Context, client *api.Client, repo, sha string) (stri
 }
 
 func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts wait.Options) (string, error) {
+	client = client.WithoutRetry()
 	missing := contract.Errorf(contract.NoBuild, "no build for repo %q commit %s", repo, shortSHA(sha))
 	if opts.Limit <= 0 {
 		buildID, err := lookupOnce(ctx, client, repo, sha)
