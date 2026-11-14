@@ -111,7 +111,7 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 	}
 
 	var buildID string
-	polling := client.WithoutRetry()
+	polling := client.WithoutRateLimitRetry()
 	err := wait.Poll(ctx, opts, func(checkCtx context.Context) (bool, time.Duration, error) {
 		var err error
 		buildID, err = lookupOnce(checkCtx, polling, repo, sha)
