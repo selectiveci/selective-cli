@@ -230,6 +230,27 @@ func TestListCapsAutoPaginationByFlakeCountSoShortPagesStillReachTheAdvertisedTo
 	}
 }
 
+func TestListTextExplainsAnEarlyStopAndKeepsTheContinuation(t *testing.T) {
+	row := `{"id":"x","status":"flaking","test":{"name":"t"},"suite":{"name":"s"},"last_seen_at":"2026-11-12T16:30:00Z"}`
+	body := `{"flakes":[` + strings.TrimSuffix(strings.Repeat(row+",", 11), ",") + `],"next_cursor":"more","notices":[]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	var errOut bytes.Buffer
+	env := &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &bytes.Buffer{}, Stderr: &errOut}
+
+	if err := List(env, ListOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Notice: stopped early after 20009 flakes; run the command below to continue\nMore results: sel flakes list --org 'acme' --cursor 'more'\n"
+	if !strings.HasSuffix(errOut.String(), want) {
+		t.Errorf("stderr %q, want suffix %q", errOut, want)
+	}
+}
+
 func TestListStopsAtTheRequestCeilingWhenPagesAreEmpty(t *testing.T) {
 	flakes, next, notices, requests := walk(t, 0)
 
