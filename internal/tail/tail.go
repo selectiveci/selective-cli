@@ -100,7 +100,6 @@ func lookupOnce(ctx context.Context, client *api.Client, repo, sha string) (stri
 }
 
 func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts wait.Options) (string, error) {
-	client = client.WithoutRetry()
 	missing := contract.Errorf(contract.NoBuild, "no build for repo %q commit %s", repo, shortSHA(sha))
 	if opts.Limit <= 0 {
 		buildID, err := lookupOnce(ctx, client, repo, sha)
@@ -112,9 +111,10 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 	}
 
 	var buildID string
+	polling := client.WithoutRetry()
 	err := wait.Poll(ctx, opts, func(checkCtx context.Context) (bool, time.Duration, error) {
 		var err error
-		buildID, err = lookupOnce(checkCtx, client, repo, sha)
+		buildID, err = lookupOnce(checkCtx, polling, repo, sha)
 		var apiErr *api.Error
 		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusTooManyRequests || apiErr.Code == contract.RateLimited) {
 			return false, wait.RetryAfter(err), nil

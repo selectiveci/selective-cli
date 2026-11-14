@@ -86,8 +86,8 @@ func TestFindBuildWithoutAWaitSurfacesARateLimitInsteadOfNoBuild(t *testing.T) {
 	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{})
 
 	var coded contract.Coded
-	if !errors.As(err, &coded) || coded.ErrorCode() != contract.RateLimited || calls.Load() != 1 {
-		t.Errorf("err = %v after %d lookups, want one rate_limited", err, calls.Load())
+	if !errors.As(err, &coded) || coded.ErrorCode() != contract.RateLimited || calls.Load() != 3 {
+		t.Errorf("err = %v after %d lookups, want rate_limited after the client's 3 attempts", err, calls.Load())
 	}
 }
 
