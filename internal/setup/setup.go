@@ -310,7 +310,7 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 		return fmt.Errorf("could not set the GitHub secret: %w", err)
 	}
 	if e.JSON {
-		return e.json(map[string]any{"secret": opts.GithubSecret, "repo": repo, "suite": s.Name})
+		return e.json(map[string]any{"secret": opts.GithubSecret, "repo": repo, "suite": s.Name, "result": "updated", "dry_run": false})
 	}
 	fmt.Fprintf(e.Stdout, "✓ Set GitHub Actions secret %s on %s to suite %q's API key\n", opts.GithubSecret, repo, s.Name)
 	return nil
