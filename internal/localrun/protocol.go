@@ -43,6 +43,7 @@ type Selector func(context.Context, Manifest) (Selection, error)
 type Options struct {
 	Selector       Selector
 	Passes         bool
+	List           bool
 	Timeout        time.Duration
 	HeartbeatEvery time.Duration
 }
@@ -196,8 +197,13 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	r.total = len(ids)
 	r.sum.Selected = len(ids)
 	r.sum.Skipped = max(len(manifest.Cases)-len(ids), 0)
-	r.event("selection", selectionFields(selection, r.sum, len(manifest.Cases)))
-	if len(ids) == 0 {
+	fields := selectionFields(selection, r.sum, len(manifest.Cases))
+	if r.opts.List {
+		fields["ids"] = append([]string{}, ids...)
+		r.outstanding = map[string]bool{}
+	}
+	r.event("selection", fields)
+	if len(ids) == 0 || r.opts.List {
 		return r.close()
 	}
 	return r.send(map[string]any{"command": "run_test_cases", "test_case_ids": ids})

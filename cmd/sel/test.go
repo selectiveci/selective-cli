@@ -38,6 +38,7 @@ func transportCmd() *cobra.Command {
 
 type testFlags struct {
 	against, framework, suite, org string
+	list                           bool
 	timeout                        time.Duration
 }
 
@@ -46,7 +47,7 @@ var languages = map[localrun.Framework]string{localrun.RSpec: "ruby", localrun.M
 func testCmd() *cobra.Command {
 	var f testFlags
 	cmd := &cobra.Command{
-		Use:   "test",
+		Use:   "test [PATH...]",
 		Short: "Run the tests a change affects, on this machine",
 		Long: `Run the tests that the change in this checkout affects, using the suite's
 recorded test map to pick them.
@@ -55,22 +56,20 @@ The suite is the one in the organization whose repository is this checkout's
 origin remote; --suite names one. The change is every tracked file that differs from the merge base of HEAD and
 --against, committed or not; untracked files are left out. --against defaults
 to the remote's default branch (origin/HEAD, else origin/main, else
-origin/master).
+origin/master). PATH arguments, relative to the current directory, replace the
+git diff: they are the changed files.
 
 Changed file paths and test ids are sent to Selective; file contents are not.
 A map that cannot speak for the change runs every test, and the selection
-event says so. Arguments after -- go to the test framework's client. Its
+event says so. --list prints that selection, with the ids, and runs nothing. Arguments after -- go to the test framework's client. Its
 output goes to stderr; stdout carries NDJSON events only, ending with a
 summary.`,
 		Example: `  sel test
   sel test --against origin/main --json
+  sel test --list
+  sel test app/models/user.rb
   sel test --suite 3f9c -- -k slow`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
-				return contract.Errorf(contract.UsageError, "unexpected argument %q; pass framework arguments after --", args[0])
-			}
-			return nil
-		},
+		Args: cobra.ArbitraryArgs,
 		Annotations: map[string]string{
 			"exit_codes":  "0,1,3,4,5,6,8,130",
 			"events":      "build_start,selection,test_fail,progress,heartbeat,summary",
@@ -88,13 +87,18 @@ summary.`,
 	cmd.Flags().StringVar(&f.framework, "framework", "", "Test framework: rspec, minitest or pytest (default: detected)")
 	cmd.Flags().StringVar(&f.suite, "suite", "", "Suite ID (default: the suite for this checkout's origin)")
 	cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
+	cmd.Flags().BoolVar(&f.list, "list", false, "Print what would run and run nothing")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Stop the run after this long")
 	return cmd
 }
 
 func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
-	if f.timeout <= 0 {
-		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
+	paths, frameworkArgs := args, []string(nil)
+	if dash := cmd.ArgsLenAtDash(); dash >= 0 {
+		paths, frameworkArgs = args[:dash], args[dash:]
+	}
+	if f.timeout <= 0 || (len(paths) > 0 && f.against != "") {
+		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive, and PATH arguments cannot be combined with --against")
 	}
 	root, err := os.Getwd()
 	if err != nil {
@@ -104,7 +108,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	changed, err := localrun.ChangedFiles(root, f.against)
+	changed, err := changedPaths(root, f.against, paths)
 	if err != nil {
 		return 0, err
 	}
@@ -133,8 +137,8 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if !format.JSONMode(cmd.Flags(), stdout) {
 		events = prettyEvents{format.NewWriter(stdout, "pretty")}
 	}
-	launch := localrun.Launch{Root: root, Framework: framework, Args: args, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), Timeout: f.timeout})
+	launch := localrun.Launch{Root: root, Framework: framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), List: f.list, Timeout: f.timeout})
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
@@ -147,6 +151,13 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return contract.ExitFailures, nil
 	}
 	return 0, nil
+}
+
+func changedPaths(root, against string, paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return localrun.ChangedFiles(root, against)
+	}
+	return localrun.RepoPaths(root, paths)
 }
 
 func resolveSuite(client *api.Client, org, flag string) (string, error) {

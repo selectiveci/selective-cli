@@ -261,14 +261,6 @@ func TestSelTestOutcomes(t *testing.T) {
 	}
 }
 
-func TestSelTestRefusesAnArgumentThatIsNotAfterTheDash(t *testing.T) {
-	res := selTest(t, pytestProject(t), newFakeAPI(t, selected), "tests/")
-
-	if events := stdoutEvents(t, res.stdout); res.exit != 5 || events[len(events)-1]["error"] != "usage_error" {
-		t.Errorf("exit %d stdout %s, want exit 5 with a usage_error", res.exit, res.stdout)
-	}
-}
-
 func TestSelTestErrorsExitByCodeAndEndTheStreamWithAnErrorObject(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -355,5 +347,70 @@ func TestSelTestInterruptExitsOneThirty(t *testing.T) {
 
 	if code := cmd.ProcessState.ExitCode(); code != 130 {
 		t.Errorf("exit = %d, want 130", code)
+	}
+}
+
+func TestSelTestListPrintsTheSelectionWithIdsAndRunsNothing(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	ran := runnerEnv(t)
+
+	res := selTest(t, pytestProject(t), api, "--list")
+
+	events := stdoutEvents(t, res.stdout)
+	sel := firstNamed(events, "selection")
+	if res.exit != 0 || !slices.Equal(anyStrings(sel["ids"]), []string{"tests/test_calc.py::test_sub"}) || events[len(events)-1]["event"] != "summary" {
+		t.Errorf("exit %d events %v, want the selection with its ids, ending in summary", res.exit, eventNames(events))
+	}
+	if got := ranIDs(t, ran); len(got) != 0 {
+		t.Errorf("--list ran %v", got)
+	}
+}
+
+func TestSelTestPathsStandInForTheGitDiffAndConflictWithAgainst(t *testing.T) {
+	api := newFakeAPI(t, nothing)
+	runnerEnv(t)
+	dir := pytestProject(t)
+
+	res := selTest(t, dir, api, "src/other.py", "src/calc.py")
+
+	if got := anyStrings(api.firstSelection(t)["changed"]); res.exit != 0 || !slices.Equal(got, []string{"src/other.py", "src/calc.py"}) {
+		t.Errorf("exit %d changed %v, want the given paths", res.exit, got)
+	}
+	if conflict := selTest(t, dir, api, "--against", "main", "src/calc.py"); conflict.exit != 5 {
+		t.Errorf("paths with --against: exit %d, want 5", conflict.exit)
+	}
+}
+
+func TestHelpJSONShowsTestWithItsAnnotationsAndNoTransport(t *testing.T) {
+	code, stdout, _ := execute("help", "--json")
+
+	var doc struct {
+		Help struct {
+			Commands []map[string]any `json:"commands"`
+		} `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || code != 0 {
+		t.Fatalf("help --json exit %d: %v", code, err)
+	}
+	var found map[string]any
+	for _, c := range doc.Help.Commands {
+		if c["path"] == "__transport" {
+			t.Error("help --json lists __transport")
+		}
+		if c["path"] == "test" {
+			found = c
+		}
+	}
+	if found == nil {
+		t.Fatal("help --json has no test command")
+	}
+	if codes := fmt.Sprint(found["exit_codes"]); codes != "[0 1 3 4 5 6 8 130]" {
+		t.Errorf("exit_codes = %s", codes)
+	}
+	if events := fmt.Sprint(found["events"]); events != "[build_start selection test_fail progress heartbeat summary]" {
+		t.Errorf("events = %s", events)
+	}
+	if found["sends_paths"] != true || found["mutates"] != nil {
+		t.Errorf("sends_paths = %v mutates = %v, want true and absent", found["sends_paths"], found["mutates"])
 	}
 }

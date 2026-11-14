@@ -133,3 +133,16 @@ func contractCode(err error) contract.Code {
 	}
 	return ""
 }
+
+func TestRepoPathsAreRelativeToTheCurrentDirectoryPlacedFromTheRepoRoot(t *testing.T) {
+	dir := branchedRepo(t)
+	got, err := RepoPaths(filepath.Join(dir, "app"), []string{"a.rb", "./sub/../b.rb", "../lib/gone.rb"})
+	if err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/b.rb", "lib/gone.rb"}) {
+		t.Errorf("paths = %v err %v, want them placed from the repo root", got, err)
+	}
+	for _, escape := range []string{"../../x.rb", "/etc/passwd"} {
+		if _, err := RepoPaths(filepath.Join(dir, "app"), []string{escape}); contractCode(err) != contract.UsageError {
+			t.Errorf("%s: err = %v, want usage_error", escape, err)
+		}
+	}
+}
