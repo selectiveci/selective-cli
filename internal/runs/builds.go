@@ -2,6 +2,7 @@ package runs
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 
 	"github.com/selectiveci/selective-cli/internal/api"
@@ -77,5 +78,65 @@ func Build(env *setup.Env, opts BuildOptions) error {
 	if err != nil {
 		return err
 	}
-	return format.Resource(env.Stdout, "build", build)
+	if env.JSON {
+		return format.Resource(env.Stdout, "build", build)
+	}
+	return renderBuild(env, build)
+}
+
+var buildFacts = []column{
+	{"ID", "id", nil},
+	{"Title", "title", nil},
+	{"Status", "status", nil},
+	{"Branch", "branch", nil},
+	{"SHA", "sha", nil},
+	{"Repo", "repo", nil},
+	{"Actor", "actor", nil},
+	{"Suites", "suite_count", nil},
+	{"Tests", "total", nil},
+	{"Failed", "failed", nil},
+	{"Flaky", "flaky", nil},
+	{"Started", "started_at", nil},
+	{"Completed", "completed_at", nil},
+	{"Duration", "duration_ms", millis},
+	{"Archived", "archived", nil},
+}
+
+var runColumns = []column{
+	{"RUN", "id", nil},
+	{"SUITE", "name", nil},
+	{"STATUS", "status", nil},
+	{"TESTS", "total", nil},
+	{"FAILED", "failed", nil},
+	{"FLAKY", "flaky", nil},
+}
+
+func renderBuild(env *setup.Env, raw json.RawMessage) error {
+	build, err := decodeFields(raw)
+	if err != nil {
+		return err
+	}
+	facts := make([][]string, len(buildFacts))
+	for i, c := range buildFacts {
+		facts[i] = []string{c.header, build.cell(c)}
+	}
+	table(env.Stdout, facts)
+	var runs []json.RawMessage
+	_ = json.Unmarshal(build["runs"], &runs)
+	if len(runs) == 0 {
+		return nil
+	}
+	rows := [][]string{headers(runColumns)}
+	for _, raw := range runs {
+		run, err := decodeFields(raw)
+		if err != nil {
+			return err
+		}
+		cells := run.cells(runColumns)
+		cells[1] = run.object("suite").cell(runColumns[1])
+		rows = append(rows, cells)
+	}
+	fmt.Fprintln(env.Stdout)
+	table(env.Stdout, rows)
+	return nil
 }

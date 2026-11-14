@@ -1,0 +1,18 @@
+ID         b-2
+Title      unknown
+Status     running
+Branch     unknown
+SHA        unknown
+Repo       unknown
+Actor      unknown
+Suites     1
+Tests      10
+Failed     1
+Flaky      unknown
+Started    unknown
+Completed  -
+Duration   -
+Archived   false
+
+RUN  SUITE  STATUS   TESTS  FAILED  FLAKY
+r-1  web    running  10     1       unknown

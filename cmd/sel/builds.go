@@ -73,7 +73,11 @@ func buildCmd() *cobra.Command {
 		Short: "Show one build and its runs",
 		Long: `Show a build: its status, counts and timings, and one entry per suite run.
 Exits 0 when the read succeeds, even when the build failed; the build's
-outcome is sel tail's job. A field the server leaves out is unknown.
+outcome is sel tail's job.
+
+On a terminal the output is a summary and a table of runs. - means the value is
+empty and unknown means the server did not report it; neither is ever shown as
+0. Piped, or with --json, the output is one JSON document.
 
 A build ID that exists in several of your organizations needs --org.`,
 		Example: `  sel build 8f3c9a
