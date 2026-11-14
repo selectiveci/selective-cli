@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/config"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/zalando/go-keyring"
@@ -23,6 +25,12 @@ const (
 	suites  = `{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":"2026-11-01T12:00:00Z"},{"id":"s-2","name":"Other","type":"pytest","repo":"acme/api","last_run_at":null}]}`
 	allDone = "config=ok server=ok auth=ok org=ok suite=ok socket=skip runner=skip cli_version=skip"
 )
+
+type fakeClock struct{}
+
+func (fakeClock) Now() time.Time { return time.Time{} }
+
+func (fakeClock) Sleep(context.Context, time.Duration) error { return nil }
 
 func reply(status int, body string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +128,7 @@ func exitOf(r *Report) int {
 }
 
 func TestEveryCheckIsListedInOrderWhateverFails(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	cases := []struct {
 		name   string
 		routes map[string]http.HandlerFunc
@@ -221,6 +230,7 @@ func TestReportStatusSummarisesTheChecks(t *testing.T) {
 }
 
 func TestUnreachableServerFailsServerAndSkipsEverythingAfterIt(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	dead := httptest.NewServer(http.NotFoundHandler())
 	host := dead.URL
 	dead.Close()
