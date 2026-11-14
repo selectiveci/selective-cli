@@ -165,3 +165,41 @@ func flag(b *bool) string {
 	}
 	return "false"
 }
+
+func TestMinimumOnlyResponseDoesNotRefreshTheLatestTimestamp(t *testing.T) {
+	isolated(t, "0.1.0")
+	RecordServerHeaders(headers("0.3.0", ""))
+	first := LoadState().ServerSeenAt
+	time.Sleep(1100 * time.Millisecond)
+
+	RecordServerHeaders(headers("", "0.2.0"))
+
+	if st := LoadState(); !st.ServerSeenAt.Equal(*first) || st.ServerMinVersion != "0.2.0" {
+		t.Errorf("server_seen_at moved from %v to %v on a minimum-only response", first, st.ServerSeenAt)
+	}
+}
+
+func TestOnlyFullVersionsAreAccepted(t *testing.T) {
+	for _, shorthand := range []string{"1", "v1", "1.2", "v1.2", "1.2.3+build", "1.2.3.4", "latest"} {
+		if got := cleanVersion(shorthand); got != "" {
+			t.Errorf("cleanVersion(%q) = %q, want it rejected", shorthand, got)
+		}
+	}
+	for _, full := range []string{"1.2.3", "v1.2.3", "1.2.3-rc.1"} {
+		if cleanVersion(full) == "" {
+			t.Errorf("cleanVersion(%q) rejected", full)
+		}
+	}
+}
+
+func TestWindowsGetsNoUpgradeCommand(t *testing.T) {
+	previous := goos
+	goos = "windows"
+	t.Cleanup(func() { goos = previous })
+
+	got := Status("0.1.0", "abc", State{LatestVersion: "0.3.0"})
+
+	if got.UpdateAvailable == nil || !*got.UpdateAvailable || got.UpgradeCommand != "" {
+		t.Errorf("update_available %v upgrade_command %q, want true and none", got.UpdateAvailable, got.UpgradeCommand)
+	}
+}
