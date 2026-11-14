@@ -137,6 +137,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if !format.JSONMode(cmd.Flags(), stdout) {
 		events = prettyEvents{format.NewWriter(stdout, "pretty")}
 	}
+	started := time.Now()
 	launch := localrun.Launch{Root: root, Framework: framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
 	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), List: f.list, Timeout: f.timeout})
 	switch {
@@ -144,6 +145,12 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
 	case errors.Is(err, localrun.ErrInterrupted):
 		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
+		if !sum.Reported {
+			sum.MS = time.Since(started).Milliseconds()
+			if werr := localrun.WriteInterruptedSummary(events, sum); werr != nil {
+				return 0, contract.Errorf(contract.InternalError, "could not write the event stream: %v", werr)
+			}
+		}
 		return contract.ExitInterrupted, nil
 	case err != nil:
 		return 0, err
