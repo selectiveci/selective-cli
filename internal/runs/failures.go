@@ -2,6 +2,7 @@ package runs
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -53,12 +54,10 @@ func fetchFailures(client *api.Client, opts FailuresOptions) (*api.FailuresPage,
 			return nil, err
 		}
 		page.Failures = filterSuite(page.Failures, opts.Suite)
-		if merged == nil {
-			merged = page
-		} else {
-			merged.Failures = append(merged.Failures, page.Failures...)
-			merged.NextCursor = page.NextCursor
+		if merged != nil {
+			page.Failures = append(merged.Failures, page.Failures...)
 		}
+		merged = page
 		if single || page.NextCursor == nil {
 			break
 		}
@@ -134,8 +133,16 @@ func continueCommand(opts FailuresOptions, page *api.FailuresPage) string {
 	return strings.Join(append(parts, "--cursor", shellQuote(*page.NextCursor)), " ")
 }
 
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+var hostOS = runtime.GOOS
+
+func shellQuote(value string) string { return quoteFor(hostOS, value) }
+
+func quoteFor(goos, value string) string {
+	escaped := `'\''`
+	if goos == "windows" {
+		escaped = "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", escaped) + "'"
 }
 
 func describeOutcome(outcome string) string {

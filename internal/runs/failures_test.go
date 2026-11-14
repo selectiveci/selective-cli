@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -207,5 +208,54 @@ func TestFailuresContinuationKeepsHostnameAndOrgAndShellQuotesEveryValue(t *test
 				t.Errorf("stderr %q, want suffix %q", errOut, want)
 			}
 		})
+	}
+}
+
+func TestQuotersEscapeAnEmbeddedSingleQuoteForTheirShell(t *testing.T) {
+	cases := []struct{ goos, value, want string }{
+		{"linux", "it's $(id)", `'it'\''s $(id)'`},
+		{"darwin", "it's", `'it'\''s'`},
+		{"windows", "it's $(id)", `'it''s $(id)'`},
+		{"windows", "plain", `'plain'`},
+	}
+	for _, tc := range cases {
+		if got := quoteFor(tc.goos, tc.value); got != tc.want {
+			t.Errorf("quoteFor(%q, %q) = %s, want %s", tc.goos, tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestContinuationHintUsesTheHostShellQuoting(t *testing.T) {
+	hostOS = "windows"
+	t.Cleanup(func() { hostOS = runtime.GOOS })
+	s := &stub{pages: map[string]string{"": page(failedRow, `"c'2"`)}}
+	env, _, errOut := s.env(t, false)
+
+	err := Failures(env, FailuresOptions{Build: "b-1", Suite: "it's", Limit: 1})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "More results: sel failures 'b-1' --suite 'it''s' --limit 1 --cursor 'c''2'\n"
+	if !strings.HasSuffix(errOut.String(), want) {
+		t.Errorf("stderr %q, want suffix %q", errOut, want)
+	}
+}
+
+func TestFailuresTakesPageMetadataFromTheLastPageFetched(t *testing.T) {
+	running := `{"build_id":"b-1","status":"running","archived":false,"archived_failed_count":0,"archived_flaky_failed_count":0,"failures":[` + failedRow + `],"next_cursor":"c2"}`
+	archived := `{"build_id":"b-1","status":"completed","archived":true,"archived_failed_count":3,"archived_flaky_failed_count":1,"failures":[` + flakyRow + `],"next_cursor":null}`
+	s := &stub{pages: map[string]string{"": running, "c2": archived}}
+	env, out, _ := s.env(t, true)
+
+	err := Failures(env, FailuresOptions{Build: "b-1", Outcome: "all"})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"status":"completed"`, `"archived":true`, `"archived_failed_count":3`, `"archived_flaky_failed_count":1`, `"id":"01-a"`, `"id":"01-b"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout lacks %s: %s", want, out)
+		}
 	}
 }
