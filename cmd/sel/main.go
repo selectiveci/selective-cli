@@ -152,7 +152,7 @@ func authCmd() *cobra.Command {
 
 CI and agents can skip logging in: set SELECTIVE_TOKEN (and SELECTIVE_HOST
 for a server other than app.selective.ci).`,
-		Annotations: map[string]string{"update_notice": "skip"},
+		Annotations: map[string]string{"help_unless_flag": "token"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if legacyToken != "" {
 				return auth.LegacyTokenLogin(legacyToken, legacyHost, version, os.Stderr)

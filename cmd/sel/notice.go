@@ -18,7 +18,10 @@ var (
 var noNoticeCommands = map[string]bool{"version": true, "help": true, "completion": true, "mcp": true}
 
 func skipsNotice(cmd *cobra.Command) bool {
-	if cmd == nil || !cmd.Runnable() || cmd.Annotations["update_notice"] == "skip" {
+	if cmd == nil || !cmd.Runnable() {
+		return true
+	}
+	if flag := cmd.Annotations["help_unless_flag"]; flag != "" && !cmd.Flags().Changed(flag) {
 		return true
 	}
 	if helpFlag := cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {

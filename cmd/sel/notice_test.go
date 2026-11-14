@@ -173,3 +173,25 @@ func TestNoticeStillPrintsWhenTheCommandFails(t *testing.T) {
 		t.Errorf("exit %d, stderr %q", got.code, got.stderr)
 	}
 }
+
+func TestAuthSkipsTheNoticeOnlyWhenItJustShowsHelp(t *testing.T) {
+	cases := map[string][]string{"bare": nil, "hostname only": {"hostname"}, "legacy token login": {"token"}}
+	want := map[string]bool{"bare": true, "hostname only": true, "legacy token login": false}
+	for name, set := range cases {
+		t.Run(name, func(t *testing.T) {
+			cmd, _, err := newRoot().Find([]string{"auth"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, flag := range set {
+				if err := cmd.Flags().Set(flag, "x"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if got := skipsNotice(cmd); got != want[name] {
+				t.Errorf("skipsNotice = %v, want %v", got, want[name])
+			}
+		})
+	}
+}
