@@ -7,11 +7,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
 func fakeRunner() int {
+	if os.Getenv("FAKE_IGNORE_SIGINT") == "1" {
+		signal.Ignore(syscall.SIGINT)
+	}
 	fmt.Println("fake runner stdout noise")
 	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
