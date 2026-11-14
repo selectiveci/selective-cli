@@ -36,6 +36,7 @@ type FailuresPage struct {
 	ArchivedFlakyFailedCount int       `json:"archived_flaky_failed_count"`
 	Failures                 []Failure `json:"failures"`
 	NextCursor               *string   `json:"next_cursor"`
+	Notices                  []string  `json:"notices,omitempty"`
 }
 
 type FailuresQuery struct {

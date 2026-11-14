@@ -22,7 +22,9 @@ failures; the build's outcome is sel tail's job.
 --outcome picks which results: failed (the default), flaky (failed, then
 passed on retry) or all.
 
-Without --limit, pages are fetched until next_cursor is null (up to 20000 results, after which next_cursor is set). With
+Without --limit, pages are fetched until next_cursor is null. The walk stops
+early after 20000 results or 2000 requests, whichever comes first:
+next_cursor is then set and notices carries pagination_stopped_early. With
 --limit N, one page of at most N (max 200) is returned, and next_cursor
 (when not null) goes to --cursor for the next page.
 

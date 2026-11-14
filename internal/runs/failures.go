@@ -13,10 +13,12 @@ import (
 )
 
 const (
-	pageSize         = 200
-	maxPages         = 100
-	errorWidth       = 100
-	provisionalMarks = "*"
+	pageSize               = 200
+	maxFailures            = 20000
+	maxRequests            = 2000
+	paginationStoppedEarly = "pagination_stopped_early"
+	errorWidth             = 100
+	provisionalMarks       = "*"
 )
 
 type FailuresOptions struct {
@@ -48,7 +50,7 @@ func fetchFailures(client *api.Client, opts FailuresOptions) (*api.FailuresPage,
 		query.Limit = pageSize
 	}
 	var merged *api.FailuresPage
-	for pages := 0; pages < maxPages; pages++ {
+	for requests := 0; requests < maxRequests; requests++ {
 		page, err := client.Failures(opts.Build, query)
 		if err != nil {
 			return nil, err
@@ -61,10 +63,16 @@ func fetchFailures(client *api.Client, opts FailuresOptions) (*api.FailuresPage,
 		if single || page.NextCursor == nil {
 			break
 		}
+		if len(merged.Failures) >= maxFailures {
+			break
+		}
 		query.Cursor = *page.NextCursor
 	}
 	if merged.Failures == nil {
 		merged.Failures = []api.Failure{}
+	}
+	if !single && merged.NextCursor != nil {
+		merged.Notices = append(merged.Notices, paginationStoppedEarly)
 	}
 	return merged, nil
 }
