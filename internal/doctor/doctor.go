@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
@@ -43,9 +44,10 @@ type Options struct {
 }
 
 type state struct {
-	opts Options
-	cfg  *config.Config
-	host string
+	opts   Options
+	cfg    *config.Config
+	host   string
+	secret string
 }
 
 type step struct {
@@ -67,10 +69,13 @@ func Run(opts Options) *Report {
 	report := &Report{Status: "pass"}
 	for _, st := range steps {
 		var c Check
-		if by := blockedBy[st.after]; by != "" {
+		switch by := blockedBy[st.after]; {
+		case by != "":
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because " + by + " failed"}
 			blockedBy[st.name] = by
-		} else {
+		case ctx.Err() != nil:
+			c = Check{Name: st.name, Status: Skip, Message: "skipped because the run's timeout expired"}
+		default:
 			c = runWithin(ctx, s, st)
 			if c.Status == Fail {
 				blockedBy[st.name] = st.name
@@ -87,13 +92,25 @@ func Run(opts Options) *Report {
 
 func runWithin(ctx context.Context, s *state, st step) Check {
 	done := make(chan Check, 1)
-	go func() { done <- st.run(s) }()
+	go func() {
+		c := st.run(s)
+		done <- c.redact(s.secret)
+	}()
 	select {
 	case c := <-done:
 		return c
 	case <-ctx.Done():
 		return fail(st.name, contract.Timeout, fmt.Sprintf("did not finish within %s", s.opts.Timeout), "")
 	}
+}
+
+func (c Check) redact(secret string) Check {
+	if secret == "" {
+		return c
+	}
+	c.Message = strings.ReplaceAll(c.Message, secret, "[redacted]")
+	c.Fix = strings.ReplaceAll(c.Fix, secret, "[redacted]")
+	return c
 }
 
 func summarize(checks []Check) string {
