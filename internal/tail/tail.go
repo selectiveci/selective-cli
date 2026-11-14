@@ -97,8 +97,8 @@ func detect(commit string) (repo, sha string, err error) {
 	return ctx.Repo, commit, nil
 }
 
-func lookupOnce(client *api.Client, repo, sha string) (string, error) {
-	build, err := client.LookupBuild(repo, sha)
+func lookupOnce(ctx context.Context, client *api.Client, repo, sha string) (string, error) {
+	build, err := client.WithContext(ctx).LookupBuild(repo, sha)
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
 		return "", nil
@@ -112,7 +112,7 @@ func lookupOnce(client *api.Client, repo, sha string) (string, error) {
 func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts wait.Options) (string, error) {
 	missing := contract.Errorf(contract.NoBuild, "no build for repo %q commit %s", repo, shortSHA(sha))
 	if opts.Limit <= 0 {
-		buildID, err := lookupOnce(client, repo, sha)
+		buildID, err := lookupOnce(ctx, client, repo, sha)
 		if err == nil && buildID == "" {
 			missing.Message += "; push your branch and wait for CI to start, or re-run with --wait"
 			return "", missing
@@ -121,11 +121,11 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 	}
 
 	var buildID string
-	err := wait.Poll(ctx, opts, func(context.Context) (bool, time.Duration, error) {
+	err := wait.Poll(ctx, opts, func(checkCtx context.Context) (bool, time.Duration, error) {
 		var err error
-		buildID, err = lookupOnce(client, repo, sha)
+		buildID, err = lookupOnce(checkCtx, client, repo, sha)
 		var apiErr *api.Error
-		if errors.As(err, &apiErr) && apiErr.Code == contract.RateLimited {
+		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusTooManyRequests || apiErr.Code == contract.RateLimited) {
 			return false, wait.RetryAfter(err), nil
 		}
 		return buildID != "", 0, err
@@ -139,7 +139,7 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 }
 
 func deadlineCause(ctx context.Context, err error) error {
-	if errors.Is(err, context.DeadlineExceeded) {
+	if ctx.Err() != nil {
 		return context.Cause(ctx)
 	}
 	return err
@@ -180,6 +180,22 @@ func heartbeats(ctx context.Context, interval time.Duration, lastLine *atomic.In
 	}
 }
 
+func dialError(resp *http.Response, err error) error {
+	status := 0
+	if resp != nil {
+		status = resp.StatusCode
+	}
+	switch {
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return contract.Errorf(contract.Unauthorized, "Selective refused the connection (HTTP %d): the token is invalid, expired or can't see this build; run: sel auth login", status)
+	case status == http.StatusNotFound:
+		return contract.Errorf(contract.NotFound, "Selective has no tail for this build (HTTP 404)")
+	case status >= 500:
+		return contract.Errorf(contract.ServerError, "Selective failed the connection (HTTP %d)", status)
+	}
+	return contract.Errorf(contract.NetworkError, "could not connect to Selective: %v", err)
+}
+
 func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, interval time.Duration, timedOut *atomic.Bool) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -218,12 +234,12 @@ func stream(parent context.Context, commandStart time.Time, host, token, buildID
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
+	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		if parent.Err() != nil {
 			return refuse(deadlineCause(parent, parent.Err()))
 		}
-		return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "could not connect to Selective: %v", err)
+		return refuse(dialError(resp, err))
 	}
 	defer func() { _ = conn.CloseNow() }()
 

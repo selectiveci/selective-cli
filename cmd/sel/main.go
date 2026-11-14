@@ -73,7 +73,7 @@ func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bo
 	if jsonFlagGiven(args) {
 		return true
 	}
-	if f := cmd.Flags().Lookup("format"); f != nil && f.Changed {
+	if f := cmd.Flags().Lookup("format"); f != nil && f.Changed && f.Value.String() != "" {
 		return f.Value.String() == "ndjson"
 	}
 	return format.JSONMode(cmd.Flags(), stdout)

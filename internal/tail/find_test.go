@@ -90,3 +90,19 @@ func TestFindBuildWithoutAWaitSurfacesARateLimitInsteadOfNoBuild(t *testing.T) {
 		t.Errorf("err = %v after %d lookups, want one rate_limited", err, calls.Load())
 	}
 }
+
+func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
+	proxyLimit := func(w http.ResponseWriter) {
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"too_many_requests"}`))
+	}
+	client, calls := lookupServer(t, proxyLimit, found)
+	clock := &fakeClock{}
+
+	id, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour, Clock: clock})
+
+	if err != nil || id != "b9" || !slices.Equal(clock.sleeps, []time.Duration{7 * time.Second}) || calls.Load() != 2 {
+		t.Errorf("id=%q err=%v sleeps=%v lookups=%d, want b9 after one 7s wait", id, err, clock.sleeps, calls.Load())
+	}
+}

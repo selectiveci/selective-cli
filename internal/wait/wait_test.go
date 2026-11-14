@@ -243,3 +243,70 @@ func TestPollKeepsItsLimitFromItsOwnStartWhenAnOriginIsGiven(t *testing.T) {
 		t.Errorf("err=%v now=%v, want expiry exactly 10s after Poll began", err, clock.now)
 	}
 }
+
+type brokenWriter struct{}
+
+var errBrokenPipe = errors.New("broken pipe")
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, errBrokenPipe }
+
+func TestPollStopsWhenItCanNoLongerWriteItsWaitingLines(t *testing.T) {
+	for _, pretty := range []bool{false, true} {
+		clock := &fakeClock{}
+		check, calls := doneAfter(1000, nil)
+
+		err := Poll(context.Background(), Options{Limit: time.Hour, Out: brokenWriter{}, Pretty: pretty, Clock: clock}, check)
+
+		if !errors.Is(err, errBrokenPipe) || *calls != 1 || len(clock.sleeps) != 0 {
+			t.Errorf("pretty=%v: err=%v checks=%d sleeps=%v, want the write error after one check", pretty, err, *calls, clock.sleeps)
+		}
+	}
+}
+
+func TestPollGivesEachCheckOnlyTheRemainingBudget(t *testing.T) {
+	check := func(ctx context.Context) (bool, time.Duration, error) {
+		select {
+		case <-ctx.Done():
+			return false, 0, ctx.Err()
+		case <-time.After(time.Second):
+			return true, 0, nil
+		}
+	}
+	began := time.Now()
+
+	err := Poll(context.Background(), Options{For: "build", Limit: 50 * time.Millisecond}, check)
+
+	var expired *ExpiredError
+	if !errors.As(err, &expired) || time.Since(began) > 500*time.Millisecond {
+		t.Errorf("err=%v after %s, want *ExpiredError within the 50ms budget", err, time.Since(began))
+	}
+}
+
+func TestPollReportsACancelledContextAsCancelledNotExpired(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := Poll(ctx, Options{Limit: time.Hour}, func(ctx context.Context) (bool, time.Duration, error) {
+		return false, 0, ctx.Err()
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err=%v, want context.Canceled", err)
+	}
+}
+
+func TestPollRunsTheCheckAtTheLimitWithAShortGraceRatherThanSkippingIt(t *testing.T) {
+	clock := &fakeClock{}
+	var budgets []time.Duration
+	check := func(ctx context.Context) (bool, time.Duration, error) {
+		deadline, _ := ctx.Deadline()
+		budgets = append(budgets, time.Until(deadline).Round(time.Second))
+		return len(budgets) == 2, 0, nil
+	}
+
+	err := Poll(context.Background(), Options{Limit: 2 * time.Second, Clock: clock}, check)
+
+	if err != nil || len(budgets) != 2 || budgets[1] != FinalCheckGrace {
+		t.Errorf("err=%v budgets=%v, want nil and a final check given the %s grace", err, budgets, FinalCheckGrace)
+	}
+}

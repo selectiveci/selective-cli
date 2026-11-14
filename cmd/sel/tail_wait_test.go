@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"nhooyr.io/websocket"
 )
@@ -133,5 +134,36 @@ func TestTailRefusesWaitAndTimeoutValuesItCannotHonour(t *testing.T) {
 
 			assertRefusal(t, res, 5, "usage_error")
 		})
+	}
+}
+
+func hangingLookupServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestTailWaitBoundsALookupThatHangs(t *testing.T) {
+	srv := hangingLookupServer(t)
+	began := time.Now()
+
+	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--wait=1s", "--json")
+
+	if el := time.Since(began); res.exit != 3 || el > 8*time.Second || !strings.Contains(res.stdout, `"error":"no_build"`) {
+		t.Errorf("exit = %d after %s stdout = %q, want exit 3 no_build within the wait", res.exit, el, res.stdout)
+	}
+}
+
+func TestTailTimeoutBoundsALookupThatHangs(t *testing.T) {
+	srv := hangingLookupServer(t)
+	began := time.Now()
+
+	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--timeout=1s", "--json")
+
+	if el := time.Since(began); res.exit != 8 || el > 8*time.Second || !strings.Contains(res.stdout, `"error":"timeout"`) {
+		t.Errorf("exit = %d after %s stdout = %q, want exit 8 timeout within the limit", res.exit, el, res.stdout)
 	}
 }

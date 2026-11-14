@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -56,4 +61,49 @@ func TestTailKeepsAnUnusableHostAsANetworkError(t *testing.T) {
 	res := runBinary(t, gitRepo(t), "   ", "tail", "--json")
 
 	assertRefusal(t, res, 4, "network_error")
+}
+
+func TestTailTreatsAnEmptyFormatAsTheDefault(t *testing.T) {
+	srv := tailServer{lookupStatus: http.StatusNotFound, lookupBody: `{"error":"no_build"}`}.start(t)
+
+	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--format=")
+
+	assertRefusal(t, res, 3, "no_build")
+}
+
+func TestTailWithoutALoginPointsAtPlainLoginNotSetup(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "tail", "--json")
+	cmd.Dir = gitRepo(t)
+	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST=http://127.0.0.1:9", "SELECTIVE_TOKEN=", "SELECTIVE_CONFIG_DIR="+t.TempDir())
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	_ = cmd.Run()
+
+	out := stdout.String()
+	if !strings.Contains(out, `"error":"unauthorized"`) || !strings.Contains(out, "sel auth login") || strings.Contains(out, "--setup") {
+		t.Errorf("stdout = %q, want unauthorized pointing at `sel auth login` without --setup", out)
+	}
+}
+
+func TestTailClassifiesAHandshakeRefusalByItsStatus(t *testing.T) {
+	cases := []struct {
+		status int
+		exit   int
+		code   string
+	}{
+		{http.StatusUnauthorized, 4, "unauthorized"},
+		{http.StatusForbidden, 4, "unauthorized"},
+		{http.StatusNotFound, 3, "not_found"},
+		{http.StatusBadGateway, 4, "server_error"},
+	}
+	for _, tc := range cases {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status) }))
+			t.Cleanup(srv.Close)
+
+			res := runBinary(t, gitRepo(t), srv.URL, "tail", "--run-id", "b", "--json")
+
+			assertRefusal(t, res, tc.exit, tc.code)
+		})
+	}
 }
