@@ -30,6 +30,7 @@ func (c *fakeClock) Sleep(_ context.Context, d time.Duration) error {
 
 func lookupServer(t *testing.T, replies ...func(http.ResponseWriter)) (*api.Client, *atomic.Int32) {
 	t.Helper()
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := int(calls.Add(1))
@@ -48,7 +49,7 @@ func rateLimited(w http.ResponseWriter) {
 func found(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"build_id":"b9"}`)) }
 
 func TestFindBuildWaitsOutARateLimitForTheRetryAfterItSent(t *testing.T) {
-	client, calls := lookupServer(t, rateLimited, found)
+	client, calls := lookupServer(t, rateLimited, rateLimited, rateLimited, found)
 	clock := &fakeClock{}
 
 	id, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour, Clock: clock})
@@ -56,8 +57,8 @@ func TestFindBuildWaitsOutARateLimitForTheRetryAfterItSent(t *testing.T) {
 	if err != nil || id != "b9" {
 		t.Fatalf("findBuild = %q, %v, want b9", id, err)
 	}
-	if want := []time.Duration{7 * time.Second}; !slices.Equal(clock.sleeps, want) || calls.Load() != 2 {
-		t.Errorf("sleeps = %v after %d lookups, want [7s] after 2", clock.sleeps, calls.Load())
+	if want := []time.Duration{7 * time.Second}; !slices.Equal(clock.sleeps, want) || calls.Load() != 4 {
+		t.Errorf("sleeps = %v after %d lookups, want [7s] after 4 (3 client attempts, then the poll)", clock.sleeps, calls.Load())
 	}
 }
 
@@ -86,8 +87,8 @@ func TestFindBuildWithoutAWaitSurfacesARateLimitInsteadOfNoBuild(t *testing.T) {
 	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{})
 
 	var coded contract.Coded
-	if !errors.As(err, &coded) || coded.ErrorCode() != contract.RateLimited || calls.Load() != 1 {
-		t.Errorf("err = %v after %d lookups, want one rate_limited", err, calls.Load())
+	if !errors.As(err, &coded) || coded.ErrorCode() != contract.RateLimited || calls.Load() != 3 {
+		t.Errorf("err = %v after %d lookups, want rate_limited after the client's 3 attempts", err, calls.Load())
 	}
 }
 
@@ -97,12 +98,12 @@ func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"error":"too_many_requests"}`))
 	}
-	client, calls := lookupServer(t, proxyLimit, found)
+	client, calls := lookupServer(t, proxyLimit, proxyLimit, proxyLimit, found)
 	clock := &fakeClock{}
 
 	id, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour, Clock: clock})
 
-	if err != nil || id != "b9" || !slices.Equal(clock.sleeps, []time.Duration{7 * time.Second}) || calls.Load() != 2 {
-		t.Errorf("id=%q err=%v sleeps=%v lookups=%d, want b9 after one 7s wait", id, err, clock.sleeps, calls.Load())
+	if err != nil || id != "b9" || !slices.Equal(clock.sleeps, []time.Duration{7 * time.Second}) || calls.Load() != 4 {
+		t.Errorf("id=%q err=%v sleeps=%v lookups=%d, want b9 after one 7s wait and 4 lookups", id, err, clock.sleeps, calls.Load())
 	}
 }

@@ -61,22 +61,51 @@ func (c *Client) requestContext() context.Context {
 }
 
 func (c *Client) do(method, path string, body any, want int, out any) error {
-	var reader io.Reader
+	return c.doWith(nil, method, path, body, want, out)
+}
+
+func (c *Client) doWith(header http.Header, method, path string, body any, want int, out any) error {
+	var data []byte
 	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
+		var err error
+		if data, err = json.Marshal(body); err != nil {
 			return err
 		}
+	}
+	retryable := method == http.MethodGet || header.Get("Idempotency-Key") != ""
+	ctx := c.requestContext()
+	clk := currentClock()
+	for attempt := 1; ; attempt++ {
+		err := c.attempt(header, method, path, data, want, out)
+		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !transient(err) {
+			return err
+		}
+		pause := backoff(attempt, err)
+		if deadline, ok := ctx.Deadline(); ok && !clk.Now().Add(pause).Before(deadline) {
+			return err
+		}
+		if sleepErr := clk.Sleep(ctx, pause); sleepErr != nil {
+			return networkError(c.Host, sleepErr)
+		}
+	}
+}
+
+func (c *Client) attempt(header http.Header, method, path string, data []byte, want int, out any) error {
+	var reader io.Reader
+	if data != nil {
 		reader = bytes.NewReader(data)
 	}
 	req, err := http.NewRequestWithContext(c.requestContext(), method, c.Host+path, reader)
 	if err != nil {
 		return err
 	}
+	for name, values := range header {
+		req.Header[name] = values
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	if body != nil {
+	if data != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
