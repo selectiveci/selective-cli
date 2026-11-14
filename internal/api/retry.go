@@ -32,6 +32,11 @@ func transient(err error) bool {
 	return false
 }
 
+func (c *Client) declinesRetry(err error) bool {
+	var apiErr *Error
+	return c.noRateLimitRetry && errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests
+}
+
 func backoff(attempt int) time.Duration {
 	base := baseBackoff << (attempt - 1)
 	return time.Duration(float64(base) * (1 + jitter*(2*rand.Float64()-1)))

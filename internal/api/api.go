@@ -17,11 +17,11 @@ import (
 )
 
 type Client struct {
-	Host    string
-	Token   string
-	HTTP    *http.Client
-	ctx     context.Context
-	noRetry bool
+	Host             string
+	Token            string
+	HTTP             *http.Client
+	ctx              context.Context
+	noRateLimitRetry bool
 }
 
 func (c *Client) WithContext(ctx context.Context) *Client {
@@ -30,9 +30,9 @@ func (c *Client) WithContext(ctx context.Context) *Client {
 	return &bound
 }
 
-func (c *Client) WithoutRetry() *Client {
+func (c *Client) WithoutRateLimitRetry() *Client {
 	bound := *c
-	bound.noRetry = true
+	bound.noRateLimitRetry = true
 	return &bound
 }
 
@@ -79,12 +79,12 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 			return err
 		}
 	}
-	retryable := !c.noRetry && (method == http.MethodGet || header.Get("Idempotency-Key") != "")
+	retryable := method == http.MethodGet || header.Get("Idempotency-Key") != ""
 	ctx := c.requestContext()
 	clk := currentClock()
 	for attempt := 1; ; attempt++ {
 		err := c.attempt(header, method, path, data, want, out)
-		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !transient(err) {
+		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !transient(err) || c.declinesRetry(err) {
 			return err
 		}
 		if sleepErr := clk.Sleep(ctx, backoff(attempt)); sleepErr != nil {

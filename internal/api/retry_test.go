@@ -159,13 +159,24 @@ func TestWritesAreRetriedOnlyWithAnIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestAClientWithoutRetryMakesOneRequestOnA503(t *testing.T) {
+func TestAPollingClientStillRetriesA503(t *testing.T) {
+	useClock(t)
+	client, rec := scripted(t, reply{status: 503}, reply{status: 503}, reply{status: 200})
+
+	_, err := client.WithoutRateLimitRetry().Me()
+
+	if err != nil || rec.count() != 3 {
+		t.Errorf("err %v after %d requests, want success on the third", err, rec.count())
+	}
+}
+
+func TestAPollingClientDoesNotRetryA429(t *testing.T) {
 	clock := useClock(t)
-	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
+	client, rec := scripted(t, reply{status: 429}, reply{status: 200})
 
-	_, err := client.WithoutRetry().Me()
+	_, err := client.WithoutRateLimitRetry().Me()
 
-	if codeOf(t, err) != contract.ServerError || rec.count() != 1 || len(clock.sleeps) != 0 {
-		t.Errorf("err %v after %d requests and %d waits, want the 503 after 1 and 0", err, rec.count(), len(clock.sleeps))
+	if codeOf(t, err) != contract.RateLimited || rec.count() != 1 || len(clock.sleeps) != 0 {
+		t.Errorf("err %v after %d requests and %d waits, want the 429 after 1 and 0", err, rec.count(), len(clock.sleeps))
 	}
 }
