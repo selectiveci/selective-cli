@@ -58,7 +58,7 @@ func TestWithTokenStatusLogout(t *testing.T) {
 		t.Fatalf("login output: %s", stderr.String())
 	}
 
-	if err := Status("", &stdout); err != nil {
+	if err := Status("", false, &stdout); err != nil {
 		t.Fatalf("status: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Logged in as ben@example.com") || strings.Contains(stdout.String(), "sk_live_good") {
@@ -78,7 +78,7 @@ func TestWithTokenStatusLogout(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Status(srv.URL, &stdout); err == nil || !IsSilent(err) {
+	if err := Status(srv.URL, false, &stdout); err == nil || !IsSilent(err) {
 		t.Fatalf("status after logout should fail quietly, got %v", err)
 	}
 }
@@ -100,7 +100,7 @@ func TestStatusWhenTheTokenWasRevokedElsewhere(t *testing.T) {
 	_ = Login(LoginOptions{Hostname: srv.URL, WithToken: true, Stdin: strings.NewReader("sk_live_good\n"), Stderr: &bytes.Buffer{}})
 	*revoked = true
 	var stdout bytes.Buffer
-	if err := Status("", &stdout); err == nil || !strings.Contains(stdout.String(), "rejected") {
+	if err := Status("", false, &stdout); err == nil || !strings.Contains(stdout.String(), "rejected") {
 		t.Fatalf("status = %v, %s", err, stdout.String())
 	}
 }

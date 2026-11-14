@@ -183,9 +183,39 @@ func readToken(r io.Reader) (string, error) {
 	return token, nil
 }
 
-// Status reports the login for a host and checks the token still works.
-// Returns a non-nil error (exit 1) when not logged in or the token is bad.
-func Status(hostname string, stdout io.Writer) error {
+type StatusToken struct {
+	Prefix string   `json:"prefix,omitempty"`
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+type StatusInfo struct {
+	Host        string      `json:"host"`
+	Email       string      `json:"email"`
+	Orgs        []string    `json:"orgs"`
+	TokenSource string      `json:"token_source,omitempty"`
+	Token       StatusToken `json:"token"`
+}
+
+func loginCommand(host string) string {
+	if host == config.DefaultHost {
+		return "sel auth login"
+	}
+	return "sel auth login --hostname " + host
+}
+
+func tokenSource(s credentials.Source) string {
+	switch s {
+	case credentials.SourceEnv:
+		return "env"
+	case credentials.SourceFile:
+		return "config"
+	case credentials.SourceKeyring:
+		return "keychain"
+	}
+	return ""
+}
+
+func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -196,21 +226,32 @@ func Status(hostname string, stdout io.Writer) error {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: sel auth login", host)
-		if host != config.DefaultHost {
-			fmt.Fprintf(stdout, " --hostname %s", host)
+		if jsonMode {
+			return contract.Errorf(contract.Unauthorized, "not logged in to %s; run: %s", host, loginCommand(host))
 		}
-		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: %s\n", host, loginCommand(host))
 		return errSilent
 	}
 
 	me, err := api.New(host, cred.Token).Me()
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
+		if jsonMode {
+			return contract.Errorf(contract.Unauthorized, "the stored token was rejected by %s (revoked?); run: %s", host, loginCommand(host))
+		}
 		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: sel auth login\n", host)
 		return errSilent
 	case err != nil:
 		return err
+	}
+	if jsonMode {
+		return format.Resource(stdout, "auth", StatusInfo{
+			Host:        host,
+			Email:       me.Email,
+			Orgs:        append([]string{}, me.OrgSlugs...),
+			TokenSource: tokenSource(cred.Source),
+			Token:       StatusToken{Prefix: tokenPrefix(cred.Token), Scopes: me.Scopes},
+		})
 	}
 	fmt.Fprintf(stdout, "%s\n  ✓ Logged in as %s\n  Organizations: %s\n  Token: %s (from %s)\n",
 		host, me.Email, strings.Join(me.OrgSlugs, ", "), mask(cred.Token), cred.Source)
@@ -253,11 +294,18 @@ func Logout(hostname string, stderr io.Writer) error {
 	}
 }
 
-func mask(token string) string {
+func tokenPrefix(token string) string {
 	if len(token) <= 14 {
-		return "sk_live_…"
+		return ""
 	}
-	return token[:14] + "…"
+	return token[:14]
+}
+
+func mask(token string) string {
+	if prefix := tokenPrefix(token); prefix != "" {
+		return prefix + "…"
+	}
+	return "sk_live_…"
 }
 
 // errSilent signals failure (exit 1) after the message has been printed.

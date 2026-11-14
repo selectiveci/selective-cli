@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/selectiveci/selective-cli/internal/auth"
+	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/spf13/cobra"
 )
 
@@ -128,7 +129,8 @@ func authStatusCmd() *cobra.Command {
 		Short:       "Show who you're logged in as",
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return auth.Status(hostname, os.Stdout)
+			out := cmd.OutOrStdout()
+			return auth.Status(hostname, format.JSONMode(cmd.Flags(), out), out)
 		},
 	}
 	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server")
