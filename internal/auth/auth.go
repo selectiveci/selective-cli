@@ -26,6 +26,7 @@ type LoginOptions struct {
 	WithToken bool // read a token from stdin instead of the browser flow
 	NoBrowser bool
 	Setup     bool // also ask for the setup scope: create suites, read their keys
+	Write     bool
 	Signup    bool // a new user: the page offers signup first; implies Setup
 	JSON      bool // NDJSON events on Stdout, for agents
 	Version   string
@@ -35,10 +36,14 @@ type LoginOptions struct {
 }
 
 func (o LoginOptions) scope() string {
-	if o.Setup || o.Signup {
-		return "setup"
+	var scopes []string
+	if o.Write {
+		scopes = append(scopes, "write")
 	}
-	return ""
+	if o.Setup || o.Signup {
+		scopes = append(scopes, "setup")
+	}
+	return strings.Join(scopes, " ")
 }
 
 func (o LoginOptions) emit(event map[string]any) {
@@ -178,9 +183,39 @@ func readToken(r io.Reader) (string, error) {
 	return token, nil
 }
 
-// Status reports the login for a host and checks the token still works.
-// Returns a non-nil error (exit 1) when not logged in or the token is bad.
-func Status(hostname string, stdout io.Writer) error {
+type StatusToken struct {
+	Prefix string   `json:"prefix,omitempty"`
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+type StatusInfo struct {
+	Host        string      `json:"host"`
+	Email       string      `json:"email"`
+	Orgs        []string    `json:"orgs"`
+	TokenSource string      `json:"token_source,omitempty"`
+	Token       StatusToken `json:"token"`
+}
+
+func loginCommand(host string) string {
+	if host == config.DefaultHost {
+		return "sel auth login"
+	}
+	return "sel auth login --hostname " + host
+}
+
+func tokenSource(s credentials.Source) string {
+	switch s {
+	case credentials.SourceEnv:
+		return "env"
+	case credentials.SourceFile:
+		return "config"
+	case credentials.SourceKeyring:
+		return "keychain"
+	}
+	return ""
+}
+
+func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -191,21 +226,32 @@ func Status(hostname string, stdout io.Writer) error {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: sel auth login", host)
-		if host != config.DefaultHost {
-			fmt.Fprintf(stdout, " --hostname %s", host)
+		if jsonMode {
+			return contract.Errorf(contract.Unauthorized, "not logged in to %s; run: %s", host, loginCommand(host))
 		}
-		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "%s\n  ✗ Not logged in. Run: %s\n", host, loginCommand(host))
 		return errSilent
 	}
 
 	me, err := api.New(host, cred.Token).Me()
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
+		if jsonMode {
+			return contract.Errorf(contract.Unauthorized, "the stored token was rejected by %s (revoked?); run: %s", host, loginCommand(host))
+		}
 		fmt.Fprintf(stdout, "%s\n  ✗ The stored token was rejected (revoked?). Run: sel auth login\n", host)
 		return errSilent
 	case err != nil:
 		return err
+	}
+	if jsonMode {
+		return format.Resource(stdout, "auth", StatusInfo{
+			Host:        host,
+			Email:       me.Email,
+			Orgs:        append([]string{}, me.OrgSlugs...),
+			TokenSource: tokenSource(cred.Source),
+			Token:       StatusToken{Prefix: tokenPrefix(cred.Token), Scopes: me.Scopes},
+		})
 	}
 	fmt.Fprintf(stdout, "%s\n  ✓ Logged in as %s\n  Organizations: %s\n  Token: %s (from %s)\n",
 		host, me.Email, strings.Join(me.OrgSlugs, ", "), mask(cred.Token), cred.Source)
@@ -215,13 +261,36 @@ func Status(hostname string, stdout io.Writer) error {
 	return nil
 }
 
-// Logout revokes the token on the server, then forgets it locally.
-func Logout(hostname string, stderr io.Writer) error {
+type LogoutOptions struct {
+	Hostname string
+	DryRun   bool
+	JSON     bool
+	Stdout   io.Writer
+	Stderr   io.Writer
+}
+
+type LogoutInfo struct {
+	Host    string `json:"host"`
+	Revoked *bool  `json:"revoked,omitempty"`
+}
+
+func (o LogoutOptions) report(host string, revoked bool, result string) error {
+	if !o.JSON {
+		return nil
+	}
+	info := LogoutInfo{Host: host}
+	if !o.DryRun {
+		info.Revoked = &revoked
+	}
+	return format.Write(o.Stdout, "auth", info, result, o.DryRun)
+}
+
+func Logout(opts LogoutOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	host, err := cfg.ResolveHost(hostname)
+	host, err := cfg.ResolveHost(opts.Hostname)
 	if err != nil {
 		return err
 	}
@@ -230,29 +299,39 @@ func Logout(hostname string, stderr io.Writer) error {
 	}
 	cred, err := credentials.Lookup(cfg, host)
 	if err != nil {
-		fmt.Fprintf(stderr, "Not logged in to %s.\n", host)
-		return nil
+		fmt.Fprintf(opts.Stderr, "Not logged in to %s.\n", host)
+		return opts.report(host, false, "unchanged")
+	}
+	if opts.DryRun {
+		fmt.Fprintf(opts.Stderr, "Dry run: would log out of %s and revoke the token.\n", host)
+		return opts.report(host, false, "deleted")
 	}
 
 	revokeErr := api.New(host, cred.Token).RevokeCurrent()
 	if err := credentials.Forget(cfg, host); err != nil {
 		return err
 	}
-	switch {
-	case revokeErr == nil, errors.Is(revokeErr, api.ErrUnauthorized):
-		fmt.Fprintf(stderr, "✓ Logged out of %s and revoked the token.\n", host)
-		return nil
-	default:
-		fmt.Fprintf(stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, revokeErr)
-		return nil
+	revoked := revokeErr == nil || errors.Is(revokeErr, api.ErrUnauthorized)
+	if revoked {
+		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s and revoked the token.\n", host)
+	} else {
+		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, revokeErr)
 	}
+	return opts.report(host, revoked, "deleted")
+}
+
+func tokenPrefix(token string) string {
+	if len(token) <= 14 {
+		return ""
+	}
+	return token[:14]
 }
 
 func mask(token string) string {
-	if len(token) <= 14 {
-		return "sk_live_…"
+	if prefix := tokenPrefix(token); prefix != "" {
+		return prefix + "…"
 	}
-	return token[:14] + "…"
+	return "sk_live_…"
 }
 
 // errSilent signals failure (exit 1) after the message has been printed.
