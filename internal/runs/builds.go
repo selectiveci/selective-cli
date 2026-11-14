@@ -3,8 +3,6 @@ package runs
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/format"
@@ -12,14 +10,13 @@ import (
 )
 
 type BuildsOptions struct {
-	Hostname string
-	Org      string
-	Status   string
-	Flaky    *bool
-	Branch   string
-	Limit    int
-	Cursor   string
-	All      bool
+	Org    string
+	Status string
+	Flaky  *bool
+	Branch string
+	Limit  int
+	Cursor string
+	All    bool
 }
 
 type BuildOptions struct {
@@ -36,10 +33,7 @@ func Builds(env *setup.Env, opts BuildsOptions) error {
 	if err != nil {
 		return err
 	}
-	if env.JSON {
-		return format.Document(env.Stdout, page)
-	}
-	return renderBuilds(env, org, opts, page)
+	return format.Document(env.Stdout, page)
 }
 
 func fetchBuilds(client *api.Client, org string, opts BuildsOptions) (*api.BuildsPage, error) {
@@ -82,18 +76,6 @@ func Build(env *setup.Env, opts BuildOptions) error {
 	return renderBuild(env, build)
 }
 
-var buildColumns = []column{
-	{"ID", "id", nil},
-	{"STATUS", "status", nil},
-	{"BRANCH", "branch", nil},
-	{"TESTS", "total", nil},
-	{"FAILED", "failed", nil},
-	{"FLAKY", "flaky", nil},
-	{"STARTED", "started_at", nil},
-	{"DURATION", "duration_ms", millis},
-	{"TITLE", "title", nil},
-}
-
 var buildFacts = []column{
 	{"ID", "id", nil},
 	{"Title", "title", nil},
@@ -119,55 +101,6 @@ var runColumns = []column{
 	{"TESTS", "total", nil},
 	{"FAILED", "failed", nil},
 	{"FLAKY", "flaky", nil},
-}
-
-func renderBuilds(env *setup.Env, org string, opts BuildsOptions, page *api.BuildsPage) error {
-	if len(page.Builds) == 0 {
-		fmt.Fprintln(env.Stderr, "No builds match.")
-	} else {
-		rows := [][]string{headers(buildColumns)}
-		for _, raw := range page.Builds {
-			build, err := decodeFields(raw)
-			if err != nil {
-				return err
-			}
-			rows = append(rows, build.cells(buildColumns))
-		}
-		table(env.Stdout, rows)
-	}
-	for _, notice := range page.Notices {
-		fmt.Fprintf(env.Stderr, "Notice: %s\n", noticeSentence(notice, len(page.Builds), "builds"))
-	}
-	if page.NextCursor != nil {
-		fmt.Fprintf(env.Stderr, "More results: %s\n", buildsContinuation(org, opts, *page.NextCursor))
-	}
-	return nil
-}
-
-func buildsContinuation(org string, opts BuildsOptions, cursor string) string {
-	parts := []string{"sel builds"}
-	for _, flag := range []struct{ name, value string }{
-		{"--hostname", opts.Hostname},
-		{"--org", org},
-		{"--status", opts.Status},
-	} {
-		if flag.value != "" {
-			parts = append(parts, flag.name, shellQuote(flag.value))
-		}
-	}
-	if opts.Flaky != nil {
-		parts = append(parts, "--flaky="+strconv.FormatBool(*opts.Flaky))
-	}
-	if opts.Branch != "" {
-		parts = append(parts, "--branch", shellQuote(opts.Branch))
-	}
-	if opts.Limit > 0 {
-		parts = append(parts, "--limit", strconv.Itoa(opts.Limit))
-	}
-	if opts.All {
-		parts = append(parts, "--all")
-	}
-	return strings.Join(append(parts, "--cursor", shellQuote(cursor)), " ")
 }
 
 func renderBuild(env *setup.Env, raw json.RawMessage) error {
