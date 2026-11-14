@@ -81,7 +81,9 @@ func TestSeatRefusesUnknownArgumentsWithExit2AndNothingOnStdout(t *testing.T) {
 func TestSeatDeliversTheOrchestratorsConnectedFrameFirst(t *testing.T) {
 	seat, _, seatOut, _ := seatRunner(t)
 	conn := accept(t, seat)
-	go Run(context.Background(), conn, conn, io.Discard, Options{Selector: selecting(), Timeout: 3 * time.Second})
+	go func() {
+		_, _ = Run(context.Background(), conn, conn, io.Discard, Options{Selector: selecting(), Timeout: 3 * time.Second})
+	}()
 
 	first := make(chan string, 1)
 	go func() {
@@ -115,7 +117,7 @@ func TestSeatCarriesAFakeClientThroughATwoTestRun(t *testing.T) {
 		client.result("a", "passed")
 		client.result("c", "failed")
 		client.finish()
-		io.WriteString(clientStdout, "exit\n")
+		_, _ = io.WriteString(clientStdout, "exit\n")
 	}()
 	sum, err := Run(context.Background(), conn, conn, events, Options{Selector: selecting("a", "c"), Timeout: 3 * time.Second})
 	<-scripted
@@ -130,11 +132,11 @@ func TestSeatCarriesAFakeClientThroughATwoTestRun(t *testing.T) {
 func TestSeatEndsTheStreamOnTheExitLineWithoutForwardingIt(t *testing.T) {
 	seat, clientStdout, _, code := seatRunner(t)
 	conn := accept(t, seat)
-	io.WriteString(clientStdout, "{\"type\":\"ping\"}\nexit\n")
+	_, _ = io.WriteString(clientStdout, "{\"type\":\"ping\"}\nexit\n")
 	if c := awaitCode(t, code); c != 0 {
 		t.Errorf("seat exit %d, want 0", c)
 	}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	got, _ := io.ReadAll(conn)
 	if string(got) != "{\"type\":\"ping\"}\n" {
 		t.Errorf("orchestrator received %q, want only the ping frame", got)
@@ -168,9 +170,13 @@ func TestSeatStdioWithoutASocketIsARefusal(t *testing.T) {
 
 func TestNewSeatWritesAShimThatExecsTheGivenBinary(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "dir with 'quote")
-	os.MkdirAll(bin, 0o700)
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	fake := filepath.Join(bin, "sel")
-	os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\"\n"), 0o700)
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	seat, err := NewSeat(fake)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +203,9 @@ func TestNewSeatWritesAShimThatExecsTheGivenBinary(t *testing.T) {
 
 func TestNewSeatKeepsTheSocketPathShortWhenTmpdirIsLong(t *testing.T) {
 	long := filepath.Join(t.TempDir(), strings.Repeat("d", 90))
-	os.MkdirAll(long, 0o700)
+	if err := os.MkdirAll(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("TMPDIR", long)
 	seat, err := NewSeat(os.Args[0])
 	if err != nil {
