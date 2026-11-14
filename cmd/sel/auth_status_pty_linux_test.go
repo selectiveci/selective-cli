@@ -80,3 +80,20 @@ func TestAuthStatusOnATerminalWhenNotLoggedInKeepsTheTextAndExitsFour(t *testing
 		t.Errorf("terminal output = %q (exit %d), want %q and exit 4", res.stdout, res.exit, want)
 	}
 }
+
+func TestAuthLogoutOnATerminalPrintsNothingToStdoutUnlessJSONIsAsked(t *testing.T) {
+	stub := &revokeServer{status: 204}
+	srv := stub.start(t)
+	run := func() selRun { return selRun{host: srv.URL, configDir: storeInConfigFile(t, srv.URL)} }
+
+	pretty := run().runOnATerminal(t, "auth", "logout")
+	asked := run().runOnATerminal(t, "auth", "logout", "--json")
+
+	if pretty.exit != 0 || pretty.stdout != "" {
+		t.Errorf("terminal stdout = %q (exit %d), want nothing", pretty.stdout, pretty.exit)
+	}
+	want := `{"v":1,"auth":{"host":"` + srv.URL + `","revoked":true},"result":"deleted","dry_run":false}` + "\n"
+	if asked.exit != 0 || asked.stdout != want {
+		t.Errorf("--json on a terminal = %q (exit %d), want %q", asked.stdout, asked.exit, want)
+	}
+}
