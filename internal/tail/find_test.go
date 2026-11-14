@@ -113,6 +113,7 @@ func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *test
 		<-r.Context().Done()
 	}))
 	t.Cleanup(stalled.Close)
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	client := api.New(stalled.URL, "tok")
 	client.HTTP.Timeout = 100 * time.Millisecond
 	began := time.Now()
