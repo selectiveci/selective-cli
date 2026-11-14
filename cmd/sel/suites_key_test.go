@@ -5,11 +5,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestKeyIntoGithubSecretWhenGhFailsIsAnInternalErrorWithoutASuccessDocument(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake gh is a POSIX shell script")
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/api_key") {
