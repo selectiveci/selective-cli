@@ -23,8 +23,10 @@ outcomes, failures, duration, top_failing, most_flaky or slowest; without it
 every section is returned. --limit sets the length of the three ranked lists
 (default 10, max 50).
 
-A value the server doesn't have is left out, or null when the window is known
-to be empty: an empty window has a null pass_rate, not 0.
+A value the server doesn't have is left out of the JSON, or null when the window
+is known to be empty: an empty window has a null pass_rate, not 0. On a
+terminal, - means empty, unknown means the server did not report it and n/a
+means the previous window doesn't track it; none is ever shown as 0.
 
 --suite takes a suite ID (sel suites lists them). A token limited to specific
 repositories must pass --suite.
