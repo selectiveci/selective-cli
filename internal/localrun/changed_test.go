@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -155,5 +156,35 @@ func TestChangedFilesAreRepoRootPathsEvenFromASubdirectoryWithDiffRelativeSet(t 
 	want := []string{"app/a.rb", "app/new.rb", "lib/gone.rb"}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("changed = %v err %v, want %v", got, err, want)
+	}
+}
+
+func TestChangedFilesIncludesASubmoduleChangeEvenWhenGitConfigIgnoresSubmodules(t *testing.T) {
+	dir := branchedRepo(t)
+	module := t.TempDir()
+	gitRun(t, module, "init", "-q", "-b", "main")
+	write(t, module, "m.txt", "v1\n")
+	gitRun(t, module, "add", ".")
+	gitRun(t, module, "commit", "-q", "-m", "module")
+	gitRun(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", module, "vendored")
+	gitRun(t, dir, "commit", "-q", "-m", "add the submodule")
+	gitRun(t, dir, "config", "diff.ignoreSubmodules", "all")
+
+	got, err := ChangedFiles(dir, "")
+
+	if err != nil || !slices.Contains(got, "vendored") {
+		t.Errorf("changed = %v err %v, want the submodule path among them", got, err)
+	}
+}
+
+func TestChangedFilesDefaultBaseIsNotShadowedByALocalBranchNamedOriginMain(t *testing.T) {
+	dir := branchedRepo(t)
+	gitRun(t, dir, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+	gitRun(t, dir, "branch", "origin/main", "HEAD")
+
+	got, err := ChangedFiles(dir, "")
+
+	if err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/new.rb"}) {
+		t.Errorf("changed = %v err %v, want the diff against the remote-tracking origin/main", got, err)
 	}
 }
