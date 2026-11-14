@@ -16,7 +16,6 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
-	"github.com/selectiveci/selective-cli/internal/tail"
 	"github.com/selectiveci/selective-cli/internal/update"
 	"github.com/spf13/cobra"
 )
@@ -84,11 +83,21 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 		return cmd, contract.ExitInterrupted
 	}
 	coded := classify(err, entered)
-	if format.JSONMode(cmd.Flags(), stdout) || jsonFlagGiven(args) {
+	if errorObjectOnStdout(cmd, args, stdout) {
 		_ = format.Error(stdout, coded)
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()
+}
+
+func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bool {
+	if jsonFlagGiven(args) {
+		return true
+	}
+	if f := cmd.Flags().Lookup("format"); f != nil && f.Changed && f.Value.String() != "" {
+		return f.Value.String() == "ndjson"
+	}
+	return format.JSONMode(cmd.Flags(), stdout)
 }
 
 func jsonFlagGiven(args []string) bool {
@@ -136,45 +145,6 @@ func markEntered(c *cobra.Command, entered *bool) {
 	for _, sub := range c.Commands() {
 		markEntered(sub, entered)
 	}
-}
-
-func tailCmd() *cobra.Command {
-	var runID string
-	var commitSHA string
-	var format string
-	var hostname string
-
-	cmd := &cobra.Command{
-		Use:   "tail",
-		Short: "Stream live test results for the current commit",
-		Long: `Connect to a live Selective CI build and stream test results as NDJSON.
-
-Run from inside a git repository — sel tail auto-detects the repo and HEAD commit.
-
-Exit codes:
-  0  all tests passed
-  1  real test failures
-  2  passed, but a test failed before passing on retry (safe to proceed)
-  3  no build found for this commit
-  4  authentication or network error`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			code, err := tail.Run(runID, commitSHA, format, hostname)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			}
-			if code != 0 {
-				return exitCode(code)
-			}
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&runID, "run-id", "", "Override: tail a specific build by run ID")
-	cmd.Flags().StringVar(&commitSHA, "commit", "", "Override: use this commit SHA instead of HEAD")
-	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server (default: the one you logged in to)")
-	cmd.Flags().StringVar(&format, "format", "", `Output format: "ndjson" (default when piped) or "pretty" (default on TTY)`)
-
-	return cmd
 }
 
 func suitesCmd() *cobra.Command {

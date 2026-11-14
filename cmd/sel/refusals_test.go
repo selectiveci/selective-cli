@@ -158,10 +158,11 @@ var scannedPackages = []string{
 	"internal/doctor",
 	"internal/runs",
 	"internal/setup",
+	"internal/tail",
+	"internal/wait",
 }
 
 var exemptPackages = map[string]string{
-	"internal/tail":   "Run returns its own exit code beside the error and the tail command exits with it, so its errors never reach the contract classifier",
 	"internal/update": "cache write failures are discarded and fetch failures are recorded in the cache, never returned to a command, so none reach a command's exit; TestAnUnwritableUpdateCacheLeavesTheCommandsExitAndStdoutUnchanged and TestAFailedUpdateCheckLeavesTheCommandsExitAndStdoutUnchanged prove it",
 }
 

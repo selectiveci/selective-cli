@@ -183,11 +183,12 @@ func TestTailExitCodesWithoutAStream(t *testing.T) {
 		status int
 		body   string
 		exit   int
+		code   string
 	}{
-		{"no build, legacy body", http.StatusNotFound, `{"error":"no build found for repo/sha"}`, 3},
-		{"no build, contract body", http.StatusNotFound, `{"error":"no_build","message":"No build for this repository and commit."}`, 3},
-		{"rejected token", http.StatusUnauthorized, `{"error":"unauthorized","message":"Missing, invalid or revoked API token."}`, 4},
-		{"server fault", http.StatusBadGateway, `<html>bad gateway</html>`, 4},
+		{"no build, legacy body", http.StatusNotFound, `{"error":"no build found for repo/sha"}`, 3, "no_build"},
+		{"no build, contract body", http.StatusNotFound, `{"error":"no_build","message":"No build for this repository and commit."}`, 3, "no_build"},
+		{"rejected token", http.StatusUnauthorized, `{"error":"unauthorized","message":"Missing, invalid or revoked API token."}`, 4, "unauthorized"},
+		{"server fault", http.StatusBadGateway, `<html>bad gateway</html>`, 4, "server_error"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -198,8 +199,8 @@ func TestTailExitCodesWithoutAStream(t *testing.T) {
 			if res.exit != tc.exit {
 				t.Errorf("exit = %d, want %d (stderr: %s)", res.exit, tc.exit, res.stderr)
 			}
-			if res.stdout != "" {
-				t.Errorf("stdout = %q, want empty", res.stdout)
+			if want := `"error":"` + tc.code + `"`; !strings.Contains(res.stdout, want) {
+				t.Errorf("stdout = %q, want the error object %s", res.stdout, want)
 			}
 		})
 	}
