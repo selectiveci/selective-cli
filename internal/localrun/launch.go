@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,15 @@ const (
 
 const minRubyCore = "0.3.0"
 
+var goos = runtime.GOOS
+
+func refuseWindows() error {
+	if goos == "windows" {
+		return contract.Errorf(contract.UsageError, "sel test does not run on Windows yet")
+	}
+	return nil
+}
+
 type marker struct{ file, needle string }
 
 var detectors = []struct {
@@ -40,9 +50,12 @@ var detectors = []struct {
 	{Pytest, []marker{{"pyproject.toml", "pytest"}, {"pytest.ini", ""}, {"setup.cfg", "pytest"}, {"tox.ini", "pytest"}}},
 }
 
-var rubyCoreSpec = regexp.MustCompile(`(?m)^\s+selective-ruby-core \((\d+)\.(\d+)\.(\d+)[^)]*\)`)
+var rubyCoreSpec = regexp.MustCompile(`(?m)^\s+selective-ruby-core \((\d+)\.(\d+)\.(\d+)(\.?[A-Za-z]\w*)?[^)]*\)`)
 
 func DetectFramework(root, explicit string) (Framework, error) {
+	if err := refuseWindows(); err != nil {
+		return "", err
+	}
 	if explicit != "" {
 		for _, d := range detectors {
 			if string(d.framework) == explicit {
@@ -86,6 +99,9 @@ func hasMarker(root string, markers []marker) bool {
 }
 
 func ClientCommand(root string, fw Framework, env []string) ([]string, error) {
+	if err := refuseWindows(); err != nil {
+		return nil, err
+	}
 	if fw != Pytest {
 		if err := checkRubyCore(root); err != nil {
 			return nil, err
@@ -103,7 +119,7 @@ func checkRubyCore(root string) error {
 	found := "none"
 	lock, _ := os.ReadFile(filepath.Join(root, "Gemfile.lock"))
 	if m := rubyCoreSpec.FindStringSubmatch(string(lock)); m != nil {
-		found = strings.Join(m[1:], ".")
+		found = strings.Join(m[1:4], ".") + m[4]
 		if !olderThan(m[1:], minRubyCore) {
 			return nil
 		}
@@ -119,7 +135,7 @@ func olderThan(version []string, minimum string) bool {
 			return have < need
 		}
 	}
-	return false
+	return version[3] != ""
 }
 
 func findPytestClient(root string, env []string) (string, bool) {
@@ -131,6 +147,9 @@ func findPytestClient(root string, env []string) (string, bool) {
 	dirs = append(dirs, filepath.SplitList(envValue(env, "PATH"))...)
 	for _, dir := range dirs {
 		path := filepath.Join(dir, "selective")
+		if info, err := os.Stat(path); err != nil || info.Mode()&0o111 == 0 {
+			continue
+		}
 		if script, err := os.ReadFile(path); err == nil && strings.Contains(string(script), "selective_pytest") {
 			return path, true
 		}
@@ -170,6 +189,9 @@ type client struct {
 }
 
 func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summary, error) {
+	if err := refuseWindows(); err != nil {
+		return Summary{}, err
+	}
 	argv, err := ClientCommand(l.Root, l.Framework, os.Environ())
 	if err != nil {
 		return Summary{}, err
@@ -234,6 +256,9 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 	case <-ctx.Done():
 		c.reap(syscall.SIGINT, syscall.SIGTERM)
 		return sum, ErrInterrupted
+	case <-time.After(c.grace):
+		c.reap(syscall.SIGTERM)
+		return sum, contract.Errorf(contract.RunnerError, "the test runner did not exit after reporting its finish; sel stopped it")
 	}
 }
 
