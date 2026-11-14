@@ -11,7 +11,6 @@ import (
 
 func buildsCmd() *cobra.Command {
 	var opts runs.BuildsOptions
-	var hostname string
 	var flaky bool
 	cmd := &cobra.Command{
 		Use:   "builds",
@@ -30,6 +29,11 @@ fetched until next_cursor is null, --limit being the page size (default 200).
 The walk stops early after 20000 builds or 2000 requests, whichever comes
 first: next_cursor is then set and notices carries pagination_stopped_early.
 
+On a terminal the output is a table. In it, - means the value is empty (a
+running build has no duration yet) and unknown means the server did not report
+it. Neither is ever shown as 0. Piped, or with --json, the output is one JSON
+document.
+
 The organization is --org, then SELECTIVE_ORG, then your only one.`,
 		Example: `  sel builds
   sel builds --status failed --branch main
@@ -46,7 +50,7 @@ The organization is --org, then SELECTIVE_ORG, then your only one.`,
 				opts.Flaky = &flaky
 			}
 			asJSON, _ := cmd.Flags().GetBool("json")
-			env, err := setup.Connect(hostname, asJSON)
+			env, err := setup.Connect(opts.Hostname, asJSON)
 			if err != nil {
 				return err
 			}
@@ -54,7 +58,7 @@ The organization is --org, then SELECTIVE_ORG, then your only one.`,
 			return runs.Builds(env, opts)
 		},
 	}
-	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server (default: the one you logged in to)")
+	cmd.Flags().StringVar(&opts.Hostname, "hostname", "", "Selective server (default: the one you logged in to)")
 	cmd.Flags().StringVar(&opts.Org, "org", "", "Organization slug (default: SELECTIVE_ORG, then your only organization)")
 	cmd.Flags().StringVar(&opts.Status, "status", "", "failed, running, incomplete, cancelled or success")
 	cmd.Flags().BoolVar(&flaky, "flaky", false, "Only builds with flaky tests")
@@ -73,7 +77,11 @@ func buildCmd() *cobra.Command {
 		Short: "Show one build and its runs",
 		Long: `Show a build: its status, counts and timings, and one entry per suite run.
 Exits 0 when the read succeeds, even when the build failed; the build's
-outcome is sel tail's job. A field the server leaves out is unknown.
+outcome is sel tail's job.
+
+On a terminal the output is a summary and a table of runs. - means the value is
+empty and unknown means the server did not report it; neither is ever shown as
+0. Piped, or with --json, the output is one JSON document.
 
 A build ID that exists in several of your organizations needs --org.`,
 		Example: `  sel build 8f3c9a
