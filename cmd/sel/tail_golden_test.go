@@ -12,11 +12,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/selectiveci/selective-cli/internal/api"
 	"nhooyr.io/websocket"
 )
 
 func TestMain(m *testing.M) {
 	if os.Getenv("SELECTIVE_TEST_RUN_MAIN") == "1" {
+		api.SetClock(instantClock{})
 		main()
 		return
 	}

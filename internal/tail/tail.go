@@ -111,9 +111,10 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 	}
 
 	var buildID string
+	polling := client.WithoutRateLimitRetry()
 	err := wait.Poll(ctx, opts, func(checkCtx context.Context) (bool, time.Duration, error) {
 		var err error
-		buildID, err = lookupOnce(checkCtx, client, repo, sha)
+		buildID, err = lookupOnce(checkCtx, polling, repo, sha)
 		var apiErr *api.Error
 		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusTooManyRequests || apiErr.Code == contract.RateLimited) {
 			return false, wait.RetryAfter(err), nil
