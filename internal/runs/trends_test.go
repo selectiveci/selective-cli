@@ -15,6 +15,7 @@ import (
 const trendsBody = `{"range":"week","suite_id":null,"window":{"from":"2026-11-06T00:00:00Z","to":"2026-11-13T00:00:00Z","bucket":"day"},"summary":{"tests_count":0,"pass_rate":null,"failures_count":0,"flaky_count":0,"median_build_s":null,"previous":{"pass_rate":null,"failures_count":3,"median_build_s":41.5}},"top_failing":[]}`
 
 type trendsStub struct {
+	body    string
 	mu      sync.Mutex
 	paths   []string
 	queries []url.Values
@@ -32,11 +33,18 @@ func (s *trendsStub) env(t *testing.T) (*setup.Env, *bytes.Buffer) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(trendsBody))
+		_, _ = w.Write([]byte(s.document()))
 	}))
 	t.Cleanup(srv.Close)
 	var out, errOut bytes.Buffer
 	return &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut, JSON: true}, &out
+}
+
+func (s *trendsStub) document() string {
+	if s.body != "" {
+		return s.body
+	}
+	return trendsBody
 }
 
 func TestTrendsPrintsTheDocumentKeepingNullsAndAddingNothing(t *testing.T) {
@@ -77,5 +85,19 @@ func TestTrendsSendsOnlyTheOptionsItWasGiven(t *testing.T) {
 				t.Errorf("queries = %v, want %v", s.queries, tc.want)
 			}
 		})
+	}
+}
+
+func TestTrendsPassesServerNoticesAndUnknownKeysThrough(t *testing.T) {
+	s := &trendsStub{body: `{"range":"day","notices":["metrics_unavailable"],"added_later":{"x":1}}`}
+	env, out := s.env(t)
+
+	if err := Trends(env, TrendsOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := `{"v":1,"added_later":{"x":1},"notices":["metrics_unavailable"],"range":"day"}` + "\n"
+	if out.String() != want {
+		t.Errorf("stdout = %s, want %s", out, want)
 	}
 }
