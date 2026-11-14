@@ -35,6 +35,18 @@ func transient(err error) bool {
 	return false
 }
 
+func withAttempts(err error, attempts int) error {
+	var apiErr *Error
+	if attempts < 2 || !errors.As(err, &apiErr) {
+		return err
+	}
+	if apiErr.Fields == nil {
+		apiErr.Fields = map[string]any{}
+	}
+	apiErr.Fields["attempts"] = attempts
+	return err
+}
+
 func (c *Client) declinesRetry(err error) bool {
 	var apiErr *Error
 	return c.noRateLimitRetry && errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests

@@ -85,17 +85,17 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 	for attempt := 1; ; attempt++ {
 		err := c.attempt(header, method, path, data, want, out)
 		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !transient(err) || c.declinesRetry(err) {
-			return err
+			return withAttempts(err, attempt)
 		}
 		pause := backoff(attempt, err)
 		if pause > maxRetryAfter {
-			return err
+			return withAttempts(err, attempt)
 		}
 		if deadline, ok := ctx.Deadline(); ok && !clk.Now().Add(pause).Before(deadline) {
-			return err
+			return withAttempts(err, attempt)
 		}
 		if sleepErr := clk.Sleep(ctx, pause); sleepErr != nil {
-			return networkError(c.Host, sleepErr)
+			return withAttempts(networkError(c.Host, sleepErr), attempt)
 		}
 	}
 }
