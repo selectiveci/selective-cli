@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ type noticeEnv struct {
 	stdoutTTY bool
 	stderrTTY bool
 	status    int
+	delay     time.Duration
 }
 
 func cacheJSON(extra string) string {
@@ -46,6 +48,7 @@ func (n noticeEnv) run(t *testing.T, args ...string) noticeRun {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
+		time.Sleep(n.delay)
 		w.WriteHeader(n.status)
 		_, _ = io.WriteString(w, orgsBody)
 	}))
@@ -193,5 +196,32 @@ func TestAuthSkipsTheNoticeOnlyWhenItJustShowsHelp(t *testing.T) {
 				t.Errorf("skipsNotice = %v, want %v", got, want[name])
 			}
 		})
+	}
+}
+
+type refuseGitHub struct{ base http.RoundTripper }
+
+func (r refuseGitHub) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.Contains(req.URL.Host, "github.com") {
+		return nil, errors.New("github is unreachable")
+	}
+	return r.base.RoundTrip(req)
+}
+
+func TestAFailedUpdateCheckLeavesTheCommandsExitAndStdoutUnchanged(t *testing.T) {
+	previous := http.DefaultTransport
+	http.DefaultTransport = refuseGitHub{previous}
+	t.Cleanup(func() { http.DefaultTransport = previous })
+	checked := noticeEnv{build: "0.1.0", status: 200, delay: 300 * time.Millisecond}
+	optedOut := noticeEnv{build: "0.1.0", status: 200, env: map[string]string{update.OptOutVariable: "1"}}
+
+	failing := checked.run(t, "orgs", "--json")
+	control := optedOut.run(t, "orgs", "--json")
+
+	if !failing.cacheWritten || control.cacheWritten {
+		t.Fatalf("failed check recorded in the cache = %v, opted-out run wrote the cache = %v; want true and false", failing.cacheWritten, control.cacheWritten)
+	}
+	if failing.code != 0 || failing.stdout == "" || failing.stdout != control.stdout || failing.stderr != "" {
+		t.Errorf("exit %d stdout %q stderr %q, want exit 0, stdout %q and no stderr", failing.code, failing.stdout, failing.stderr, control.stdout)
 	}
 }
