@@ -22,7 +22,7 @@ func ChangedFiles(dir, against string) ([]string, error) {
 	if !ok {
 		return nil, contract.Errorf(contract.UsageError, "no merge base between HEAD and %q; pass --against REF with a branch this one grew from", against)
 	}
-	listing, ok := gitOutput(dir, "diff", "--name-only", "-z", "--no-renames", strings.TrimSpace(base))
+	listing, ok := gitOutput(dir, "-c", "diff.relative=false", "diff", "--name-only", "-z", "--no-renames", strings.TrimSpace(base))
 	if !ok {
 		return nil, contract.Errorf(contract.InternalError, "git diff against %s failed", strings.TrimSpace(base))
 	}
@@ -36,10 +36,11 @@ func ChangedFiles(dir, against string) ([]string, error) {
 }
 
 func defaultBase(dir string) (string, bool) {
+	candidates := defaultBaseCandidates
 	if ref, ok := gitOutput(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); ok {
-		return strings.TrimSpace(ref), true
+		candidates = append([]string{strings.TrimSpace(ref)}, candidates...)
 	}
-	for _, candidate := range defaultBaseCandidates {
+	for _, candidate := range candidates {
 		if _, ok := gitOutput(dir, "rev-parse", "--verify", "--quiet", candidate+"^{commit}"); ok {
 			return candidate, true
 		}
