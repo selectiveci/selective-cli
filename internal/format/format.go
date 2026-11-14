@@ -87,6 +87,11 @@ func (fw *Writer) writePretty(raw []byte) error {
 			file, int(line),
 			fw.failStyle.Render(errMsg))
 
+	case "replay_truncated":
+		shown, _ := ev["shown"].(float64)
+		total, _ := ev["total"].(float64)
+		fmt.Fprintf(fw.w, "  … showing %d of %d failures; the rest were not replayed\n", int(shown), int(total))
+
 	case "summary":
 		passed, _ := ev["passed"].(float64)
 		failed, _ := ev["failed"].(float64)
