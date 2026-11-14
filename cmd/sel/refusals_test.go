@@ -147,7 +147,7 @@ func uncodedErrorConstructors(t *testing.T, dir string) []string {
 }
 
 func TestCommandPackagesCodeEveryRefusalAtItsSource(t *testing.T) {
-	for _, dir := range []string{".", "../../internal/setup", "../../internal/auth", "../../internal/config", "../../internal/runs", "../../internal/wait"} {
+	for _, dir := range []string{".", "../../internal/setup", "../../internal/auth", "../../internal/config", "../../internal/runs", "../../internal/tail", "../../internal/wait"} {
 		for _, at := range uncodedErrorConstructors(t, dir) {
 			t.Errorf("%s builds an uncoded error that would exit 9; use contract.Errorf, or wrap a cause with %%w", at)
 		}
