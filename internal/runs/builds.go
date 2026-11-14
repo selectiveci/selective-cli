@@ -18,11 +18,6 @@ type BuildsOptions struct {
 	All    bool
 }
 
-type BuildOptions struct {
-	ID  string
-	Org string
-}
-
 func Builds(env *setup.Env, opts BuildsOptions) error {
 	org, err := env.ResolveOrg(opts.Org)
 	if err != nil {
@@ -62,12 +57,4 @@ func fetchBuilds(client *api.Client, org string, opts BuildsOptions) (*api.Build
 		last.Notices = append(last.Notices, paginationStoppedEarly)
 	}
 	return last, nil
-}
-
-func Build(env *setup.Env, opts BuildOptions) error {
-	build, err := env.Client.Build(opts.ID, opts.Org)
-	if err != nil {
-		return err
-	}
-	return format.Resource(env.Stdout, "build", build)
 }

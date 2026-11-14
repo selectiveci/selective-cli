@@ -113,17 +113,3 @@ func (c *Client) Builds(org string, q BuildsQuery) (*BuildsPage, error) {
 	}
 	return &out, nil
 }
-
-func (c *Client) Build(id, org string) (json.RawMessage, error) {
-	path := "/api/v1/builds/" + url.PathEscape(id)
-	if org != "" {
-		path += "?" + url.Values{"org": {org}}.Encode()
-	}
-	var out struct {
-		Build json.RawMessage `json:"build"`
-	}
-	if err := c.do("GET", path, nil, http.StatusOK, &out); err != nil {
-		return nil, err
-	}
-	return out.Build, nil
-}
