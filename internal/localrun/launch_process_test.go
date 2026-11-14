@@ -219,6 +219,22 @@ func TestLaunchStopsAClientThatStaysAliveAfterReportingItsFinishAndCallsItARunne
 	}
 }
 
+func TestLaunchDoesNotCallARunnerErrorWhenTheRunnerExitsCleanlyButADescendantHoldsItsOutputOpen(t *testing.T) {
+	frames := `{"type":"test_manifest","data":{"test_cases":[{"id":"a","file_path":"f"}]}}\n{"type":"test_case_result","data":{"id":"a","status":"passed"}}\n{"type":"report_at_finish","data":{}}\n`
+	l := scriptedClient(t, "sleep 30 &\necho $! > \"$CHILDF\"\n{ printf '"+frames+"'; sleep 30; } | \"$SELECTIVE_TRANSPORT\" --stdio >/dev/null &\nsleep 0.3\nexit 0\n")
+	l.launch.Grace = 500 * time.Millisecond
+	childf := filepath.Join(l.dir, "child")
+	t.Setenv("CHILDF", childf)
+	_, err := l.run(context.Background())
+	if err != nil {
+		t.Errorf("err %v, want a clean result for a runner that exited 0 inside the grace", err)
+	}
+	child, _ := strconv.Atoi(awaitFile(t, childf))
+	if !gone(child) {
+		t.Error("the descendant outlived the launch")
+	}
+}
+
 func TestLaunchSweepsGrandchildrenAndDoesNotHangOnTheirOpenPipes(t *testing.T) {
 	l := scriptedClient(t, "sleep 60 &\necho $! > \"$CHILDF\"\nexit 0\n")
 	childf := filepath.Join(l.dir, "child")
