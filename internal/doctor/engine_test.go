@@ -15,11 +15,16 @@ func stub(name, after string, status Status, code contract.Code) step {
 	}}
 }
 
-func runSteps(t *testing.T, timeout time.Duration, injected ...step) *Report {
+func withSteps(t *testing.T, injected ...step) {
 	t.Helper()
 	saved := steps
 	steps = injected
 	t.Cleanup(func() { steps = saved })
+}
+
+func runSteps(t *testing.T, timeout time.Duration, injected ...step) *Report {
+	t.Helper()
+	withSteps(t, injected...)
 	return Run(Options{Timeout: timeout})
 }
 
@@ -68,8 +73,16 @@ func TestAStepThatOutlastsTheTimeoutFailsAndTheRestSkip(t *testing.T) {
 	t.Cleanup(func() { close(release) })
 	hang := step{"b", "a", func(*state) Check { <-release; return Check{} }}
 
+	withSteps(t, stub("a", "", OK, ""), hang, stub("c", "b", OK, ""))
+	done := make(chan *Report, 1)
 	began := time.Now()
-	report := runSteps(t, 200*time.Millisecond, stub("a", "", OK, ""), hang, stub("c", "b", OK, ""))
+	go func() { done <- Run(Options{Timeout: 200 * time.Millisecond}) }()
+	var report *Report
+	select {
+	case report = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run was still blocked 5s after a 200ms timeout: the deadline does not bound a hung step")
+	}
 	elapsed := time.Since(began)
 
 	if got, want := shape(report), "a=ok b=fail c=skip"+laterTrailer; got != want {
