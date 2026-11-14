@@ -246,6 +246,9 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 	case errors.Is(err, context.Canceled):
 		c.reap(syscall.SIGINT, syscall.SIGTERM)
 		return sum, ErrInterrupted
+	case isTimeout(err):
+		c.reap(syscall.SIGINT, syscall.SIGTERM)
+		return sum, err
 	case err != nil:
 		c.reap(noSignal, syscall.SIGTERM)
 		return sum, err
@@ -263,6 +266,11 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 		c.reap(syscall.SIGTERM)
 		return sum, contract.Errorf(contract.RunnerError, "the test runner did not exit after reporting its finish; sel stopped it")
 	}
+}
+
+func isTimeout(err error) bool {
+	var coded contract.Coded
+	return errors.As(err, &coded) && coded.ErrorCode() == contract.Timeout
 }
 
 func (c *client) reap(steps ...syscall.Signal) {

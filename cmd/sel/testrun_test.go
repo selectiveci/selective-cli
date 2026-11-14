@@ -12,7 +12,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const (
@@ -28,6 +30,8 @@ type fakeAPI struct {
 	mu         sync.Mutex
 	suites     string
 	listed     int
+	hold       chan struct{}
+	held       chan struct{}
 	status     int
 	reply      string
 	selections []map[string]any
@@ -48,6 +52,10 @@ func newFakeAPI(t *testing.T, reply string) *fakeAPI {
 	t.Helper()
 	api := &fakeAPI{suites: suitesBody, status: 200, reply: reply}
 	api.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if api.hold != nil && r.URL.Path == "/api/v1/orgs/acme/suites" {
+			api.held <- struct{}{}
+			<-api.hold
+		}
 		api.mu.Lock()
 		defer api.mu.Unlock()
 		switch {
@@ -243,6 +251,9 @@ func TestSelTestOutcomes(t *testing.T) {
 				t.Errorf("selection = %v, want outcome %q", sel, tc.outcome)
 			}
 			sum := events[len(events)-1]
+			if sum["interrupted"] != nil {
+				t.Errorf("summary = %v, want no interrupted field on a finished run", sum)
+			}
 			for key, want := range tc.summary {
 				if sum["event"] != "summary" || sum[key] != want {
 					t.Errorf("last event %v, want a summary with %s = %v", sum, key, want)
@@ -307,5 +318,136 @@ func TestSelTestSuiteFlagSkipsTheListing(t *testing.T) {
 
 	if res.exit != 0 || api.firstSelection(t)["suite_id"] != "suite-2" || api.listed != 0 {
 		t.Errorf("exit %d request %v listings %d, want the given suite and no listing", res.exit, api.firstSelection(t), api.listed)
+	}
+}
+
+func TestSelTestDeadlineWhileTheClientNeverConnectsIsATimeoutNotAnInterrupt(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	runnerEnv(t)
+	t.Setenv("FAKE_NEVER_CONNECT", "1")
+	started := time.Now()
+
+	res := selTest(t, pytestProject(t), api, "--timeout", "1s")
+
+	events := stdoutEvents(t, res.stdout)
+	if last := events[len(events)-1]; res.exit != 8 || last["error"] != "timeout" {
+		t.Errorf("exit %d last line %v, want exit 8 and a timeout error", res.exit, last)
+	}
+	if took := time.Since(started); took > 10*time.Second {
+		t.Errorf("took %s, want the 1s deadline to bound the wait", took)
+	}
+}
+
+func waitUntil(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); !done(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+func interruptedRun(t *testing.T, api *fakeAPI, ready func(stdout func() string)) ([]map[string]any, int) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "test", "--org", "acme")
+	cmd.Dir = pytestProject(t)
+	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+api.srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
+	capture := filepath.Join(t.TempDir(), "stdout")
+	out, err := os.Create(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	stdout := func() string { return string(mustRead(t, capture)) }
+	ready(stdout)
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	_ = cmd.Wait()
+	return stdoutEvents(t, stdout()), cmd.ProcessState.ExitCode()
+}
+
+func TestSelTestInterruptExitsOneThirtyAfterTheSummaryTheRunHadSoFar(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	appears := func(marker string) func(func() string) {
+		return func(stdout func() string) {
+			waitUntil(t, marker, func() bool { return strings.Contains(stdout(), marker) })
+		}
+	}
+	cases := []struct {
+		name        string
+		env         map[string]string
+		hold        bool
+		ready       func(func() string)
+		interrupted any
+		selected    float64
+	}{
+		{"mid-run", map[string]string{"FAKE_HANG": "1"}, false, appears(`"event":"selection"`), true, 1},
+		{"before the runner connects", map[string]string{"FAKE_NEVER_CONNECT": "1", "FAKE_ARGS_FILE": started}, false, func(func() string) {
+			waitUntil(t, "the runner to start", func() bool { _, err := os.Stat(started); return err == nil })
+		}, true, 0},
+		{"after the runner's own summary", map[string]string{"FAKE_LINGER": "1"}, false, appears(`"event":"summary"`), nil, 1},
+		{"while the suite is looked up", nil, true, nil, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runnerEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			api := newFakeAPI(t, selected)
+			ready := tc.ready
+			if tc.hold {
+				api.hold, api.held = make(chan struct{}), make(chan struct{}, 1)
+				t.Cleanup(func() { close(api.hold) })
+				ready = func(func() string) {
+					select {
+					case <-api.held:
+					case <-time.After(20 * time.Second):
+						t.Fatal("the suite listing never started")
+					}
+				}
+			}
+
+			events, code := interruptedRun(t, api, ready)
+
+			last := events[len(events)-1]
+			if code != 130 || eventNames(events)[len(events)-1] != "summary" || last["interrupted"] != tc.interrupted || last["selected"] != tc.selected {
+				t.Errorf("exit %d events %v, want 130 and a last summary with interrupted=%v selected=%v", code, eventNames(events), tc.interrupted, tc.selected)
+			}
+			if got := slices.Index(eventNames(events), "summary"); got != len(events)-1 {
+				t.Errorf("events %v, want exactly one summary, last", eventNames(events))
+			}
+		})
+	}
+}
+
+func TestSelTestDeadlineWithAHungRunnerStopsItWithoutWaitingOutTheGrace(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_HANG", "1")
+	started := time.Now()
+
+	res := selTest(t, pytestProject(t), newFakeAPI(t, selected), "--timeout", "1s")
+
+	if took := time.Since(started); res.exit != 8 || took > 4*time.Second {
+		t.Errorf("exit %d after %s, want a timeout (8) that signals the runner at the deadline, well inside the 5s grace", res.exit, took)
+	}
+}
+
+func TestSelTestInterruptedSummaryTimesTheRunUntilTheSignalNotTheRunnersTeardown(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_HANG", "1")
+	t.Setenv("FAKE_IGNORE_SIGINT", "1")
+	started := time.Now()
+
+	events, _ := interruptedRun(t, newFakeAPI(t, selected), func(stdout func() string) {
+		waitUntil(t, "the selection event", func() bool { return strings.Contains(stdout(), `"event":"selection"`) })
+	})
+
+	took := time.Since(started)
+	if ms, _ := events[len(events)-1]["ms"].(float64); took < 4*time.Second || ms > 3000 {
+		t.Errorf("run took %s and the summary says ms=%v, want teardown (at least 4s here) left out of ms", took, ms)
 	}
 }

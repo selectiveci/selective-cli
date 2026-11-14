@@ -7,14 +7,24 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 )
 
 func fakeRunner() int {
+	if os.Getenv("FAKE_IGNORE_SIGINT") == "1" {
+		signal.Ignore(syscall.SIGINT)
+	}
 	fmt.Println("fake runner stdout noise")
 	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
+	}
+	if os.Getenv("FAKE_NEVER_CONNECT") == "1" {
+		time.Sleep(time.Minute)
+		return 0
 	}
 	transport := exec.Command(os.Getenv("SELECTIVE_TRANSPORT"), "--stdio")
 	in, _ := transport.StdinPipe()
@@ -39,12 +49,18 @@ func fakeRunner() int {
 		case "test_manifest":
 			send("test_manifest", manifest())
 		case "run_test_cases":
+			if os.Getenv("FAKE_HANG") == "1" {
+				time.Sleep(time.Minute)
+			}
 			record(command.IDs)
 			for _, id := range command.IDs {
 				send("test_case_result", result(id))
 			}
 		case "close":
 			send("report_at_finish", map[string]any{"connection_retries": 0})
+			if os.Getenv("FAKE_LINGER") == "1" {
+				time.Sleep(time.Minute)
+			}
 			_, _ = io.WriteString(in, "exit\n")
 			_ = transport.Wait()
 			return 0
