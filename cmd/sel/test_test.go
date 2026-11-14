@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/localrun"
@@ -89,40 +88,5 @@ func TestTransportStdioKeepsRelayingAfterSIGINT(t *testing.T) {
 	_, _ = io.WriteString(stdin, "exit\n")
 	if err := cmd.Wait(); err != nil {
 		t.Errorf("seat exit after exit line: %v, want 0", err)
-	}
-}
-
-func TestOnDiskCaseSpellsEachPathPartAsTheDirectoryHasIt(t *testing.T) {
-	tree := fstest.MapFS{
-		"tests/test_calc.py": {},
-		"Docs/a.md":          {},
-		"docs/b.md":          {},
-	}
-	cases := map[string]string{
-		"TESTS":               "tests",
-		"Tests/Test_Calc.PY":  "tests/test_calc.py",
-		"docs":                "docs",
-		"tests/missing/Thing": "tests/missing/Thing",
-		".":                   ".",
-	}
-	for given, want := range cases {
-		if got := onDiskCase(tree, given); got != want {
-			t.Errorf("onDiskCase(%q) = %q, want %q", given, got, want)
-		}
-	}
-}
-
-func TestRelativeToSpellsBothPathsAsTheDiskDoes(t *testing.T) {
-	tree := fstest.MapFS{"users/me/project/tests/test_calc.py": {}}
-	cases := []struct{ root, abs, want string }{
-		{"/Users/me/project", "/users/me/project/tests", "tests"},
-		{"/users/me/project", "/Users/Me/Project/Tests/test_calc.py", "tests/test_calc.py"},
-		{"/Users/me/project", "/users/me/project", "."},
-		{"/Users/me/project", "/users/me/elsewhere", "../elsewhere"},
-	}
-	for _, tc := range cases {
-		if got, err := relativeTo(tree, tc.root, tc.abs); err != nil || got != tc.want {
-			t.Errorf("relativeTo(%q, %q) = %q, %v, want %q", tc.root, tc.abs, got, err, tc.want)
-		}
 	}
 }

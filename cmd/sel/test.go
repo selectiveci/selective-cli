@@ -6,12 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/signal"
-	"path"
-	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -170,51 +166,6 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return contract.ExitFailures, nil
 	}
 	return 0, nil
-}
-
-func candidatePaths(root string, args []string) ([]string, error) {
-	var paths []string
-	for _, arg := range args {
-		abs := arg
-		if !filepath.IsAbs(arg) {
-			abs = filepath.Join(root, arg)
-		}
-		rel, err := relativeTo(os.DirFS("/"), root, abs)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, contract.Errorf(contract.UsageError, "%s is outside the current directory; pass paths under it", arg)
-		}
-		if _, err := os.Stat(abs); err != nil {
-			return nil, contract.Errorf(contract.UsageError, "no such path: %s", arg)
-		}
-		paths = append(paths, filepath.ToSlash(rel))
-	}
-	return paths, nil
-}
-
-func onDiskCase(fsys fs.FS, rel string) string {
-	if rel == "." {
-		return rel
-	}
-	var spelled []string
-	dir := "."
-	for _, name := range strings.Split(rel, "/") {
-		if _, err := fs.Stat(fsys, path.Join(dir, name)); err != nil {
-			entries, _ := fs.ReadDir(fsys, dir)
-			if i := slices.IndexFunc(entries, func(e fs.DirEntry) bool { return strings.EqualFold(e.Name(), name) }); i >= 0 {
-				name = entries[i].Name()
-			}
-		}
-		spelled = append(spelled, name)
-		dir = path.Join(dir, name)
-	}
-	return strings.Join(spelled, "/")
-}
-
-func relativeTo(fsys fs.FS, root, abs string) (string, error) {
-	spell := func(p string) string {
-		return filepath.FromSlash("/" + onDiskCase(fsys, strings.Trim(filepath.ToSlash(filepath.Clean(p)), "/")))
-	}
-	return filepath.Rel(spell(root), spell(abs))
 }
 
 func planTest(paths []string, f testFlags) (testPlan, error) {
