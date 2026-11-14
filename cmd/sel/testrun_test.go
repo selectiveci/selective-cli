@@ -180,6 +180,9 @@ func TestSelTestSendsTheChangeAndShowsTheServersDecisionOnAnNDJSONOnlyStdout(t *
 		t.Errorf("exit %d events = %v, want %v", res.exit, got, want)
 	}
 	sel := firstNamed(events, "selection")
+	if _, hasIDs := sel["ids"]; hasIDs {
+		t.Errorf("selection = %v, want no ids without --list", sel)
+	}
 	if sel["cause"] != "map" || sel["source"] != "map" || sel["selected"] != 1.0 || sel["skipped"] != 2.0 || sel["total"] != 3.0 || sel["changed_files"] != 1.0 {
 		t.Errorf("selection = %v", sel)
 	}
@@ -437,18 +440,100 @@ func TestSelTestListPrintsTheSelectionWithIdsAndRunsNothing(t *testing.T) {
 	}
 }
 
-func TestSelTestPathsStandInForTheGitDiffAndConflictWithAgainst(t *testing.T) {
-	api := newFakeAPI(t, nothing)
-	runnerEnv(t)
-	dir := pytestProject(t)
+func TestSelTestListUnderAFullOutcomeCarriesTheIDsUnderThePathsAndEndsInASummary(t *testing.T) {
+	api := newFakeAPI(t, everything)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
 
-	res := selTest(t, dir, api, "src/other.py", "src/calc.py")
+	res := selTest(t, dir, api, "--list", "tests")
 
-	if got := anyStrings(api.firstSelection(t)["changed"]); res.exit != 0 || !slices.Equal(got, []string{"src/other.py", "src/calc.py"}) {
-		t.Errorf("exit %d changed %v, want the given paths", res.exit, got)
+	events := stdoutEvents(t, res.stdout)
+	sel := firstNamed(events, "selection")
+	want := []string{"tests/test_calc.py::test_add", "tests/test_calc.py::test_sub"}
+	last := events[len(events)-1]
+	if res.exit != 0 || !slices.Equal(anyStrings(sel["ids"]), want) || last["event"] != "summary" || last["selected"] != 2.0 {
+		t.Errorf("exit %d selection %v last %v, want ids %v and a closing summary", res.exit, sel, last, want)
 	}
-	if conflict := selTest(t, dir, api, "--against", "main", "src/calc.py"); conflict.exit != 5 {
-		t.Errorf("paths with --against: exit %d, want 5", conflict.exit)
+	if got := ranIDs(t, ran); len(got) != 0 {
+		t.Errorf("--list ran %v", got)
+	}
+}
+
+func pathsProject(t *testing.T) string {
+	t.Helper()
+	dir := pytestProject(t)
+	if err := os.MkdirAll(filepath.Join(dir, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_IDS", "tests/test_calc.py::test_add,tests/test_calc.py::test_sub,other/test_o.py::test_x")
+	return dir
+}
+
+func TestSelTestPathsFilterTheCandidatesAndTheDiffStillDrivesSelection(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+
+	res := selTest(t, dir, api, "tests")
+
+	body := api.firstSelection(t)
+	candidates := []string{}
+	for _, c := range body["test_cases"].([]any) {
+		candidates = append(candidates, fmt.Sprint(c.(map[string]any)["id"]))
+	}
+	if res.exit != 0 || !slices.Equal(candidates, []string{"tests/test_calc.py::test_add", "tests/test_calc.py::test_sub"}) {
+		t.Errorf("exit %d candidates %v, want only the tests under tests/", res.exit, candidates)
+	}
+	if got := anyStrings(body["changed"]); !slices.Equal(got, []string{"src/calc.py"}) {
+		t.Errorf("changed = %v, want the git diff and not the paths", got)
+	}
+	if got := ranIDs(t, ran); !slices.Equal(got, []string{"tests/test_calc.py::test_sub"}) {
+		t.Errorf("ran %v, want the server's pick among the candidates", got)
+	}
+}
+
+func TestSelTestAFullOutcomeRunsEverythingUnderThePathsOnly(t *testing.T) {
+	api := newFakeAPI(t, everything)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+
+	res := selTest(t, dir, api, "tests", "--against", "main")
+
+	sel := firstNamed(stdoutEvents(t, res.stdout), "selection")
+	if got := ranIDs(t, ran); res.exit != 0 || len(got) != 2 || sel["total"] != 2.0 || sel["selected"] != 2.0 {
+		t.Errorf("exit %d ran %v selection %v, want the two tests under tests/", res.exit, got, sel)
+	}
+}
+
+func TestSelTestAPathThatDoesNotExistIsAUsageErrorBeforeAnyRequest(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	runnerEnv(t)
+
+	res := selTest(t, pathsProject(t), api, "tests", "nope/")
+
+	events := stdoutEvents(t, res.stdout)
+	if last := events[len(events)-1]; res.exit != 5 || last["error"] != "usage_error" || !strings.Contains(fmt.Sprint(last["message"]), "nope") {
+		t.Errorf("exit %d last line %v, want exit 5 naming the missing path", res.exit, last)
+	}
+	if len(api.selections) != 0 {
+		t.Errorf("the server got %d selection requests, want none", len(api.selections))
+	}
+}
+
+func TestSelTestAPathWithNoTestsSelectsNothingAndExitsZero(t *testing.T) {
+	api := newFakeAPI(t, everything)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res := selTest(t, dir, api, "docs")
+
+	events := stdoutEvents(t, res.stdout)
+	last := events[len(events)-1]
+	if got := ranIDs(t, ran); res.exit != 0 || len(got) != 0 || last["event"] != "summary" || last["selected"] != 0.0 {
+		t.Errorf("exit %d ran %v last %v, want zero selected and exit 0", res.exit, got, last)
 	}
 }
 

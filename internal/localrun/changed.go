@@ -1,8 +1,6 @@
 package localrun
 
 import (
-	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -47,20 +45,4 @@ func defaultBase(dir string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func RepoPaths(dir string, paths []string) ([]string, error) {
-	prefix, ok := gitOutput(dir, "rev-parse", "--show-prefix")
-	if !ok {
-		return nil, contract.Errorf(contract.UsageError, "sel test needs a git checkout to place %s", strings.Join(paths, ", "))
-	}
-	placed := make([]string, len(paths))
-	for i, p := range paths {
-		joined := path.Join(strings.TrimSpace(prefix), filepath.ToSlash(p))
-		if filepath.IsAbs(p) || joined == ".." || strings.HasPrefix(joined, "../") {
-			return nil, contract.Errorf(contract.UsageError, "%s is outside this checkout; pass paths relative to the current directory", p)
-		}
-		placed[i] = joined
-	}
-	return placed, nil
 }

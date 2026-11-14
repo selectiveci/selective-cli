@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -56,8 +57,8 @@ The suite is the one in the organization whose repository is this checkout's
 origin remote; --suite names one. The change is every tracked file that differs from the merge base of HEAD and
 --against, committed or not; untracked files are left out. --against defaults
 to the remote's default branch (origin/HEAD, else origin/main, else
-origin/master). PATH arguments, relative to the current directory, replace the
-git diff: they are the changed files.
+origin/master). PATH arguments, relative to the current directory, limit which
+tests are candidates; the git diff still decides which of them run.
 
 Changed file paths and test ids are sent to Selective; file contents are not.
 A map that cannot speak for the change runs every test, and the selection
@@ -97,18 +98,22 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 		paths, frameworkArgs = args[:dash], args[dash:]
 	}
-	if f.timeout <= 0 || (len(paths) > 0 && f.against != "") {
-		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive, and PATH arguments cannot be combined with --against")
+	if f.timeout <= 0 {
+		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
 	root, err := os.Getwd()
 	if err != nil {
 		return 0, contract.Errorf(contract.InternalError, "%v", err)
 	}
+	candidates, err := candidatePaths(root, paths)
+	if err != nil {
+		return 0, err
+	}
 	framework, err := localrun.DetectFramework(root, f.framework)
 	if err != nil {
 		return 0, err
 	}
-	changed, err := changedPaths(root, f.against, paths)
+	changed, err := localrun.ChangedFiles(root, f.against)
 	if err != nil {
 		return 0, err
 	}
@@ -139,7 +144,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	}
 	started := time.Now()
 	launch := localrun.Launch{Root: root, Framework: framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), List: f.list, Timeout: f.timeout})
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), List: f.list, Paths: candidates, Timeout: f.timeout})
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
@@ -160,11 +165,23 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	return 0, nil
 }
 
-func changedPaths(root, against string, paths []string) ([]string, error) {
-	if len(paths) == 0 {
-		return localrun.ChangedFiles(root, against)
+func candidatePaths(root string, args []string) ([]string, error) {
+	var paths []string
+	for _, arg := range args {
+		abs := arg
+		if !filepath.IsAbs(arg) {
+			abs = filepath.Join(root, arg)
+		}
+		rel, err := filepath.Rel(root, abs)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, contract.Errorf(contract.UsageError, "%s is outside the current directory; pass paths under it", arg)
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return nil, contract.Errorf(contract.UsageError, "no such path: %s", arg)
+		}
+		paths = append(paths, filepath.ToSlash(rel))
 	}
-	return localrun.RepoPaths(root, paths)
+	return paths, nil
 }
 
 func resolveSuite(client *api.Client, org, flag string) (string, error) {
