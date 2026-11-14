@@ -398,3 +398,20 @@ func writeFile(path, body string) error {
 	}
 	return os.WriteFile(path, []byte(body), 0o600)
 }
+
+func TestServerCheckCapsEachHTTPCallAtTenSeconds(t *testing.T) {
+	isolate(t, token)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &state{cfg: cfg, host: serve(t, healthy())}
+
+	if c := s.checkServer(); c.Status != OK {
+		t.Fatalf("server = %+v", c)
+	}
+
+	if got := s.client.HTTP.Timeout; got != 10*time.Second {
+		t.Errorf("HTTP timeout = %s, want 10s", got)
+	}
+}
