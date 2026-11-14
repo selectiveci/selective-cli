@@ -139,3 +139,15 @@ func TestAContextThatExpiresDuringTheSecondAttemptReportsTwoAttempts(t *testing.
 		t.Errorf("attempts = %v err %v after %d requests, want 2 and the deadline after 2", n, err, hits.Load())
 	}
 }
+
+func TestACappedRetryAfterAfterARetryReportsTwoAttemptsAndTheAdvice(t *testing.T) {
+	useClock(t)
+	client, _ := scripted(t, reply{status: 503}, reply{429, map[string]string{"Retry-After": "11"}})
+
+	_, err := client.Me()
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Fields["attempts"] != 2 || apiErr.Fields["retry_after_s"] != 11 {
+		t.Errorf("err %v fields %v, want attempts 2 and retry_after_s 11", err, apiErr)
+	}
+}

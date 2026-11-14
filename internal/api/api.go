@@ -89,7 +89,7 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 		}
 		pause := backoff(attempt, err)
 		if pause > maxRetryAfter {
-			return err
+			return withAttempts(err, attempt)
 		}
 		if deadline, ok := ctx.Deadline(); ok && !clk.Now().Add(pause).Before(deadline) {
 			return withAttempts(err, attempt)
