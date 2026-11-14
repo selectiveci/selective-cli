@@ -313,3 +313,18 @@ func TestFailuresWithALimitNeverAddsTheStoppedEarlyNotice(t *testing.T) {
 		t.Errorf("next_cursor %v notices %v", next, notices)
 	}
 }
+
+func TestFailuresTextExplainsAnEarlyStopAndKeepsTheContinuation(t *testing.T) {
+	rows := strings.TrimSuffix(strings.Repeat(failedRow+",", 11), ",")
+	s := &stub{pages: map[string]string{"": page(rows, `"more"`), "more": page(rows, `"more"`)}}
+	env, _, errOut := s.env(t, false)
+
+	if err := Failures(env, FailuresOptions{Build: "b-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Notice: stopped early after 20009 failures; run the command below to continue\nMore results: sel failures 'b-1' --cursor 'more'\n"
+	if !strings.HasSuffix(errOut.String(), want) {
+		t.Errorf("stderr %q, want suffix %q", errOut, want)
+	}
+}

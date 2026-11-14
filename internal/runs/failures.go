@@ -100,9 +100,19 @@ func renderFailures(env *setup.Env, opts FailuresOptions, page *api.FailuresPage
 	} else {
 		renderTable(env, page)
 	}
+	for _, notice := range page.Notices {
+		fmt.Fprintf(env.Stderr, "Notice: %s\n", noticeSentence(notice, len(page.Failures)))
+	}
 	if page.NextCursor != nil {
 		fmt.Fprintf(env.Stderr, "More results: %s\n", continueCommand(opts, page))
 	}
+}
+
+func noticeSentence(notice string, count int) string {
+	if notice == paginationStoppedEarly {
+		return fmt.Sprintf("stopped early after %d failures; run the command below to continue", count)
+	}
+	return notice
 }
 
 func renderTable(env *setup.Env, page *api.FailuresPage) {
