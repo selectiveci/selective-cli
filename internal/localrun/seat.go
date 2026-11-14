@@ -39,9 +39,9 @@ func RunSeat(args []string, in io.Reader, out, errw io.Writer) int {
 }
 
 func snapshotOf(dir string, out, errw io.Writer) int {
-	snapshot, ok := takeSnapshot(dir)
-	if !ok {
-		fmt.Fprintln(errw, "not a git checkout")
+	snapshot, err := takeSnapshot(dir)
+	if err != nil {
+		fmt.Fprintln(errw, err)
 		return 1
 	}
 	return emit(out, errw, snapshot)
