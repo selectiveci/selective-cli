@@ -97,7 +97,13 @@ sel tail --run-id <id>     # a specific build
 ```
 
 Output is NDJSON when piped and readable when on a terminal
-(`--format ndjson|pretty`). Exit codes:
+(`--format ndjson|pretty`). Each suite's run reports what test selection
+decided in a `selection` event: `outcome` (`selected` or `full`), whether it
+was `applied`, its `source` (`live`, `evaluation`, or `map` before the full
+decision), and for a full run the `cause` (`code`, `path`, `rule`,
+`message`), such as the file whose change made every test run.
+
+Exit codes:
 
 | Code | Meaning |
 |---|---|

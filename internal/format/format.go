@@ -28,6 +28,7 @@ type Writer struct {
 
 	passStyle  lipgloss.Style
 	failStyle  lipgloss.Style
+	noteStyle  lipgloss.Style
 	nodeColors map[string]lipgloss.Style
 }
 
@@ -41,6 +42,7 @@ func NewWriter(w io.Writer, format string) *Writer {
 		format:     format,
 		passStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")),
 		failStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")),
+		noteStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#a3a3a3")),
 		nodeColors: make(map[string]lipgloss.Style),
 	}
 }
@@ -87,6 +89,9 @@ func (fw *Writer) writePretty(raw []byte) error {
 			file, int(line),
 			fw.failStyle.Render(errMsg))
 
+	case "selection":
+		fmt.Fprintf(fw.w, "  %s  %s\n", fw.noteStyle.Render("ⓘ"), selectionLine(ev))
+
 	case "summary":
 		passed, _ := ev["passed"].(float64)
 		failed, _ := ev["failed"].(float64)
@@ -96,6 +101,38 @@ func (fw *Writer) writePretty(raw []byte) error {
 			int(passed), int(failed), ms/1000)
 	}
 	return nil
+}
+
+// selectionLine says what selection decided for one suite's run and, when
+// it runs every test, why. A shadow run applies nothing, and its test-map
+// view is replaced by the combined decision once the run ends.
+func selectionLine(ev Event) string {
+	suite, _ := ev["suite"].(string)
+	outcome, _ := ev["outcome"].(string)
+	applied, _ := ev["applied"].(bool)
+	source, _ := ev["source"].(string)
+
+	var line string
+	switch {
+	case outcome == "full" && applied:
+		line = "running every test"
+	case outcome == "full":
+		line = "would run every test"
+	case applied:
+		line = "running the selected tests"
+	default:
+		line = "would run only the selected tests"
+	}
+
+	if cause, ok := ev["cause"].(map[string]any); ok {
+		if msg, ok := cause["message"].(string); ok && msg != "" {
+			line += ": " + msg
+		}
+	}
+	if source == "map" && !applied {
+		line += " (test map only, before the full decision)"
+	}
+	return fmt.Sprintf("%s  %s", suite, line)
 }
 
 func (fw *Writer) nodeStyle(nodeRaw any) string {
