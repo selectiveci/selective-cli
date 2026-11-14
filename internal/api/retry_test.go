@@ -193,6 +193,28 @@ func TestARetryAfterOfTenSecondsIsWaitedOut(t *testing.T) {
 	}
 }
 
+func TestARetryAfterTooLargeForADurationReturnsAtOnce(t *testing.T) {
+	clock := useClock(t)
+	client, rec := scripted(t, reply{503, map[string]string{"Retry-After": "99999999999"}}, reply{status: 200})
+
+	_, err := client.Me()
+
+	if codeOf(t, err) != contract.ServerError || rec.count() != 1 || len(clock.sleeps) != 0 {
+		t.Errorf("err %v after %d requests, sleeps %v, want the 503 after 1 and no wait", err, rec.count(), clock.sleeps)
+	}
+}
+
+func TestARetryAfterOfZeroRetriesAtOnce(t *testing.T) {
+	clock := useClock(t)
+	client, rec := scripted(t, reply{429, map[string]string{"Retry-After": "0"}}, reply{status: 200})
+
+	_, err := client.Me()
+
+	if err != nil || rec.count() != 2 || len(clock.sleeps) != 1 || clock.sleeps[0] != 0 {
+		t.Errorf("err %v after %d requests, sleeps %v, want success on the second after a zero wait", err, rec.count(), clock.sleeps)
+	}
+}
+
 func TestARetryAfterOverTenSecondsReturnsAtOnceWithTheAdvice(t *testing.T) {
 	clock := useClock(t)
 	client, rec := scripted(t, reply{429, map[string]string{"Retry-After": "11"}}, reply{status: 200})
