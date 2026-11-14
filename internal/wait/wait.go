@@ -14,6 +14,8 @@ import (
 const (
 	MinInterval = 2 * time.Second
 	MaxInterval = 15 * time.Second
+
+	FinalCheckGrace = time.Second
 )
 
 type Clock interface {
@@ -86,7 +88,10 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 	}
 	delay := MinInterval
 	for {
-		done, retryAfter, err := check(ctx)
+		done, retryAfter, err := runCheck(ctx, clock, start, opts.Limit, check)
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return &ExpiredError{For: opts.For, Limit: opts.Limit}
+		}
 		if err != nil {
 			return err
 		}
@@ -99,7 +104,9 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 		if remaining <= 0 || retryAfter > remaining {
 			return &ExpiredError{For: opts.For, Limit: opts.Limit}
 		}
-		opts.announce(now.Sub(origin))
+		if err := opts.announce(now.Sub(origin)); err != nil {
+			return err
+		}
 		if err := clock.Sleep(ctx, min(step, remaining)); err != nil {
 			return err
 		}
@@ -107,14 +114,27 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 	}
 }
 
-func (o Options) announce(elapsed time.Duration) {
+func (o Options) announce(elapsed time.Duration) error {
 	if o.Out == nil {
-		return
+		return nil
 	}
 	seconds := int(elapsed.Seconds())
 	if o.Pretty {
-		fmt.Fprintf(o.Out, "waiting for %s (%ds)\n", o.For, seconds)
-		return
+		_, err := fmt.Fprintf(o.Out, "waiting for %s (%ds)\n", o.For, seconds)
+		return err
 	}
-	_ = format.EventLine(o.Out, "waiting", map[string]any{"elapsed_s": seconds, "for": o.For})
+	return format.EventLine(o.Out, "waiting", map[string]any{"elapsed_s": seconds, "for": o.For})
+}
+
+func runCheck(ctx context.Context, clock Clock, start time.Time, limit time.Duration, check Check) (bool, time.Duration, error) {
+	if limit <= 0 {
+		return check(ctx)
+	}
+	remaining := limit - clock.Now().Sub(start)
+	if remaining <= 0 {
+		remaining = FinalCheckGrace
+	}
+	budget, cancel := context.WithTimeout(ctx, remaining)
+	defer cancel()
+	return check(budget)
 }
