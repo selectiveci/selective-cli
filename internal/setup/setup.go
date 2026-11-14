@@ -39,7 +39,7 @@ type Env struct {
 func Connect(hostname string, forceJSON bool) (*Env, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("could not load config: %w", err)
+		return nil, contract.Errorf(contract.UsageError, "could not load config: %v", err)
 	}
 	host, err := cfg.ResolveHost(hostname)
 	if err != nil {
