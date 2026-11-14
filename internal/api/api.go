@@ -3,6 +3,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,13 @@ type Client struct {
 	Host  string
 	Token string
 	HTTP  *http.Client
+	ctx   context.Context
+}
+
+func (c *Client) WithContext(ctx context.Context) *Client {
+	bound := *c
+	bound.ctx = ctx
+	return &bound
 }
 
 func New(host, token string) *Client {
@@ -45,6 +53,13 @@ func (c *Client) RevokeCurrent() error {
 	return c.do("DELETE", "/api/v1/tokens/current", nil, http.StatusNoContent, nil)
 }
 
+func (c *Client) requestContext() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
+}
+
 func (c *Client) do(method, path string, body any, want int, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -54,7 +69,7 @@ func (c *Client) do(method, path string, body any, want int, out any) error {
 		}
 		reader = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(method, c.Host+path, reader)
+	req, err := http.NewRequestWithContext(c.requestContext(), method, c.Host+path, reader)
 	if err != nil {
 		return err
 	}
