@@ -79,7 +79,7 @@ func waitingOutput(format string) io.Writer {
 func detect(commit string) (repo, sha string, err error) {
 	ctx, err := gitctx.Detect()
 	if err != nil {
-		return "", "", contract.Errorf(contract.NotFound, "git detection failed: %v; run in a git repo or pass --run-id", err)
+		return "", "", contract.Errorf(contract.GitRepoNotFound, "git detection failed: %v; run in a git repo or pass --run-id", err)
 	}
 	if commit == "" {
 		commit = ctx.Commit

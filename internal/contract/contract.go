@@ -16,6 +16,7 @@ const (
 	SuiteNotFound        Code = "suite_not_found"
 	NoBuild              Code = "no_build"
 	RunnerNotFound       Code = "runner_not_found"
+	GitRepoNotFound      Code = "git_repo_not_found"
 	InvalidRequest       Code = "invalid_request"
 	ValidationFailed     Code = "validation_failed"
 	NameRequired         Code = "name_required"
@@ -74,6 +75,7 @@ var exits = map[Code]int{
 	SuiteNotFound:        ExitNotFound,
 	NoBuild:              ExitNotFound,
 	RunnerNotFound:       ExitNotFound,
+	GitRepoNotFound:      ExitNotFound,
 	InvalidRequest:       ExitUsage,
 	ValidationFailed:     ExitUsage,
 	NameRequired:         ExitUsage,

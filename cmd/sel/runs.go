@@ -91,7 +91,7 @@ Exit codes:
   0  all tests passed
   1  real test failures
   2  passed, but a test failed before passing on retry (safe to proceed)
-  3  no build found for this commit (--wait ran out)
+  3  no build found for this commit (--wait ran out), or not inside a git repository
   4  authentication or network error
   5  usage error
   8  --timeout expired`,
@@ -154,12 +154,9 @@ func tailFormat(asJSON bool, requested string) (string, error) {
 func tailConnectError(err error) error {
 	var coded contract.Coded
 	if !errors.As(err, &coded) {
-		return err
+		return contract.Errorf(contract.UsageError, "%s", err.Error())
 	}
-	switch coded.ErrorCode() {
-	case contract.UsageError:
-		return contract.Errorf(contract.NetworkError, "%s", coded.Error())
-	case contract.Unauthorized:
+	if coded.ErrorCode() == contract.Unauthorized {
 		return contract.Errorf(contract.Unauthorized, "not logged in; run: sel auth login")
 	}
 	return err

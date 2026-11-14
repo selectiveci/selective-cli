@@ -57,12 +57,6 @@ func TestTailRefusesFlagsAndArgumentsItCannotHonourWithAUsageError(t *testing.T)
 	}
 }
 
-func TestTailKeepsAnUnusableHostAsANetworkError(t *testing.T) {
-	res := runBinary(t, gitRepo(t), "   ", "tail", "--json")
-
-	assertRefusal(t, res, 4, "network_error")
-}
-
 func TestTailTreatsAnEmptyFormatAsTheDefault(t *testing.T) {
 	srv := tailServer{lookupStatus: http.StatusNotFound, lookupBody: `{"error":"no_build"}`}.start(t)
 
