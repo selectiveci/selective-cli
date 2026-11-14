@@ -28,6 +28,7 @@ type Options struct {
 	Format  string
 	Wait    time.Duration
 	Timeout time.Duration
+	Started time.Time
 }
 
 func Run(client *api.Client, opts Options) (int, error) {
@@ -41,6 +42,9 @@ func Run(client *api.Client, opts Options) (int, error) {
 	if opts.Format == "" {
 		opts.Format = format.DefaultFormat()
 	}
+	if opts.Started.IsZero() {
+		opts.Started = time.Now()
+	}
 
 	buildID := opts.RunID
 	if buildID == "" {
@@ -48,18 +52,13 @@ func Run(client *api.Client, opts Options) (int, error) {
 		if err != nil {
 			return refuse(err)
 		}
-		buildID, err = findBuild(ctx, client, repo, sha, wait.Options{
-			For:    "build",
-			Limit:  opts.Wait,
-			Out:    waitingOutput(opts.Format),
-			Pretty: opts.Format != "ndjson",
-		})
+		buildID, err = findBuild(ctx, client, repo, sha, waitOptions(opts))
 		if err != nil {
 			return refuse(deadlineCause(ctx, err))
 		}
 	}
 
-	return stream(ctx, client.Host, client.Token, buildID, opts.Format)
+	return stream(ctx, opts.Started, client.Host, client.Token, buildID, opts.Format)
 }
 
 func refuse(err error) (int, error) {
@@ -68,6 +67,16 @@ func refuse(err error) (int, error) {
 		return coded.ExitCode(), err
 	}
 	return contract.ExitInternal, err
+}
+
+func waitOptions(opts Options) wait.Options {
+	return wait.Options{
+		For:    "build",
+		Limit:  opts.Wait,
+		Origin: opts.Started,
+		Out:    waitingOutput(opts.Format),
+		Pretty: opts.Format != "ndjson",
+	}
 }
 
 func waitingOutput(format string) io.Writer {
@@ -154,11 +163,11 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-func heartbeats(ctx context.Context, interval time.Duration, lastLine *atomic.Int64, started time.Time, emit func(elapsedS int)) {
+func heartbeats(ctx context.Context, interval time.Duration, lastLine *atomic.Int64, commandStart time.Time, emit func(elapsedS int)) {
 	for {
 		idle := time.Since(time.Unix(0, lastLine.Load()))
 		if idle >= interval {
-			emit(int(time.Since(started).Seconds()))
+			emit(int(time.Since(commandStart).Seconds()))
 			idle = 0
 		}
 		timer := time.NewTimer(interval - idle)
@@ -195,7 +204,7 @@ func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.C
 	}
 }
 
-func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, error) {
+func stream(parent context.Context, commandStart time.Time, host, token, buildID, fmtFlag string) (int, error) {
 	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	// Phoenix serves a socket mounted at /api/v1/tail on /api/v1/tail/websocket;
@@ -225,14 +234,13 @@ func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, 
 	out := &syncWriter{w: outWriter}
 	fw := format.NewWriter(out, fmtFlag)
 
-	started := time.Now()
 	var lastLine atomic.Int64
-	lastLine.Store(started.UnixNano())
+	lastLine.Store(time.Now().UnixNano())
 	heartbeatCtx, stopHeartbeats := context.WithCancel(ctx)
 	heartbeatsDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatsDone)
-		heartbeats(heartbeatCtx, heartbeatInterval, &lastLine, started, func(elapsedS int) {
+		heartbeats(heartbeatCtx, heartbeatInterval, &lastLine, commandStart, func(elapsedS int) {
 			if fmtFlag == "ndjson" {
 				_ = format.EventLine(out, "heartbeat", map[string]any{"elapsed_s": elapsedS})
 				return

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/selectiveci/selective-cli/internal/api"
 	"nhooyr.io/websocket"
 )
 
@@ -60,7 +61,7 @@ func TestStreamAsksTheServerToReplayFailuresAtVersionOne(t *testing.T) {
 	capture(t)
 	srv, query := recordingTailServer(t, []string{summaryOneFailed})
 
-	_, _ = stream(context.Background(), srv.URL, "tok", "b", "ndjson")
+	_, _ = stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
 
 	if want := "build_id=b&replay=1&v=1"; query() != want {
 		t.Errorf("query = %q, want %q", query(), want)
@@ -82,7 +83,7 @@ func TestStreamPassesReplayedFramesThroughAndExitsFromTheSummary(t *testing.T) {
 			out, _ := capture(t)
 			srv, _ := recordingTailServer(t, tc.frames)
 
-			code, err := stream(context.Background(), srv.URL, "tok", "b", "ndjson")
+			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
 
 			if want := strings.Join(tc.frames, "\n") + "\n"; code != tc.want || err != nil || out.String() != want {
 				t.Errorf("exit %d err %v stdout %q, want exit %d and %q", code, err, out.String(), tc.want, want)
@@ -97,7 +98,7 @@ func TestStreamWritesAHeartbeatLineForEveryQuietInterval(t *testing.T) {
 	t.Cleanup(func() { heartbeatInterval = 30 * time.Second })
 	srv := quietTailServer(t, true, 2500*time.Millisecond, summaryOneFailed)
 
-	code, err := stream(context.Background(), srv.URL, "tok", "b", "ndjson")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
 
 	want := buildStart + "\n" +
 		`{"v":1,"event":"heartbeat","elapsed_s":1}` + "\n" +
@@ -114,7 +115,7 @@ func TestStreamKeepsHeartbeatsOffStdoutInPrettyMode(t *testing.T) {
 	t.Cleanup(func() { heartbeatInterval = 30 * time.Second })
 	srv := quietTailServer(t, true, 1500*time.Millisecond, summaryOneFailed)
 
-	code, err := stream(context.Background(), srv.URL, "tok", "b", "pretty")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "pretty")
 
 	if code != 1 || err != nil || strings.Contains(out.String(), "heartbeat") || strings.Count(errOut.String(), "still running") != 1 {
 		t.Errorf("exit %d err %v stdout %q stderr %q, want exit 1, one stderr note and no heartbeat on stdout", code, err, out.String(), errOut.String())
@@ -140,9 +141,39 @@ func TestStreamStaysSilentWhileFramesKeepArriving(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	code, err := stream(context.Background(), srv.URL, "tok", "b", "ndjson")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
 
 	if code != 1 || err != nil || strings.Contains(out.String(), "heartbeat") {
 		t.Errorf("exit %d err %v stdout %q, want exit 1 and no heartbeat while a frame arrives every 600ms", code, err, out.String())
+	}
+}
+
+func TestHeartbeatAndWaitingShareTheCommandClock(t *testing.T) {
+	started := time.Now().Add(-100 * time.Second)
+	if got := waitOptions(Options{Started: started, Wait: 5 * time.Second, Format: "ndjson"}); !got.Origin.Equal(started) || got.Limit != 5*time.Second || got.Pretty {
+		t.Errorf("waitOptions = %+v, want the command's start as Origin", got)
+	}
+
+	cases := []struct {
+		name    string
+		started time.Time
+		want    string
+	}{
+		{"a start the caller gives", started, `{"v":1,"event":"heartbeat","elapsed_s":101}`},
+		{"the start Run takes itself", time.Time{}, `{"v":1,"event":"heartbeat","elapsed_s":1}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _ := capture(t)
+			heartbeatInterval = time.Second
+			t.Cleanup(func() { heartbeatInterval = 30 * time.Second })
+			srv := quietTailServer(t, true, 1500*time.Millisecond, summaryOneFailed)
+
+			code, err := Run(api.New(srv.URL, "tok"), Options{RunID: "b", Format: "ndjson", Started: tc.started})
+
+			if want := buildStart + "\n" + tc.want + "\n" + summaryOneFailed + "\n"; code != 1 || err != nil || out.String() != want {
+				t.Errorf("exit %d err %v stdout %q, want exit 1 and %q", code, err, out.String(), want)
+			}
+		})
 	}
 }
