@@ -252,13 +252,20 @@ func (s *state) checkServer() Check {
 	return Check{Name: "server", Status: OK, Message: fmt.Sprintf("%s answered in %dms", s.host, ms), MS: &ms}
 }
 
+func (s *state) loginCommand() string {
+	if s.host == config.DefaultHost {
+		return loginFix
+	}
+	return loginFix + " --hostname " + s.host
+}
+
 func (s *state) checkAuth() Check {
 	if s.credErr != nil {
-		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, loginFix)
+		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, s.loginCommand())
 	}
 	if s.meErr != nil {
 		if errors.Is(s.meErr, api.ErrUnauthorized) {
-			fix := loginFix
+			fix := s.loginCommand()
 			if s.cred.Source == credentials.SourceEnv {
 				fix = "replace or unset SELECTIVE_TOKEN, then run doctor again"
 			}

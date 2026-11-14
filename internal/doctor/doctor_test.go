@@ -213,7 +213,7 @@ func TestNoCredentialFailsAuthWithTheLoginFixAndSendsNoToken(t *testing.T) {
 	report := Run(Options{Hostname: host, Timeout: time.Minute})
 
 	auth := check(t, report, "auth")
-	if auth.Status != Fail || auth.Code != contract.Unauthorized || auth.Fix != "sel auth login --setup" {
+	if auth.Status != Fail || auth.Code != contract.Unauthorized || auth.Fix != "sel auth login --setup --hostname "+host {
 		t.Errorf("auth = %+v", auth)
 	}
 	if check(t, report, "server").Status != OK || sawAuthorization != "" {
@@ -381,7 +381,7 @@ func TestARejectedTokenGetsAFixThatCanWorkForItsSource(t *testing.T) {
 	if !strings.Contains(fromEnv.Fix, "SELECTIVE_TOKEN") || strings.Contains(fromEnv.Fix, "sel auth login") {
 		t.Errorf("env fix = %q", fromEnv.Fix)
 	}
-	if fromKeychain.Fix != "sel auth login --setup" {
+	if fromKeychain.Fix != "sel auth login --setup --hostname "+rejected {
 		t.Errorf("keychain fix = %q", fromKeychain.Fix)
 	}
 }
@@ -401,5 +401,14 @@ func TestATokenEchoedAsTheEmailNeverReachesTheReportDetailOrError(t *testing.T) 
 	raw, _ := json.Marshal(report)
 	if strings.Contains(string(raw), token) || check(t, report, "auth").Detail["email"] != "[redacted]" {
 		t.Errorf("report: %s", raw)
+	}
+}
+
+func TestTheLoginFixOmitsTheHostnameOnlyForTheDefaultServer(t *testing.T) {
+	if got := (&state{host: config.DefaultHost}).loginCommand(); got != "sel auth login --setup" {
+		t.Errorf("default host fix = %q", got)
+	}
+	if got := (&state{host: "http://localhost:4444"}).loginCommand(); got != "sel auth login --setup --hostname http://localhost:4444" {
+		t.Errorf("other host fix = %q", got)
 	}
 }
