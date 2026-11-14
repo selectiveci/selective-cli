@@ -54,6 +54,7 @@ type Summary struct {
 	Selected int
 	Skipped  int
 	MS       int64
+	Reported bool
 }
 
 type inbound struct {
@@ -145,7 +146,8 @@ func (r *run) handle(ctx context.Context, frame inbound) (bool, error) {
 			return false, contract.Errorf(contract.RunnerError, "the test runner reported its finish with %d selected tests still outstanding", len(r.outstanding))
 		}
 		r.sum.MS = time.Since(r.start).Milliseconds()
-		r.event("summary", r.summaryFields())
+		r.event("summary", summaryFields(r.sum))
+		r.sum.Reported = true
 		return true, nil
 	}
 	return false, nil

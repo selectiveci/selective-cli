@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -246,6 +245,9 @@ func TestSelTestOutcomes(t *testing.T) {
 				t.Errorf("selection = %v, want outcome %q", sel, tc.outcome)
 			}
 			sum := events[len(events)-1]
+			if sum["interrupted"] != nil {
+				t.Errorf("summary = %v, want no interrupted field on a finished run", sum)
+			}
 			for key, want := range tc.summary {
 				if sum["event"] != "summary" || sum[key] != want {
 					t.Errorf("last event %v, want a summary with %s = %v", sum, key, want)
@@ -330,30 +332,99 @@ func TestSelTestDeadlineWhileTheClientNeverConnectsIsATimeoutNotAnInterrupt(t *t
 	}
 }
 
-func TestSelTestInterruptExitsOneThirty(t *testing.T) {
-	api := newFakeAPI(t, selected)
-	runnerEnv(t)
-	t.Setenv("FAKE_HANG", "1")
+func waitUntil(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); !done(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+func interruptedRun(t *testing.T, ready func(stdout func() string)) ([]map[string]any, int) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "test", "--org", "acme")
 	cmd.Dir = pytestProject(t)
-	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+api.srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+newFakeAPI(t, selected).srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
+	var stdout syncBuffer
+	cmd.Stdout = &stdout
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	lines := bufio.NewScanner(out)
-	for lines.Scan() && !strings.Contains(lines.Text(), `"event":"selection"`) {
-	}
+	ready(stdout.String)
 	_ = cmd.Process.Signal(syscall.SIGINT)
-	_, _ = io.Copy(io.Discard, out)
-
 	_ = cmd.Wait()
+	return stdoutEvents(t, stdout.String()), cmd.ProcessState.ExitCode()
+}
 
-	if code := cmd.ProcessState.ExitCode(); code != 130 {
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestSelTestInterruptExitsOneThirty(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_HANG", "1")
+
+	events, code := interruptedRun(t, func(stdout func() string) {
+		waitUntil(t, "the selection event", func() bool { return strings.Contains(stdout(), `"event":"selection"`) })
+	})
+
+	if code != 130 {
 		t.Errorf("exit = %d, want 130", code)
+	}
+	last := events[len(events)-1]
+	if last["event"] != "summary" || last["interrupted"] != true || last["selected"] != 1.0 || last["passed"] != 0.0 {
+		t.Errorf("last line = %v, want a summary with interrupted:true and the counts so far", last)
+	}
+}
+
+func TestSelTestInterruptBeforeTheRunnerConnectsStillEndsWithASummary(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_NEVER_CONNECT", "1")
+	started := filepath.Join(t.TempDir(), "started")
+	t.Setenv("FAKE_ARGS_FILE", started)
+
+	events, code := interruptedRun(t, func(func() string) {
+		waitUntil(t, "the runner to start", func() bool { _, err := os.Stat(started); return err == nil })
+	})
+
+	if code != 130 {
+		t.Errorf("exit = %d, want 130", code)
+	}
+	if len(events) != 1 || events[0]["event"] != "summary" || events[0]["interrupted"] != true || events[0]["selected"] != 0.0 {
+		t.Errorf("events = %v, want one summary with interrupted:true and nothing selected", events)
+	}
+}
+
+func TestSelTestInterruptAfterTheSummaryDoesNotPrintASecondOne(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_LINGER", "1")
+
+	events, code := interruptedRun(t, func(stdout func() string) {
+		waitUntil(t, "the summary", func() bool { return strings.Contains(stdout(), `"event":"summary"`) })
+	})
+
+	summaries := 0
+	for _, name := range eventNames(events) {
+		if name == "summary" {
+			summaries++
+		}
+	}
+	if code != 130 || summaries != 1 || events[len(events)-1]["interrupted"] != nil {
+		t.Errorf("exit %d with %d summaries, last %v, want 130 and the finished run's single summary", code, summaries, events[len(events)-1])
 	}
 }

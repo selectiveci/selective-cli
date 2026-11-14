@@ -53,6 +53,9 @@ func fakeRunner() int {
 			}
 		case "close":
 			send("report_at_finish", map[string]any{"connection_retries": 0})
+			if os.Getenv("FAKE_LINGER") == "1" {
+				time.Sleep(time.Minute)
+			}
 			_, _ = io.WriteString(in, "exit\n")
 			_ = transport.Wait()
 			return 0

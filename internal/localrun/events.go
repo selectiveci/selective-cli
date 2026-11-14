@@ -2,7 +2,10 @@ package localrun
 
 import (
 	"encoding/json"
+	"io"
 	"math"
+
+	"github.com/selectiveci/selective-cli/internal/format"
 )
 
 func buildStartFields(tree json.RawMessage) map[string]any {
@@ -52,15 +55,21 @@ func (r *run) progressFields() map[string]any {
 	}
 }
 
-func (r *run) summaryFields() map[string]any {
+func summaryFields(s Summary) map[string]any {
 	return map[string]any{
-		"passed":   r.sum.Passed,
-		"failed":   r.sum.Failed,
-		"pending":  r.sum.Pending,
-		"selected": r.sum.Selected,
-		"skipped":  r.sum.Skipped,
-		"ms":       r.sum.MS,
+		"passed":   s.Passed,
+		"failed":   s.Failed,
+		"pending":  s.Pending,
+		"selected": s.Selected,
+		"skipped":  s.Skipped,
+		"ms":       s.MS,
 	}
+}
+
+func WriteInterruptedSummary(events io.Writer, sum Summary) error {
+	fields := summaryFields(sum)
+	fields["interrupted"] = true
+	return format.EventLine(events, "summary", fields)
 }
 
 func nilIfEmpty(s string) any {
