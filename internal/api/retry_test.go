@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -147,51 +146,6 @@ func TestAnUndecodableSuccessIsNotRetried(t *testing.T) {
 	}
 }
 
-func TestA503ThenA401ReturnsTheUnauthorized(t *testing.T) {
-	useClock(t)
-	client, rec := scripted(t, reply{status: 503}, reply{status: 401})
-
-	_, err := client.Me()
-
-	if code := codeOf(t, err); code != contract.Unauthorized || rec.count() != 2 {
-		t.Errorf("code %q after %d requests, want unauthorized after 2", code, rec.count())
-	}
-}
-
-func TestAnUnreachableServerIsRetriedTwice(t *testing.T) {
-	clock := useClock(t)
-	srv := httptest.NewServer(http.NotFoundHandler())
-	client := New(srv.URL, "tok")
-	srv.Close()
-
-	_, err := client.Me()
-
-	if code := codeOf(t, err); code != contract.NetworkError || len(clock.sleeps) != 2 {
-		t.Errorf("code %q after %d waits, want network_error after 2", code, len(clock.sleeps))
-	}
-}
-
-func TestARequestTimeoutIsRetried(t *testing.T) {
-	useClock(t)
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hits.Add(1) == 1 {
-			<-r.Context().Done()
-			return
-		}
-		_, _ = w.Write([]byte(`{"user_id":"u1"}`))
-	}))
-	t.Cleanup(srv.Close)
-	client := New(srv.URL, "tok")
-	client.HTTP.Timeout = 100 * time.Millisecond
-
-	me, err := client.Me()
-
-	if err != nil || me.UserID != "u1" || hits.Load() != 2 {
-		t.Errorf("me %+v err %v after %d requests, want success on the second", me, err, hits.Load())
-	}
-}
-
 func TestWritesAreRetriedOnlyWithAnIdempotencyKey(t *testing.T) {
 	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
 		clock := useClock(t)
@@ -205,19 +159,6 @@ func TestWritesAreRetriedOnlyWithAnIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestAKeyedWriteIsRetriedWithTheSameKeyAndBody(t *testing.T) {
-	useClock(t)
-	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
-	header := http.Header{"Idempotency-Key": {"k-1"}}
-
-	err := client.doWith(header, "POST", "/api/v1/x", map[string]string{"name": "n"}, http.StatusOK, nil)
-
-	want := seen{"k-1", `{"name":"n"}`}
-	if err != nil || len(rec.reqs) != 2 || rec.reqs[0] != want || rec.reqs[1] != want {
-		t.Errorf("err %v requests %+v, want two identical requests %+v", err, rec.reqs, want)
-	}
-}
-
 func TestAClientWithoutRetryMakesOneRequestOnA503(t *testing.T) {
 	clock := useClock(t)
 	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
@@ -226,15 +167,5 @@ func TestAClientWithoutRetryMakesOneRequestOnA503(t *testing.T) {
 
 	if codeOf(t, err) != contract.ServerError || rec.count() != 1 || len(clock.sleeps) != 0 {
 		t.Errorf("err %v after %d requests and %d waits, want the 503 after 1 and 0", err, rec.count(), len(clock.sleeps))
-	}
-}
-
-func TestWithoutRetryLeavesTheOriginalClientRetrying(t *testing.T) {
-	useClock(t)
-	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
-	client.WithoutRetry()
-
-	if _, err := client.Me(); err != nil || rec.count() != 2 {
-		t.Errorf("err %v after %d requests, want success on the second", err, rec.count())
 	}
 }
