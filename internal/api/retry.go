@@ -32,6 +32,18 @@ func transient(err error) bool {
 	return false
 }
 
+func withAttempts(err error, attempts int) error {
+	var apiErr *Error
+	if attempts < 2 || !errors.As(err, &apiErr) {
+		return err
+	}
+	if apiErr.Fields == nil {
+		apiErr.Fields = map[string]any{}
+	}
+	apiErr.Fields["attempts"] = attempts
+	return err
+}
+
 func backoff(attempt int, err error) time.Duration {
 	var apiErr *Error
 	if errors.As(err, &apiErr) && (apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable) {
