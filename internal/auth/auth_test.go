@@ -244,3 +244,30 @@ func TestLoginAndLogoutRefusalsCarryTheirContractCode(t *testing.T) {
 		})
 	}
 }
+
+func TestLoggedInEventNamesTheHostAndUserAndNeverCarriesTheToken(t *testing.T) {
+	setup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/code":
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device?code=ABCD-EFGH","expires_in":600,"interval":1}`))
+		case "/api/v1/device/token":
+			_, _ = w.Write([]byte(`{"access_token":"sk_live_secret_value","user":{"email":"ben@example.com"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &bytes.Buffer{}
+	if err := Login(LoginOptions{Hostname: srv.URL, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	loggedIn := strings.Split(strings.TrimSpace(out.String()), "\n")[1]
+	if !strings.Contains(loggedIn, `"host":"`+srv.URL+`"`) || !strings.Contains(loggedIn, `"email":"ben@example.com"`) {
+		t.Errorf("logged_in = %q, want the host and email", loggedIn)
+	}
+	if strings.Contains(out.String(), "sk_live_secret_value") {
+		t.Errorf("stdout carries the token: %q", out.String())
+	}
+}
