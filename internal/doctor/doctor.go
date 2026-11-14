@@ -2,8 +2,10 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -132,7 +134,24 @@ func (c Check) redact(secret string) Check {
 	}
 	c.Message = strings.ReplaceAll(c.Message, secret, "[redacted]")
 	c.Fix = strings.ReplaceAll(c.Fix, secret, "[redacted]")
+	if c.Detail != nil {
+		c.Detail = redactDetail(c.Detail, secret)
+	}
 	return c
+}
+
+func redactDetail(detail map[string]any, secret string) map[string]any {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return map[string]any{}
+	}
+	quoted, _ := json.Marshal(secret)
+	clean := strings.ReplaceAll(string(raw), string(quoted[1:len(quoted)-1]), "[redacted]")
+	var out map[string]any
+	if json.Unmarshal([]byte(clean), &out) != nil {
+		return map[string]any{}
+	}
+	return out
 }
 
 func summarize(checks []Check) string {
@@ -168,6 +187,9 @@ func failFrom(name string, err error, fix string) Check {
 func codeOf(err error) contract.Code {
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) {
+		if apiErr.Status == http.StatusConflict && (!contract.Registered(apiErr.Code) || apiErr.Code == contract.InternalError) {
+			return contract.UsageError
+		}
 		if contract.Registered(apiErr.Code) {
 			return apiErr.Code
 		}
@@ -235,9 +257,12 @@ func (s *state) checkAuth() Check {
 		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, loginFix)
 	}
 	if s.meErr != nil {
-		code := codeOf(s.meErr)
-		if code == contract.Unauthorized {
-			return fail("auth", code, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), loginFix)
+		if errors.Is(s.meErr, api.ErrUnauthorized) {
+			fix := loginFix
+			if s.cred.Source == credentials.SourceEnv {
+				fix = "replace or unset SELECTIVE_TOKEN, then run doctor again"
+			}
+			return fail("auth", contract.Unauthorized, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), fix)
 		}
 		return failFrom("auth", s.meErr, "")
 	}
