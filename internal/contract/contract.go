@@ -46,6 +46,8 @@ const (
 	Timeout              Code = "timeout"
 	InternalError        Code = "internal_error"
 	RunnerError          Code = "runner_error"
+	NoFramework          Code = "no_framework"
+	RunnerMissing        Code = "runner_missing"
 )
 
 const (
@@ -104,6 +106,8 @@ var exits = map[Code]int{
 	Timeout:              ExitTimeout,
 	InternalError:        ExitInternal,
 	RunnerError:          ExitFailures,
+	NoFramework:          ExitUsage,
+	RunnerMissing:        ExitUsage,
 }
 
 func Registered(code Code) bool {
