@@ -92,68 +92,103 @@ summary.`,
 	return cmd
 }
 
+type testPlan struct {
+	root      string
+	framework localrun.Framework
+	selector  localrun.Selector
+}
+
+type plannedTest struct {
+	plan testPlan
+	err  error
+}
+
 func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if f.timeout <= 0 {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
-	root, err := os.Getwd()
-	if err != nil {
-		return 0, contract.Errorf(contract.InternalError, "%v", err)
-	}
-	framework, err := localrun.DetectFramework(root, f.framework)
-	if err != nil {
-		return 0, err
-	}
-	changed, err := localrun.ChangedFiles(root, f.against)
-	if err != nil {
-		return 0, err
-	}
-	env, err := setup.Connect("", false)
-	if err != nil {
-		return 0, err
-	}
-	org, err := env.ResolveOrg(f.org)
-	if err != nil {
-		return 0, err
-	}
-	suite, err := resolveSuite(env.Client, org, f.suite)
-	if err != nil {
-		return 0, err
-	}
-	self, err := os.Executable()
-	if err != nil {
-		return 0, contract.Errorf(contract.InternalError, "%v", err)
-	}
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	started := time.Now()
+	signalled, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	ctx, cancel := context.WithTimeout(ctx, f.timeout)
-	defer cancel()
+	signalledAt := make(chan time.Time, 1)
+	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
 	stdout := cmd.OutOrStdout()
 	events := stdout
 	if !format.JSONMode(cmd.Flags(), stdout) {
 		events = prettyEvents{format.NewWriter(stdout, "pretty")}
 	}
-	started := time.Now()
-	launch := localrun.Launch{Root: root, Framework: framework, Args: args, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), Timeout: f.timeout})
+	interrupted := func(sum localrun.Summary) (int, error) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
+		if !sum.Reported {
+			sum.MS = (<-signalledAt).Sub(started).Milliseconds()
+			if err := localrun.WriteInterruptedSummary(events, sum); err != nil {
+				return 0, contract.Errorf(contract.InternalError, "could not write the event stream: %v", err)
+			}
+		}
+		return contract.ExitInterrupted, nil
+	}
+	planned := make(chan plannedTest, 1)
+	go func() {
+		plan, err := planTest(args, f)
+		planned <- plannedTest{plan, err}
+	}()
+	var plan testPlan
+	select {
+	case p := <-planned:
+		if p.err != nil {
+			return 0, p.err
+		}
+		plan = p.plan
+	case <-signalled.Done():
+		return interrupted(localrun.Summary{})
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return 0, contract.Errorf(contract.InternalError, "%v", err)
+	}
+	ctx, cancel := context.WithTimeout(signalled, f.timeout)
+	defer cancel()
+	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: args, Sel: self, Stderr: cmd.ErrOrStderr()}
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, Timeout: f.timeout})
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
 	case errors.Is(err, localrun.ErrInterrupted):
-		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
-		if !sum.Reported {
-			sum.MS = time.Since(started).Milliseconds()
-			if werr := localrun.WriteInterruptedSummary(events, sum); werr != nil {
-				return 0, contract.Errorf(contract.InternalError, "could not write the event stream: %v", werr)
-			}
-		}
-		return contract.ExitInterrupted, nil
+		return interrupted(sum)
 	case err != nil:
 		return 0, err
 	case sum.Failed > 0:
 		return contract.ExitFailures, nil
 	}
 	return 0, nil
+}
+
+func planTest(args []string, f testFlags) (testPlan, error) {
+	root, err := os.Getwd()
+	if err != nil {
+		return testPlan{}, contract.Errorf(contract.InternalError, "%v", err)
+	}
+	framework, err := localrun.DetectFramework(root, f.framework)
+	if err != nil {
+		return testPlan{}, err
+	}
+	changed, err := localrun.ChangedFiles(root, f.against)
+	if err != nil {
+		return testPlan{}, err
+	}
+	env, err := setup.Connect("", false)
+	if err != nil {
+		return testPlan{}, err
+	}
+	org, err := env.ResolveOrg(f.org)
+	if err != nil {
+		return testPlan{}, err
+	}
+	suite, err := resolveSuite(env.Client, org, f.suite)
+	if err != nil {
+		return testPlan{}, err
+	}
+	return testPlan{root: root, framework: framework, selector: selectTests(env.Client, org, suite, framework, changed)}, nil
 }
 
 func resolveSuite(client *api.Client, org, flag string) (string, error) {

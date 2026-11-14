@@ -30,6 +30,8 @@ type fakeAPI struct {
 	mu         sync.Mutex
 	suites     string
 	listed     int
+	hold       chan struct{}
+	held       chan struct{}
 	status     int
 	reply      string
 	selections []map[string]any
@@ -50,6 +52,10 @@ func newFakeAPI(t *testing.T, reply string) *fakeAPI {
 	t.Helper()
 	api := &fakeAPI{suites: suitesBody, status: 200, reply: reply}
 	api.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if api.hold != nil && r.URL.Path == "/api/v1/orgs/acme/suites" {
+			api.held <- struct{}{}
+			<-api.hold
+		}
 		api.mu.Lock()
 		defer api.mu.Unlock()
 		switch {
@@ -341,90 +347,107 @@ func waitUntil(t *testing.T, what string, done func() bool) {
 	}
 }
 
-func interruptedRun(t *testing.T, ready func(stdout func() string)) ([]map[string]any, int) {
+func interruptedRun(t *testing.T, api *fakeAPI, ready func(stdout func() string)) ([]map[string]any, int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "test", "--org", "acme")
 	cmd.Dir = pytestProject(t)
-	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+newFakeAPI(t, selected).srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
-	var stdout syncBuffer
-	cmd.Stdout = &stdout
+	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+api.srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
+	capture := filepath.Join(t.TempDir(), "stdout")
+	out, err := os.Create(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	ready(stdout.String)
+	stdout := func() string { return string(mustRead(t, capture)) }
+	ready(stdout)
 	_ = cmd.Process.Signal(syscall.SIGINT)
 	_ = cmd.Wait()
-	return stdoutEvents(t, stdout.String()), cmd.ProcessState.ExitCode()
+	return stdoutEvents(t, stdout()), cmd.ProcessState.ExitCode()
 }
 
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf strings.Builder
+func TestSelTestInterruptExitsOneThirtyAfterTheSummaryTheRunHadSoFar(t *testing.T) {
+	started := filepath.Join(t.TempDir(), "started")
+	appears := func(marker string) func(func() string) {
+		return func(stdout func() string) {
+			waitUntil(t, marker, func() bool { return strings.Contains(stdout(), marker) })
+		}
+	}
+	cases := []struct {
+		name        string
+		env         map[string]string
+		hold        bool
+		ready       func(func() string)
+		interrupted any
+		selected    float64
+	}{
+		{"mid-run", map[string]string{"FAKE_HANG": "1"}, false, appears(`"event":"selection"`), true, 1},
+		{"before the runner connects", map[string]string{"FAKE_NEVER_CONNECT": "1", "FAKE_ARGS_FILE": started}, false, func(func() string) {
+			waitUntil(t, "the runner to start", func() bool { _, err := os.Stat(started); return err == nil })
+		}, true, 0},
+		{"after the runner's own summary", map[string]string{"FAKE_LINGER": "1"}, false, appears(`"event":"summary"`), nil, 1},
+		{"while the suite is looked up", nil, true, nil, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runnerEnv(t)
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			api := newFakeAPI(t, selected)
+			ready := tc.ready
+			if tc.hold {
+				api.hold, api.held = make(chan struct{}), make(chan struct{}, 1)
+				t.Cleanup(func() { close(api.hold) })
+				ready = func(func() string) {
+					select {
+					case <-api.held:
+					case <-time.After(20 * time.Second):
+						t.Fatal("the suite listing never started")
+					}
+				}
+			}
+
+			events, code := interruptedRun(t, api, ready)
+
+			last := events[len(events)-1]
+			if code != 130 || eventNames(events)[len(events)-1] != "summary" || last["interrupted"] != tc.interrupted || last["selected"] != tc.selected {
+				t.Errorf("exit %d events %v, want 130 and a last summary with interrupted=%v selected=%v", code, eventNames(events), tc.interrupted, tc.selected)
+			}
+			if got := slices.Index(eventNames(events), "summary"); got != len(events)-1 {
+				t.Errorf("events %v, want exactly one summary, last", eventNames(events))
+			}
+		})
+	}
 }
 
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
-}
-
-func TestSelTestInterruptExitsOneThirty(t *testing.T) {
+func TestSelTestDeadlineWithAHungRunnerStopsItWithoutWaitingOutTheGrace(t *testing.T) {
 	runnerEnv(t)
 	t.Setenv("FAKE_HANG", "1")
+	started := time.Now()
 
-	events, code := interruptedRun(t, func(stdout func() string) {
+	res := selTest(t, pytestProject(t), newFakeAPI(t, selected), "--timeout", "1s")
+
+	if took := time.Since(started); res.exit != 8 || took > 4*time.Second {
+		t.Errorf("exit %d after %s, want a timeout (8) that signals the runner at the deadline, well inside the 5s grace", res.exit, took)
+	}
+}
+
+func TestSelTestInterruptedSummaryTimesTheRunUntilTheSignalNotTheRunnersTeardown(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_HANG", "1")
+	t.Setenv("FAKE_IGNORE_SIGINT", "1")
+	started := time.Now()
+
+	events, _ := interruptedRun(t, newFakeAPI(t, selected), func(stdout func() string) {
 		waitUntil(t, "the selection event", func() bool { return strings.Contains(stdout(), `"event":"selection"`) })
 	})
 
-	if code != 130 {
-		t.Errorf("exit = %d, want 130", code)
-	}
-	last := events[len(events)-1]
-	if last["event"] != "summary" || last["interrupted"] != true || last["selected"] != 1.0 || last["passed"] != 0.0 {
-		t.Errorf("last line = %v, want a summary with interrupted:true and the counts so far", last)
-	}
-}
-
-func TestSelTestInterruptBeforeTheRunnerConnectsStillEndsWithASummary(t *testing.T) {
-	runnerEnv(t)
-	t.Setenv("FAKE_NEVER_CONNECT", "1")
-	started := filepath.Join(t.TempDir(), "started")
-	t.Setenv("FAKE_ARGS_FILE", started)
-
-	events, code := interruptedRun(t, func(func() string) {
-		waitUntil(t, "the runner to start", func() bool { _, err := os.Stat(started); return err == nil })
-	})
-
-	if code != 130 {
-		t.Errorf("exit = %d, want 130", code)
-	}
-	if len(events) != 1 || events[0]["event"] != "summary" || events[0]["interrupted"] != true || events[0]["selected"] != 0.0 {
-		t.Errorf("events = %v, want one summary with interrupted:true and nothing selected", events)
-	}
-}
-
-func TestSelTestInterruptAfterTheSummaryDoesNotPrintASecondOne(t *testing.T) {
-	runnerEnv(t)
-	t.Setenv("FAKE_LINGER", "1")
-
-	events, code := interruptedRun(t, func(stdout func() string) {
-		waitUntil(t, "the summary", func() bool { return strings.Contains(stdout(), `"event":"summary"`) })
-	})
-
-	summaries := 0
-	for _, name := range eventNames(events) {
-		if name == "summary" {
-			summaries++
-		}
-	}
-	if code != 130 || summaries != 1 || events[len(events)-1]["interrupted"] != nil {
-		t.Errorf("exit %d with %d summaries, last %v, want 130 and the finished run's single summary", code, summaries, events[len(events)-1])
+	took := time.Since(started)
+	if ms, _ := events[len(events)-1]["ms"].(float64); took < 4*time.Second || ms > 3000 {
+		t.Errorf("run took %s and the summary says ms=%v, want teardown (at least 4s here) left out of ms", took, ms)
 	}
 }
