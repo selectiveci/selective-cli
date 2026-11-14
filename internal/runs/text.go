@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -85,7 +86,9 @@ func table(w io.Writer, rows [][]string) {
 
 func percent(rate float64) string { return strconv.FormatFloat(rate*100, 'f', 1, 64) + "%" }
 
-func seconds(s float64) string { return strconv.FormatFloat(s, 'f', -1, 64) + "s" }
+func seconds(s float64) string {
+	return strconv.FormatFloat(math.Round(s*100)/100, 'f', -1, 64) + "s"
+}
 
 func millis(ms float64) string {
 	d := time.Duration(ms) * time.Millisecond

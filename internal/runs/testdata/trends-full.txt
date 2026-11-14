@@ -27,5 +27,5 @@ TEST            SUITE  STATUS  OCCURRENCES  BRANCHES
 spec/b_spec.rb  web    flaky   4            2
 
 SLOWEST
-TEST            SUITE  AVG   P95    MAX  RUNS  TREND
-spec/c_spec.rb  web    1.5s  2.25s  3s   9     up
+TEST            SUITE  AVG   P95    MAX    RUNS  TREND
+spec/c_spec.rb  web    1.5s  2.25s  3.14s  9     up
