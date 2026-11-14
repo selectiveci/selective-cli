@@ -38,6 +38,7 @@ func transportCmd() *cobra.Command {
 
 type testFlags struct {
 	against, framework, suite, org string
+	list                           bool
 	timeout                        time.Duration
 }
 
@@ -59,11 +60,12 @@ origin/master).
 
 Changed file paths and test ids are sent to Selective; file contents are not.
 A map that cannot speak for the change runs every test, and the selection
-event says so. Arguments after -- go to the test framework's client. Its
+event says so. --list prints that selection, with the ids, and runs nothing. Arguments after -- go to the test framework's client. Its
 output goes to stderr; stdout carries NDJSON events only, ending with a
 summary.`,
 		Example: `  sel test
   sel test --against origin/main --json
+  sel test --list
   sel test --suite 3f9c -- -k slow`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
@@ -88,6 +90,7 @@ summary.`,
 	cmd.Flags().StringVar(&f.framework, "framework", "", "Test framework: rspec, minitest or pytest (default: detected)")
 	cmd.Flags().StringVar(&f.suite, "suite", "", "Suite ID (default: the suite for this checkout's origin)")
 	cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
+	cmd.Flags().BoolVar(&f.list, "list", false, "Print what would run and run nothing")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Stop the run after this long")
 	return cmd
 }
@@ -149,7 +152,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	ctx, cancel := context.WithTimeout(signalled, f.timeout)
 	defer cancel()
 	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: args, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, Timeout: f.timeout})
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, List: f.list, Timeout: f.timeout})
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)

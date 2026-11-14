@@ -186,6 +186,9 @@ func TestSelTestSendsTheChangeAndShowsTheServersDecisionOnAnNDJSONOnlyStdout(t *
 		t.Errorf("exit %d events = %v, want %v", res.exit, got, want)
 	}
 	sel := firstNamed(events, "selection")
+	if _, hasIDs := sel["ids"]; hasIDs {
+		t.Errorf("selection = %v, want no ids without --list", sel)
+	}
 	if sel["cause"] != "map" || sel["source"] != "map" || sel["selected"] != 1.0 || sel["skipped"] != 2.0 || sel["total"] != 3.0 || sel["changed_files"] != 1.0 {
 		t.Errorf("selection = %v", sel)
 	}
@@ -449,5 +452,21 @@ func TestSelTestInterruptedSummaryTimesTheRunUntilTheSignalNotTheRunnersTeardown
 	took := time.Since(started)
 	if ms, _ := events[len(events)-1]["ms"].(float64); took < 4*time.Second || ms > 3000 {
 		t.Errorf("run took %s and the summary says ms=%v, want teardown (at least 4s here) left out of ms", took, ms)
+	}
+}
+
+func TestSelTestListPrintsTheSelectionWithIdsAndRunsNothing(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	ran := runnerEnv(t)
+
+	res := selTest(t, pytestProject(t), api, "--list")
+
+	events := stdoutEvents(t, res.stdout)
+	sel := firstNamed(events, "selection")
+	if res.exit != 0 || !slices.Equal(anyStrings(sel["ids"]), []string{"tests/test_calc.py::test_sub"}) || events[len(events)-1]["event"] != "summary" {
+		t.Errorf("exit %d events %v, want the selection with its ids, ending in summary", res.exit, eventNames(events))
+	}
+	if got := ranIDs(t, ran); len(got) != 0 {
+		t.Errorf("--list ran %v", got)
 	}
 }

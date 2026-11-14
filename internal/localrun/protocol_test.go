@@ -474,6 +474,27 @@ func TestRunClosesWithoutRunningWhenNothingIsSelected(t *testing.T) {
 	}
 }
 
+func TestRunListNamesTheSelectedIdsAndSendsNoRunCommand(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "c"), List: true}, func(c *fakeClient) {
+		c.handshake("a", "b", "c")
+		c.finish()
+	})
+	if out.err != nil {
+		t.Fatalf("err=%v", out.err)
+	}
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "summary"}) {
+		t.Errorf("events = %v", got)
+	}
+	if ids := out.named("selection")[0]["ids"]; !reflect.DeepEqual(ids, []any{"a", "c"}) {
+		t.Errorf("selection ids = %v, want [a c]", ids)
+	}
+	for _, command := range out.commands {
+		if command["command"] == "run_test_cases" {
+			t.Errorf("--list sent %v", command)
+		}
+	}
+}
+
 func TestRunDoesNotCloseOnADuplicateResult(t *testing.T) {
 	var early map[string]any
 	out := exercise(t, Options{Selector: selecting("a", "b")}, func(c *fakeClient) {
