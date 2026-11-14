@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 func fakeRunner() int {
@@ -15,6 +16,10 @@ func fakeRunner() int {
 	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
+	}
+	if os.Getenv("FAKE_NEVER_CONNECT") == "1" {
+		time.Sleep(time.Minute)
+		return 0
 	}
 	transport := exec.Command(os.Getenv("SELECTIVE_TRANSPORT"), "--stdio")
 	in, _ := transport.StdinPipe()
@@ -39,6 +44,9 @@ func fakeRunner() int {
 		case "test_manifest":
 			send("test_manifest", manifest())
 		case "run_test_cases":
+			if os.Getenv("FAKE_HANG") == "1" {
+				time.Sleep(time.Minute)
+			}
 			record(command.IDs)
 			for _, id := range command.IDs {
 				send("test_case_result", result(id))

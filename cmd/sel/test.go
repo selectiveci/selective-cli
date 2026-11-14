@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/gitctx"
 	"github.com/selectiveci/selective-cli/internal/localrun"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/spf13/cobra"
@@ -33,6 +38,7 @@ func transportCmd() *cobra.Command {
 
 type testFlags struct {
 	against, framework, suite, org string
+	timeout                        time.Duration
 }
 
 var languages = map[localrun.Framework]string{localrun.RSpec: "ruby", localrun.Minitest: "ruby", localrun.Pytest: "python"}
@@ -45,7 +51,8 @@ func testCmd() *cobra.Command {
 		Long: `Run the tests that the change in this checkout affects, using the suite's
 recorded test map to pick them.
 
-The change is every tracked file that differs from the merge base of HEAD and
+The suite is the one in the organization whose repository is this checkout's
+origin remote; --suite names one. The change is every tracked file that differs from the merge base of HEAD and
 --against, committed or not; untracked files are left out. --against defaults
 to the remote's default branch (origin/HEAD, else origin/main, else
 origin/master).
@@ -55,8 +62,8 @@ A map that cannot speak for the change runs every test, and the selection
 event says so. Arguments after -- go to the test framework's client. Its
 output goes to stderr; stdout carries NDJSON events only, ending with a
 summary.`,
-		Example: `  sel test --suite 3f9c
-  sel test --suite 3f9c --against origin/main --json
+		Example: `  sel test
+  sel test --against origin/main --json
   sel test --suite 3f9c -- -k slow`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 && cmd.ArgsLenAtDash() != 0 {
@@ -79,13 +86,16 @@ summary.`,
 	}
 	cmd.Flags().StringVar(&f.against, "against", "", "Compare with this ref (default: the remote's default branch)")
 	cmd.Flags().StringVar(&f.framework, "framework", "", "Test framework: rspec, minitest or pytest (default: detected)")
-	cmd.Flags().StringVar(&f.suite, "suite", "", "Suite ID")
+	cmd.Flags().StringVar(&f.suite, "suite", "", "Suite ID (default: the suite for this checkout's origin)")
 	cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
-	_ = cmd.MarkFlagRequired("suite")
+	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Stop the run after this long")
 	return cmd
 }
 
 func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
+	if f.timeout <= 0 {
+		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		return 0, contract.Errorf(contract.InternalError, "%v", err)
@@ -106,24 +116,64 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	suite, err := resolveSuite(env.Client, org, f.suite)
+	if err != nil {
+		return 0, err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return 0, contract.Errorf(contract.InternalError, "%v", err)
 	}
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	defer cancel()
 	stdout := cmd.OutOrStdout()
 	events := stdout
 	if !format.JSONMode(cmd.Flags(), stdout) {
 		events = prettyEvents{format.NewWriter(stdout, "pretty")}
 	}
 	launch := localrun.Launch{Root: root, Framework: framework, Args: args, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(cmd.Context(), events, localrun.Options{Selector: selectTests(env.Client, org, f.suite, framework, changed)})
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: selectTests(env.Client, org, suite, framework, changed), Timeout: f.timeout})
 	switch {
+	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
+	case errors.Is(err, localrun.ErrInterrupted):
+		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
+		return contract.ExitInterrupted, nil
 	case err != nil:
 		return 0, err
 	case sum.Failed > 0:
 		return contract.ExitFailures, nil
 	}
 	return 0, nil
+}
+
+func resolveSuite(client *api.Client, org, flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	repo, err := gitctx.Repo()
+	if err != nil {
+		return "", contract.Errorf(contract.UsageError, "pass --suite ID (could not read this checkout's origin: %v)", err)
+	}
+	suites, err := client.Suites(org)
+	if err != nil {
+		return "", err
+	}
+	var ids []string
+	for _, s := range suites {
+		if s.Repo != nil && strings.EqualFold(*s.Repo, repo) {
+			ids = append(ids, s.ID)
+		}
+	}
+	switch len(ids) {
+	case 0:
+		return "", contract.Errorf(contract.SuiteNotFound, "no suite in %s for %s; see: sel suites --org %s", org, repo, org)
+	case 1:
+		return ids[0], nil
+	}
+	return "", contract.Errorf(contract.UsageError, "several suites in %s use %s (%s); pass --suite ID", org, repo, strings.Join(ids, ", "))
 }
 
 func selectTests(client *api.Client, org, suite string, framework localrun.Framework, changed []string) localrun.Selector {
