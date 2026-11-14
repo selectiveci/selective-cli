@@ -40,6 +40,12 @@ func healthy() map[string]http.HandlerFunc {
 	}
 }
 
+func with(path string, h http.HandlerFunc) map[string]http.HandlerFunc {
+	routes := healthy()
+	routes[path] = h
+	return routes
+}
+
 func serve(t *testing.T, routes map[string]http.HandlerFunc) string {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +122,7 @@ func exitOf(r *Report) int {
 func TestEveryCheckIsListedInOrderWhateverFails(t *testing.T) {
 	cases := []struct {
 		name   string
-		routes func() map[string]http.HandlerFunc
+		routes map[string]http.HandlerFunc
 		opts   Options
 		exit   int
 		code   contract.Code
@@ -124,93 +130,69 @@ func TestEveryCheckIsListedInOrderWhateverFails(t *testing.T) {
 	}{
 		{
 			name:   "all good",
-			routes: healthy,
+			routes: healthy(),
 			shape:  allDone,
 		},
 		{
-			name: "revoked token",
-			routes: func() map[string]http.HandlerFunc {
-				r := healthy()
-				r["/api/v1/me"] = reply(401, `{"error":"unauthorized","message":"Token revoked."}`)
-				return r
-			},
-			exit:  4,
-			code:  contract.Unauthorized,
-			shape: "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
+			name:   "revoked token",
+			routes: with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"Token revoked."}`)),
+			exit:   4,
+			code:   contract.Unauthorized,
+			shape:  "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
-			name: "server error",
-			routes: func() map[string]http.HandlerFunc {
-				r := healthy()
-				r["/api/v1/me"] = reply(503, `maintenance`)
-				return r
-			},
-			exit:  4,
-			code:  contract.ServerError,
-			shape: "config=ok server=fail auth=skip org=skip suite=skip socket=skip runner=skip cli_version=skip",
+			name:   "server error",
+			routes: with("/api/v1/me", reply(503, `maintenance`)),
+			exit:   4,
+			code:   contract.ServerError,
+			shape:  "config=ok server=fail auth=skip org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
-			name: "forbidden token passes its code through",
-			routes: func() map[string]http.HandlerFunc {
-				r := healthy()
-				r["/api/v1/me"] = reply(403, `{"error":"forbidden","message":"Nope."}`)
-				return r
-			},
-			exit:  6,
-			code:  contract.Forbidden,
-			shape: "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
+			name:   "forbidden token passes its code through",
+			routes: with("/api/v1/me", reply(403, `{"error":"forbidden","message":"Nope."}`)),
+			exit:   6,
+			code:   contract.Forbidden,
+			shape:  "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
-			name: "a code the registry lacks exits by its status",
-			routes: func() map[string]http.HandlerFunc {
-				r := healthy()
-				r["/api/v1/me"] = reply(403, `{"error":"brand_new_refusal","message":"Nope."}`)
-				return r
-			},
-			exit:  6,
-			code:  contract.Forbidden,
-			shape: "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
+			name:   "a code the registry lacks exits by its status",
+			routes: with("/api/v1/me", reply(403, `{"error":"brand_new_refusal","message":"Nope."}`)),
+			exit:   6,
+			code:   contract.Forbidden,
+			shape:  "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
-			name: "two orgs and no --org",
-			routes: func() map[string]http.HandlerFunc {
-				r := healthy()
-				r["/api/v1/orgs"] = reply(200, twoOrgs)
-				return r
-			},
-			exit:  5,
-			code:  contract.UsageError,
-			shape: "config=ok server=ok auth=ok org=fail suite=skip socket=skip runner=skip cli_version=skip",
+			name:   "two orgs and no --org",
+			routes: with("/api/v1/orgs", reply(200, twoOrgs)),
+			exit:   5,
+			code:   contract.UsageError,
+			shape:  "config=ok server=ok auth=ok org=fail suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
 			name:   "unknown --org",
-			routes: healthy,
+			routes: healthy(),
 			opts:   Options{Org: "nope"},
 			exit:   3,
 			code:   contract.OrganizationNotFound,
 			shape:  "config=ok server=ok auth=ok org=fail suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
-			name: "no suite for the repo",
-			routes: func() map[string]http.HandlerFunc {
-				r := healthy()
-				r["/api/v1/orgs/acme/suites"] = reply(200, `{"suites":[{"id":"s-2","name":"Other","type":"pytest","repo":"acme/api","last_run_at":null}]}`)
-				return r
-			},
-			exit:  3,
-			code:  contract.SuiteNotFound,
-			shape: "config=ok server=ok auth=ok org=ok suite=fail socket=skip runner=skip cli_version=skip",
+			name:   "no suite for the repo",
+			routes: with("/api/v1/orgs/acme/suites", reply(200, `{"suites":[{"id":"s-2","name":"Other","type":"pytest","repo":"acme/api","last_run_at":null}]}`)),
+			exit:   3,
+			code:   contract.SuiteNotFound,
+			shape:  "config=ok server=ok auth=ok org=ok suite=fail socket=skip runner=skip cli_version=skip",
 		},
 		{
 			name:   "no git remote only warns",
-			routes: healthy,
+			routes: healthy(),
 			opts:   Options{Repo: func() (string, error) { return "", contract.Errorf(contract.NotFound, "no origin remote") }},
 			shape:  "config=ok server=ok auth=ok org=ok suite=warn socket=skip runner=skip cli_version=skip",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			report := run(t, serve(t, tc.routes()), tc.opts)
+			report := run(t, serve(t, tc.routes), tc.opts)
 
 			if got := shape(report); got != tc.shape {
 				t.Errorf("checks = %s\nwant     %s", got, tc.shape)
@@ -231,9 +213,7 @@ func TestEveryCheckIsListedInOrderWhateverFails(t *testing.T) {
 func TestReportStatusSummarisesTheChecks(t *testing.T) {
 	pass := run(t, serve(t, healthy()), Options{})
 	warn := run(t, serve(t, healthy()), Options{Repo: func() (string, error) { return "", contract.Errorf(contract.NotFound, "none") }})
-	routes := healthy()
-	routes["/api/v1/me"] = reply(401, `{"error":"unauthorized","message":"x"}`)
-	fail := run(t, serve(t, routes), Options{})
+	fail := run(t, serve(t, with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"x"}`))), Options{})
 
 	if pass.Status != "pass" || warn.Status != "warn" || fail.Status != "fail" {
 		t.Errorf("statuses = %q %q %q, want pass warn fail", pass.Status, warn.Status, fail.Status)
@@ -259,8 +239,7 @@ func TestUnreachableServerFailsServerAndSkipsEverythingAfterIt(t *testing.T) {
 }
 
 func TestServerCheckReportsLatencyWhenAnyAnswerArrives(t *testing.T) {
-	routes := healthy()
-	routes["/api/v1/me"] = reply(401, `{"error":"unauthorized","message":"x"}`)
+	routes := with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"x"}`))
 
 	got := check(t, run(t, serve(t, routes), Options{}), "server")
 
@@ -333,8 +312,7 @@ func TestSuiteCheckReportsEachMatch(t *testing.T) {
 }
 
 func TestMissingSuiteSaysHowToCreateOne(t *testing.T) {
-	routes := healthy()
-	routes["/api/v1/orgs/acme/suites"] = reply(200, `{"suites":[]}`)
+	routes := with("/api/v1/orgs/acme/suites", reply(200, `{"suites":[]}`))
 
 	got := check(t, run(t, serve(t, routes), Options{}), "suite")
 
@@ -378,9 +356,7 @@ func TestHungServerTimesOutTheRunningCheckAndSkipsTheRest(t *testing.T) {
 }
 
 func TestFailureErrorCarriesTheFirstFailedCheckAndEveryCheck(t *testing.T) {
-	routes := healthy()
-	routes["/api/v1/me"] = reply(401, `{"error":"unauthorized","message":"Token revoked."}`)
-	report := run(t, serve(t, routes), Options{})
+	report := run(t, serve(t, with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"Token revoked."}`))), Options{})
 
 	err := coded(t, report)
 
