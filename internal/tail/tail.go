@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,16 +17,26 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
+	"github.com/selectiveci/selective-cli/internal/wait"
 	"nhooyr.io/websocket"
 )
 
 type Options struct {
-	RunID  string
-	Commit string
-	Format string
+	RunID   string
+	Commit  string
+	Format  string
+	Wait    time.Duration
+	Timeout time.Duration
 }
 
 func Run(client *api.Client, opts Options) (int, error) {
+	ctx := context.Background()
+	if opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, opts.Timeout,
+			contract.Errorf(contract.Timeout, "--timeout %s expired before the build finished", opts.Timeout))
+		defer cancel()
+	}
 	if opts.Format == "" {
 		opts.Format = format.DefaultFormat()
 	}
@@ -36,13 +47,18 @@ func Run(client *api.Client, opts Options) (int, error) {
 		if err != nil {
 			return refuse(err)
 		}
-		buildID, err = findBuild(client, repo, sha)
+		buildID, err = findBuild(ctx, client, repo, sha, wait.Options{
+			For:    "build",
+			Limit:  opts.Wait,
+			Out:    waitingOutput(opts.Format),
+			Pretty: opts.Format != "ndjson",
+		})
 		if err != nil {
-			return refuse(err)
+			return refuse(deadlineCause(ctx, err))
 		}
 	}
 
-	return stream(client.Host, client.Token, buildID, opts.Format)
+	return stream(ctx, client.Host, client.Token, buildID, opts.Format)
 }
 
 func refuse(err error) (int, error) {
@@ -51,6 +67,13 @@ func refuse(err error) (int, error) {
 		return coded.ExitCode(), err
 	}
 	return contract.ExitInternal, err
+}
+
+func waitingOutput(format string) io.Writer {
+	if format == "ndjson" {
+		return os.Stdout
+	}
+	return os.Stderr
 }
 
 func detect(commit string) (repo, sha string, err error) {
@@ -64,16 +87,52 @@ func detect(commit string) (repo, sha string, err error) {
 	return ctx.Repo, commit, nil
 }
 
-func findBuild(client *api.Client, repo, sha string) (string, error) {
+func lookupOnce(client *api.Client, repo, sha string) (string, error) {
 	build, err := client.LookupBuild(repo, sha)
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
-		return "", contract.Errorf(contract.NoBuild, "no build for repo %q commit %s; push your branch and wait for CI to start, then re-run sel tail", repo, shortSHA(sha))
+		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
 	return build.BuildID, nil
+}
+
+func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts wait.Options) (string, error) {
+	missing := contract.Errorf(contract.NoBuild, "no build for repo %q commit %s", repo, shortSHA(sha))
+	if opts.Limit <= 0 {
+		buildID, err := lookupOnce(client, repo, sha)
+		if err == nil && buildID == "" {
+			missing.Message += "; push your branch and wait for CI to start, or re-run with --wait"
+			return "", missing
+		}
+		return buildID, err
+	}
+
+	var buildID string
+	err := wait.Poll(ctx, opts, func(context.Context) (bool, time.Duration, error) {
+		var err error
+		buildID, err = lookupOnce(client, repo, sha)
+		var apiErr *api.Error
+		if errors.As(err, &apiErr) && apiErr.Code == contract.RateLimited {
+			return false, wait.RetryAfter(err), nil
+		}
+		return buildID != "", 0, err
+	})
+	var expired *wait.ExpiredError
+	if errors.As(err, &expired) {
+		missing.Message += fmt.Sprintf(" within %s", expired.Limit)
+		return "", missing
+	}
+	return buildID, err
+}
+
+func deadlineCause(ctx context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.Cause(ctx)
+	}
+	return err
 }
 
 var pingInterval = 30 * time.Second
@@ -102,7 +161,7 @@ func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.C
 	}
 }
 
-func stream(host, token, buildID, fmtFlag string) (int, error) {
+func stream(parent context.Context, host, token, buildID, fmtFlag string) (int, error) {
 	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	// Phoenix serves a socket mounted at /api/v1/tail on /api/v1/tail/websocket;
@@ -114,10 +173,13 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	header := http.Header{}
 	header.Set("X-Selective-Token", token)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
+		if parent.Err() != nil {
+			return refuse(deadlineCause(parent, parent.Err()))
+		}
 		return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "could not connect to Selective: %v", err)
 	}
 	defer func() { _ = conn.CloseNow() }()
@@ -154,6 +216,9 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	conn.Close(websocket.StatusNormalClosure, "")
 
 	if summary == nil {
+		if parent.Err() != nil {
+			return refuse(deadlineCause(parent, parent.Err()))
+		}
 		if timedOut.Load() {
 			return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "no response from Selective to a ping within %s; lost the connection before build %s finished", interval, buildID)
 		}

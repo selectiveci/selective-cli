@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const defaultTailWait = "10m"
+
 func failuresCmd() *cobra.Command {
 	var opts runs.FailuresOptions
 	var hostname string
@@ -79,21 +81,35 @@ func tailCmd() *cobra.Command {
 
 Run from inside a git repository: sel tail auto-detects the repo and HEAD commit.
 
+Without --wait, a commit with no build exits 3 at once. --wait[=DURATION]
+polls until the build exists (10m when given without a value; write
+--wait=5s, not --wait 5s), printing a waiting line per poll, then streams
+it. --timeout DURATION caps the whole run, waiting included.
+
 Exit codes:
   0  all tests passed
   1  real test failures
   2  passed, but a test failed before passing on retry (safe to proceed)
-  3  no build found for this commit
+  3  no build found for this commit (--wait ran out)
   4  authentication or network error
-  5  usage error`,
+  5  usage error
+  8  --timeout expired`,
 		Example: `  sel tail
-  sel tail --json
-  sel tail --run-id 8f3c9a`,
+  sel tail --wait --timeout 30m
+  sel tail --wait=5s --json`,
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
-			"exit_codes": "0,1,2,3,4,5",
+			"exit_codes":   "0,1,2,3,4,5,8",
+			"events":       "build_start,selection,progress,test_fail,summary,waiting",
+			"wait_default": defaultTailWait,
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			for _, name := range []string{"wait", "timeout"} {
+				d, _ := cmd.Flags().GetDuration(name)
+				if cmd.Flags().Changed(name) && d <= 0 {
+					return contract.Errorf(contract.UsageError, "--%s must be a positive duration", name)
+				}
+			}
 			asJSON, _ := cmd.Flags().GetBool("json")
 			var err error
 			if opts.Format, err = tailFormat(asJSON, opts.Format); err != nil {
@@ -118,6 +134,9 @@ Exit codes:
 	cmd.Flags().StringVar(&opts.Commit, "commit", "", "Override: use this commit SHA instead of HEAD")
 	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server (default: the one you logged in to)")
 	cmd.Flags().StringVar(&opts.Format, "format", "", `Output format: "ndjson" (default when piped) or "pretty" (default on TTY)`)
+	cmd.Flags().DurationVar(&opts.Wait, "wait", 0, "Wait for the build to exist, at most this long (default "+defaultTailWait+" when given without a value)")
+	cmd.Flags().Lookup("wait").NoOptDefVal = defaultTailWait
+	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 0, "Stop after this long in total and exit 8")
 	return cmd
 }
 
