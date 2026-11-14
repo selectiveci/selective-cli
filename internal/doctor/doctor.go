@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -119,7 +120,24 @@ func (c Check) redact(secret string) Check {
 	}
 	c.Message = strings.ReplaceAll(c.Message, secret, "[redacted]")
 	c.Fix = strings.ReplaceAll(c.Fix, secret, "[redacted]")
+	if c.Detail != nil {
+		c.Detail = redactDetail(c.Detail, secret)
+	}
 	return c
+}
+
+func redactDetail(detail map[string]any, secret string) map[string]any {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return map[string]any{}
+	}
+	quoted, _ := json.Marshal(secret)
+	clean := strings.ReplaceAll(string(raw), string(quoted[1:len(quoted)-1]), "[redacted]")
+	var out map[string]any
+	if json.Unmarshal([]byte(clean), &out) != nil {
+		return map[string]any{}
+	}
+	return out
 }
 
 func summarize(checks []Check) string {
