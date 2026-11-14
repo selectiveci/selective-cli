@@ -133,3 +133,27 @@ func contractCode(err error) contract.Code {
 	}
 	return ""
 }
+
+func TestChangedFilesFallsBackWhenOriginHeadPointsAtAMissingBranch(t *testing.T) {
+	dir := branchedRepo(t)
+	gitRun(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/renamed-away")
+
+	got, err := ChangedFiles(dir, "")
+
+	if err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/new.rb"}) {
+		t.Errorf("changed = %v err %v, want the diff against origin/main", got, err)
+	}
+}
+
+func TestChangedFilesAreRepoRootPathsEvenFromASubdirectoryWithDiffRelativeSet(t *testing.T) {
+	dir := branchedRepo(t)
+	gitRun(t, dir, "config", "diff.relative", "true")
+	write(t, dir, "lib/gone.rb", "edited\n")
+
+	got, err := ChangedFiles(filepath.Join(dir, "app"), "")
+
+	want := []string{"app/a.rb", "app/new.rb", "lib/gone.rb"}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("changed = %v err %v, want %v", got, err, want)
+	}
+}
