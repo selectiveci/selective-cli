@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/update"
@@ -16,6 +17,7 @@ func versionCmd() *cobra.Command {
 		Annotations: map[string]string{"exit_codes": "0"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
+			update.RefreshIfDue(cmd.Context(), version, os.Getenv)
 			info := update.Status(version, commit, update.LoadState())
 			if format.JSONMode(cmd.Flags(), out) {
 				return format.Resource(out, "version", info)

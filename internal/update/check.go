@@ -109,14 +109,21 @@ func StartCheck(version string, getenv func(string) string) *Checker {
 	c := &Checker{cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(c.done)
-		if Enabled(getenv) && due(LoadState(), version, time.Now()) {
-			refresh(ctx)
-		}
+		RefreshIfDue(ctx, version, getenv)
 	}()
 	return c
 }
 
+func RefreshIfDue(ctx context.Context, version string, getenv func(string) string) {
+	if Enabled(getenv) && due(LoadState(), version, time.Now()) {
+		refresh(ctx)
+	}
+}
+
 func (c *Checker) Stop() {
+	if c == nil {
+		return
+	}
 	c.cancel()
 	<-c.done
 }
@@ -138,18 +145,20 @@ func refresh(parent context.Context) {
 }
 
 func Notice(info Info) string {
-	var headline string
+	var headline, link string
 	switch {
 	case info.BelowMinimum != nil && *info.BelowMinimum:
 		headline = fmt.Sprintf("sel %s is no longer supported: this server needs %s or later", info.Version, info.MinVersion)
+		link = releasesPage
 	case info.UpdateAvailable != nil && *info.UpdateAvailable:
 		headline = fmt.Sprintf("A new release of sel is available: %s → %s", info.Version, info.LatestVersion)
+		link = info.URL
 	default:
 		return ""
 	}
-	releases := info.URL
-	if releases == "" {
-		releases = releasesPage
+	notice := "\n" + headline + "\n"
+	if info.UpgradeCommand != "" {
+		notice += "To upgrade, run: " + info.UpgradeCommand + "\n"
 	}
-	return fmt.Sprintf("\n%s\nTo upgrade, run: %s\n%s\n", headline, UpgradeCommand, releases)
+	return notice + link + "\n"
 }

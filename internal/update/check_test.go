@@ -1,11 +1,11 @@
 package update
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -203,21 +203,26 @@ func TestEnabled(t *testing.T) {
 func TestNotice(t *testing.T) {
 	yes, no := true, false
 	url := ReleaseURL("0.3.0")
+	upgrade := "\nTo upgrade, run: " + UpgradeCommand
 	cases := map[string]struct {
 		info Info
 		want string
 	}{
 		"outdated": {
-			Info{Version: "0.1.0", UpdateAvailable: &yes, LatestVersion: "0.3.0", URL: url},
-			"\nA new release of sel is available: 0.1.0 → 0.3.0\nTo upgrade, run: " + UpgradeCommand + "\n" + url + "\n",
+			Info{Version: "0.1.0", UpdateAvailable: &yes, LatestVersion: "0.3.0", URL: url, UpgradeCommand: UpgradeCommand},
+			"\nA new release of sel is available: 0.1.0 → 0.3.0" + upgrade + "\n" + url + "\n",
 		},
-		"below the server's minimum": {
-			Info{Version: "0.1.0", UpdateAvailable: &yes, LatestVersion: "0.3.0", BelowMinimum: &yes, MinVersion: "0.2.0", URL: url},
-			"\nsel 0.1.0 is no longer supported: this server needs 0.2.0 or later\nTo upgrade, run: " + UpgradeCommand + "\n" + url + "\n",
+		"below the server's minimum links the releases page, not the cached release": {
+			Info{Version: "0.1.0", UpdateAvailable: &no, LatestVersion: "0.1.5", BelowMinimum: &yes, MinVersion: "0.2.0", URL: ReleaseURL("0.1.5"), UpgradeCommand: UpgradeCommand},
+			"\nsel 0.1.0 is no longer supported: this server needs 0.2.0 or later" + upgrade + "\n" + releasesPage + "\n",
 		},
 		"below the minimum with no latest known": {
-			Info{Version: "0.1.0", BelowMinimum: &yes, MinVersion: "0.2.0"},
-			"\nsel 0.1.0 is no longer supported: this server needs 0.2.0 or later\nTo upgrade, run: " + UpgradeCommand + "\n" + releasesPage + "\n",
+			Info{Version: "0.1.0", BelowMinimum: &yes, MinVersion: "0.2.0", UpgradeCommand: UpgradeCommand},
+			"\nsel 0.1.0 is no longer supported: this server needs 0.2.0 or later" + upgrade + "\n" + releasesPage + "\n",
+		},
+		"outdated without an upgrade command shows the URL only": {
+			Info{Version: "0.1.0", UpdateAvailable: &yes, LatestVersion: "0.3.0", URL: url},
+			"\nA new release of sel is available: 0.1.0 → 0.3.0\n" + url + "\n",
 		},
 		"up to date":    {Info{Version: "0.3.0", UpdateAvailable: &no, BelowMinimum: &no}, ""},
 		"nothing known": {Info{Version: "dev"}, ""},
@@ -227,11 +232,61 @@ func TestNotice(t *testing.T) {
 			if got := Notice(tc.info); got != tc.want {
 				t.Errorf("Notice = %q, want %q", got, tc.want)
 			}
-			if strings.Contains(tc.want, "\x1b") {
-				t.Error("notice has escape codes")
+		})
+	}
+}
+
+func TestForegroundRefreshOnlyFetchesWhenDue(t *testing.T) {
+	cases := map[string]struct {
+		state State
+		hits  int32
+	}{
+		"no cache":             {State{}, 1},
+		"cache older than 24h": {State{LatestVersion: "0.2.0", CheckedAt: hoursAgo(25)}, 1},
+		"fresh cache":          {State{LatestVersion: "0.2.0", CheckedAt: hoursAgo(1)}, 0},
+		"in backoff":           {State{FailedAt: hoursAgo(0)}, 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			isolated(t, "0.1.0")
+			if err := saveState(tc.state); err != nil {
+				t.Fatal(err)
+			}
+			stub := stubReleases(t, tagRedirect("v0.3.0"), status(500))
+
+			RefreshIfDue(context.Background(), Version, func(string) string { return "" })
+
+			if stub.hits.Load() != tc.hits {
+				t.Errorf("requests = %d, want %d", stub.hits.Load(), tc.hits)
+			}
+			if tc.hits == 1 && LoadState().LatestVersion != "0.3.0" {
+				t.Errorf("state = %+v", LoadState())
 			}
 		})
 	}
+}
+
+func TestForegroundRefreshGivesUpAtTheTimeout(t *testing.T) {
+	isolated(t, "0.1.0")
+	release := make(chan struct{})
+	defer close(release)
+	stubReleases(t, hang(release), hang(release))
+	checkTimeout = 150 * time.Millisecond
+
+	started := time.Now()
+	RefreshIfDue(context.Background(), Version, func(string) string { return "" })
+
+	if elapsed := time.Since(started); elapsed < 100*time.Millisecond || elapsed > 2*time.Second {
+		t.Errorf("returned after %v, want about the 150ms timeout", elapsed)
+	}
+	if st := LoadState(); st.FailedAt == nil || st.LatestVersion != "" {
+		t.Errorf("state = %+v, want only failed_at", st)
+	}
+}
+
+func hoursAgo(h int) *time.Time {
+	at := time.Now().Add(-time.Duration(h) * time.Hour).UTC().Truncate(time.Second)
+	return &at
 }
 
 func TestConcurrentWritersDoNotLoseEachOthersFields(t *testing.T) {

@@ -47,7 +47,10 @@ func newRoot() *cobra.Command {
 
 func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	update.Version = version
-	checker := update.StartCheck(version, os.Getenv)
+	var checker *update.Checker
+	if !isVersionCommand(root, args) {
+		checker = update.StartCheck(version, os.Getenv)
+	}
 	cmd, code := runCommand(root, args, stdout, stderr)
 	checker.Stop()
 	printUpdateNotice(cmd, stdout, stderr)
@@ -149,6 +152,7 @@ func authCmd() *cobra.Command {
 
 CI and agents can skip logging in: set SELECTIVE_TOKEN (and SELECTIVE_HOST
 for a server other than app.selective.ci).`,
+		Annotations: map[string]string{"update_notice": "skip"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if legacyToken != "" {
 				return auth.LegacyTokenLogin(legacyToken, legacyHost, version, os.Stderr)

@@ -111,6 +111,7 @@ func TestNoticeIsSilentWhenAGateIsClosed(t *testing.T) {
 		"version command":          func(_ *noticeEnv, args *[]string) { *args = []string{"version"} },
 		"help command":             func(_ *noticeEnv, args *[]string) { *args = []string{"help"} },
 		"--help flag":              func(_ *noticeEnv, args *[]string) { *args = []string{"orgs", "--help"} },
+		"bare auth group":          func(_ *noticeEnv, args *[]string) { *args = []string{"auth"} },
 		"bare sel":                 func(_ *noticeEnv, args *[]string) { *args = nil },
 	}
 	for name, close := range cases {
