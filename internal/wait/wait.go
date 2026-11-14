@@ -88,10 +88,7 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 	}
 	delay := MinInterval
 	for {
-		done, retryAfter, err := runCheck(ctx, clock, start, opts.Limit, check)
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return &ExpiredError{For: opts.For, Limit: opts.Limit}
-		}
+		done, retryAfter, err := runCheck(ctx, clock, start, opts, check)
 		if err != nil {
 			return err
 		}
@@ -126,15 +123,19 @@ func (o Options) announce(elapsed time.Duration) error {
 	return format.EventLine(o.Out, "waiting", map[string]any{"elapsed_s": seconds, "for": o.For})
 }
 
-func runCheck(ctx context.Context, clock Clock, start time.Time, limit time.Duration, check Check) (bool, time.Duration, error) {
-	if limit <= 0 {
+func runCheck(ctx context.Context, clock Clock, start time.Time, opts Options, check Check) (bool, time.Duration, error) {
+	if opts.Limit <= 0 {
 		return check(ctx)
 	}
-	remaining := limit - clock.Now().Sub(start)
+	remaining := opts.Limit - clock.Now().Sub(start)
 	if remaining <= 0 {
 		remaining = FinalCheckGrace
 	}
 	budget, cancel := context.WithTimeout(ctx, remaining)
 	defer cancel()
-	return check(budget)
+	done, retryAfter, err := check(budget)
+	if errors.Is(err, context.DeadlineExceeded) && budget.Err() != nil && ctx.Err() == nil {
+		return false, 0, &ExpiredError{For: opts.For, Limit: opts.Limit}
+	}
+	return done, retryAfter, err
 }

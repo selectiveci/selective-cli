@@ -107,3 +107,20 @@ func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
 		t.Errorf("id=%q err=%v sleeps=%v lookups=%d, want b9 after one 7s wait and 4 lookups", id, err, clock.sleeps, calls.Load())
 	}
 }
+
+func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *testing.T) {
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(stalled.Close)
+	client := api.New(stalled.URL, "tok")
+	client.HTTP.Timeout = 100 * time.Millisecond
+	began := time.Now()
+
+	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour})
+
+	var coded contract.Coded
+	if !errors.As(err, &coded) || coded.ErrorCode() != contract.NetworkError || time.Since(began) > 5*time.Second {
+		t.Errorf("err = %v after %s, want network_error, not no_build", err, time.Since(began))
+	}
+}
