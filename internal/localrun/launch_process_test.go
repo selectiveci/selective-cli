@@ -144,6 +144,59 @@ func TestLaunchReportsAClientThatDiesMidRunAsRunnerErrorNotAsItsExitStatus(t *te
 	}
 }
 
+func TestLaunchForwardsInterruptToTheClientsOwnProcessGroupAndReportsInterrupted(t *testing.T) {
+	l := scriptedClient(t, "echo $$ > \"$PIDF\"\ntrap 'echo int > \"$MARK\"; exit 0' INT\nsleep 30 &\necho $! > \"$CHILDF\"\nwait\n")
+	pidf, mark, childf := filepath.Join(l.dir, "pid"), filepath.Join(l.dir, "mark"), filepath.Join(l.dir, "child")
+	t.Setenv("PIDF", pidf)
+	t.Setenv("MARK", mark)
+	t.Setenv("CHILDF", childf)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := l.run(ctx); done <- err }()
+	pid, _ := strconv.Atoi(awaitFile(t, pidf))
+	child, _ := strconv.Atoi(awaitFile(t, childf))
+	if pgid, _ := syscall.Getpgid(pid); pgid != pid || pgid == syscall.Getpgrp() {
+		t.Errorf("client pgid %d, want its own group (its pid %d), not ours %d", pgid, pid, syscall.Getpgrp())
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrInterrupted) {
+			t.Errorf("err %v, want ErrInterrupted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Launch did not return after the interrupt")
+	}
+	if got := awaitFile(t, mark); got != "int" {
+		t.Errorf("client saw %q, want SIGINT", got)
+	}
+	if !gone(pid) || !gone(child) {
+		t.Error("a process of the client's group survived")
+	}
+}
+
+func TestLaunchEscalatesToKillWhenTheClientIgnoresInterruptAndTerminate(t *testing.T) {
+	l := scriptedClient(t, "trap '' INT TERM\necho $$ > \"$PIDF\"\nwhile :; do sleep 0.05; done\n")
+	pidf := filepath.Join(l.dir, "pid")
+	t.Setenv("PIDF", pidf)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := l.run(ctx); done <- err }()
+	pid, _ := strconv.Atoi(awaitFile(t, pidf))
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrInterrupted) {
+			t.Errorf("err %v, want ErrInterrupted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Launch did not return: the client was never killed")
+	}
+	if !gone(pid) {
+		t.Error("the client survived the kill")
+	}
+}
+
 func TestLaunchSweepsGrandchildrenAndDoesNotHangOnTheirOpenPipes(t *testing.T) {
 	l := scriptedClient(t, "sleep 60 &\necho $! > \"$CHILDF\"\nexit 0\n")
 	childf := filepath.Join(l.dir, "child")

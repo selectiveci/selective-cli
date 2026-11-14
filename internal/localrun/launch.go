@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -146,6 +147,8 @@ func envValue(env []string, key string) string {
 	return ""
 }
 
+var ErrInterrupted = errors.New("interrupted")
+
 const (
 	defaultGrace                = 5 * time.Second
 	noSignal     syscall.Signal = 0
@@ -210,21 +213,43 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 	conn, err := seat.Accept(acceptCtx)
 	if err != nil {
 		if ctx.Err() != nil {
-			return Summary{}, ctx.Err()
+			c.reap(syscall.SIGINT, syscall.SIGTERM)
+			return Summary{}, ErrInterrupted
 		}
 		return Summary{}, contract.Errorf(contract.RunnerError, "the test runner exited before it connected to sel (%s); its output is above", c.cmd.ProcessState)
 	}
 	defer conn.Close()
 	sum, err := Run(ctx, conn, conn, events, opts)
-	if err != nil {
+	switch {
+	case errors.Is(err, context.Canceled):
+		c.reap(syscall.SIGINT, syscall.SIGTERM)
+		return sum, ErrInterrupted
+	case err != nil:
+		c.reap(noSignal, syscall.SIGTERM)
 		return sum, err
 	}
 	select {
 	case <-c.exited:
 		return sum, nil
 	case <-ctx.Done():
-		return sum, ctx.Err()
+		c.reap(syscall.SIGINT, syscall.SIGTERM)
+		return sum, ErrInterrupted
 	}
+}
+
+func (c *client) reap(steps ...syscall.Signal) {
+	for _, sig := range steps {
+		if sig != noSignal {
+			signalGroup(c.cmd, sig)
+		}
+		select {
+		case <-c.exited:
+			return
+		case <-time.After(c.grace):
+		}
+	}
+	signalGroup(c.cmd, syscall.SIGKILL)
+	<-c.exited
 }
 
 func (c *client) sweep() {
