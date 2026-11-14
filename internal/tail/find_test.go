@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -120,8 +119,7 @@ func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *test
 	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour})
 
 	var coded contract.Coded
-	var urlErr *url.Error
-	if errors.As(err, &coded) || !errors.As(err, &urlErr) || time.Since(began) > 5*time.Second {
-		t.Errorf("err = %v after %s, want the client's timeout (a *url.Error), not no_build", err, time.Since(began))
+	if !errors.As(err, &coded) || coded.ErrorCode() != contract.NetworkError || time.Since(began) > 5*time.Second {
+		t.Errorf("err = %v after %s, want network_error, not no_build", err, time.Since(began))
 	}
 }
