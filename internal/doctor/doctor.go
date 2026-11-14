@@ -11,6 +11,12 @@ import (
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/config"
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/credentials"
+)
+
+const (
+	httpTimeout = 10 * time.Second
+	loginFix    = "sel auth login --setup"
 )
 
 var laterChecks = []string{"socket", "runner", "cli_version"}
@@ -45,10 +51,15 @@ type Options struct {
 }
 
 type state struct {
-	opts   Options
-	cfg    *config.Config
-	host   string
-	secret string
+	opts    Options
+	cfg     *config.Config
+	host    string
+	secret  string
+	cred    *credentials.Credential
+	credErr error
+	client  *api.Client
+	me      *api.Me
+	meErr   error
 }
 
 type step struct {
@@ -59,6 +70,8 @@ type step struct {
 
 var steps = []step{
 	{"config", "", (*state).checkConfig},
+	{"server", "config", (*state).checkServer},
+	{"auth", "server", (*state).checkAuth},
 }
 
 func Run(opts Options) *Report {
@@ -185,6 +198,21 @@ func codeOf(err error) contract.Code {
 	return contract.InternalError
 }
 
+func unreachable(err error) (contract.Code, bool) {
+	var apiErr *api.Error
+	switch {
+	case err == nil:
+		return "", false
+	case !errors.As(err, &apiErr):
+		return contract.InternalError, true
+	case apiErr.Status == 0:
+		return contract.NetworkError, true
+	case apiErr.Status >= 500:
+		return contract.ServerError, true
+	}
+	return "", false
+}
+
 func (s *state) checkConfig() Check {
 	cfg, err := config.Load()
 	if err != nil {
@@ -196,4 +224,45 @@ func (s *state) checkConfig() Check {
 	}
 	s.cfg, s.host = cfg, host
 	return Check{Name: "config", Status: OK, Message: "using " + host, Detail: map[string]any{"host": host, "path": config.Path()}}
+}
+
+func (s *state) checkServer() Check {
+	s.cred, s.credErr = credentials.Lookup(s.cfg, s.host)
+	token := ""
+	if s.credErr == nil {
+		token = s.cred.Token
+	}
+	s.secret = token
+	s.client = api.New(s.host, token)
+	s.client.HTTP.Timeout = httpTimeout
+
+	began := time.Now()
+	s.me, s.meErr = s.client.Me()
+	ms := time.Since(began).Milliseconds()
+
+	if code, down := unreachable(s.meErr); down {
+		c := fail("server", code, s.meErr.Error(), "")
+		c.MS = &ms
+		return c
+	}
+	return Check{Name: "server", Status: OK, Message: fmt.Sprintf("%s answered in %dms", s.host, ms), MS: &ms}
+}
+
+func (s *state) checkAuth() Check {
+	if s.credErr != nil {
+		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, loginFix)
+	}
+	if s.meErr != nil {
+		code := codeOf(s.meErr)
+		if code == contract.Unauthorized {
+			return fail("auth", code, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), loginFix)
+		}
+		return failFrom("auth", s.meErr, "")
+	}
+	return Check{
+		Name:    "auth",
+		Status:  OK,
+		Message: fmt.Sprintf("logged in as %s (token from %s)", s.me.Email, s.cred.Source),
+		Detail:  map[string]any{"email": s.me.Email, "source": string(s.cred.Source)},
+	}
 }
