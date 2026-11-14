@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/wait"
 	"nhooyr.io/websocket"
 )
 
@@ -112,7 +114,7 @@ func TestStreamExitCodes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, connects := fakeTailServer(t, tc.frames, tc.drop)
 
-			code, err := stream(srv.URL, "tok", "b", "ndjson")
+			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
 
 			if got := atomic.LoadInt32(connects); got != 1 {
 				t.Fatalf("server saw %d connections, want 1", got)
@@ -184,7 +186,7 @@ func streamWithin(t *testing.T, srv *httptest.Server, limit time.Duration) strea
 	t.Helper()
 	done := make(chan streamResult, 1)
 	go func() {
-		code, err := stream(srv.URL, "tok", "b", "ndjson")
+		code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
 		done <- streamResult{code, err}
 	}()
 	select {
@@ -225,7 +227,7 @@ func TestStreamStaysConnectedToAQuietServer(t *testing.T) {
 func TestStreamRejectedToken(t *testing.T) {
 	srv, connects := fakeTailServer(t, nil, false)
 
-	code, err := stream(srv.URL, "wrong", "b", "ndjson")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "wrong", "b", "ndjson")
 
 	if got := atomic.LoadInt32(connects); got != 0 {
 		t.Fatalf("server accepted %d connections with a bad token", got)
@@ -235,19 +237,30 @@ func TestStreamRejectedToken(t *testing.T) {
 	}
 }
 
-func TestLookupBuildCarriesTheCLIUserAgent(t *testing.T) {
-	var seen string
+func TestEveryPollOfTheBuildLookupCarriesTheCLIUserAgent(t *testing.T) {
+	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Get("User-Agent")
+		seen = append(seen, r.Header.Get("User-Agent"))
+		if len(seen) < 3 {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"no_build"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"build_id":"b"}`))
 	}))
 	t.Cleanup(srv.Close)
 
-	if _, err := LookupBuild(srv.URL, "tok", "acme/widget", "abc"); err != nil {
-		t.Fatal(err)
-	}
+	id, err := findBuild(context.Background(), api.New(srv.URL, "tok"), "acme/widget", "abc1234", wait.Options{Limit: time.Hour, Clock: &fakeClock{}})
 
-	if !strings.HasPrefix(seen, "sel/") {
-		t.Errorf("lookup User-Agent = %q, want sel/...", seen)
+	if err != nil || id != "b" {
+		t.Fatalf("findBuild = %q, %v, want b", id, err)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("server saw %d lookups, want 3", len(seen))
+	}
+	for i, ua := range seen {
+		if !strings.HasPrefix(ua, "sel/") {
+			t.Errorf("lookup %d User-Agent = %q, want sel/...", i+1, ua)
+		}
 	}
 }
