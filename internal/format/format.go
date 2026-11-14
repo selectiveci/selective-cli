@@ -29,6 +29,9 @@ type Writer struct {
 	passStyle  lipgloss.Style
 	failStyle  lipgloss.Style
 	nodeColors map[string]lipgloss.Style
+	dimStyle   lipgloss.Style
+	// failed counts the failing attempts printed per test id.
+	failed map[string]int
 }
 
 var nodeColorPool = []lipgloss.Color{
@@ -42,6 +45,8 @@ func NewWriter(w io.Writer, format string) *Writer {
 		passStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")),
 		failStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")),
 		nodeColors: make(map[string]lipgloss.Style),
+		dimStyle:   lipgloss.NewStyle().Faint(true),
+		failed:     make(map[string]int),
 	}
 }
 
@@ -81,19 +86,36 @@ func (fw *Writer) writePretty(raw []byte) error {
 		file, _ := ev["file"].(string)
 		line, _ := ev["line"].(float64)
 		errMsg, _ := ev["error"].(string)
+		// Each retry of a failing test arrives as its own event; show the error once.
+		if id, _ := ev["id"].(string); id != "" {
+			fw.failed[id]++
+			if n := fw.failed[id]; n > 1 {
+				fmt.Fprintf(fw.w, "  %s  %s  %s\n", fw.failStyle.Render("↻"), node,
+					fw.dimStyle.Render(fmt.Sprintf("%s:%d failed again (attempt %d)", file, int(line), n)))
+				return nil
+			}
+		}
 		fmt.Fprintf(fw.w, "  %s  %s  %s:%d\n    %s\n",
 			fw.failStyle.Render("✗"),
 			node,
 			file, int(line),
 			fw.failStyle.Render(errMsg))
 
+	case "replay_truncated":
+		shown, _ := ev["shown"].(float64)
+		total, _ := ev["total"].(float64)
+		fmt.Fprintf(fw.w, "  … showing %d of %d failures; the rest were not replayed\n", int(shown), int(total))
+
 	case "summary":
 		passed, _ := ev["passed"].(float64)
 		failed, _ := ev["failed"].(float64)
+		flaky, _ := ev["flaky"].(float64)
 		ms, _ := ev["ms"].(float64)
-		fmt.Fprintf(fw.w, "\n  %s  %d passed  %d failed  %.1fs\n\n",
-			summaryIcon(int(failed)),
-			int(passed), int(failed), ms/1000)
+		counts := fmt.Sprintf("%d passed  %d failed", int(passed), int(failed))
+		if flaky > 0 {
+			counts += fmt.Sprintf("  %d flaky (passed on retry)", int(flaky))
+		}
+		fmt.Fprintf(fw.w, "\n  %s  %s  %.1fs\n\n", summaryIcon(int(failed)), counts, ms/1000)
 	}
 	return nil
 }
