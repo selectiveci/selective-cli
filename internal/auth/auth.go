@@ -266,14 +266,18 @@ type LogoutOptions struct {
 
 type LogoutInfo struct {
 	Host    string `json:"host"`
-	Revoked bool   `json:"revoked"`
+	Revoked *bool  `json:"revoked,omitempty"`
 }
 
 func (o LogoutOptions) report(host string, revoked bool, result string) error {
 	if !o.JSON {
 		return nil
 	}
-	return format.Write(o.Stdout, "auth", LogoutInfo{Host: host, Revoked: revoked}, result, o.DryRun)
+	info := LogoutInfo{Host: host}
+	if !o.DryRun {
+		info.Revoked = &revoked
+	}
+	return format.Write(o.Stdout, "auth", info, result, o.DryRun)
 }
 
 func Logout(opts LogoutOptions) error {

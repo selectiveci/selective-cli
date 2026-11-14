@@ -64,12 +64,12 @@ func TestAuthLogoutWritesAWriteObjectToStdout(t *testing.T) {
 		requests     int
 		stillStored  bool
 	}{
-		{"revoked and forgotten", 204, true, nil, `"revoked":true},"result":"deleted","dry_run":false}`, 1, false},
-		{"server refuses the revoke", 500, true, nil, `"revoked":false},"result":"deleted","dry_run":false}`, 1, false},
-		{"token already revoked elsewhere", 401, true, nil, `"revoked":true},"result":"deleted","dry_run":false}`, 1, false},
-		{"not logged in", 204, false, nil, `"revoked":false},"result":"unchanged","dry_run":false}`, 0, false},
-		{"dry run while logged in", 204, true, []string{"--dry-run"}, `"revoked":false},"result":"deleted","dry_run":true}`, 0, true},
-		{"dry run while not logged in", 204, false, []string{"--dry-run"}, `"revoked":false},"result":"unchanged","dry_run":true}`, 0, false},
+		{"revoked and forgotten", 204, true, nil, `,"revoked":true},"result":"deleted","dry_run":false}`, 1, false},
+		{"server refuses the revoke", 500, true, nil, `,"revoked":false},"result":"deleted","dry_run":false}`, 1, false},
+		{"token already revoked elsewhere", 401, true, nil, `,"revoked":true},"result":"deleted","dry_run":false}`, 1, false},
+		{"not logged in", 204, false, nil, `,"revoked":false},"result":"unchanged","dry_run":false}`, 0, false},
+		{"dry run while logged in", 204, true, []string{"--dry-run"}, `},"result":"deleted","dry_run":true}`, 0, true},
+		{"dry run while not logged in", 204, false, []string{"--dry-run"}, `},"result":"unchanged","dry_run":true}`, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestAuthLogoutWritesAWriteObjectToStdout(t *testing.T) {
 
 			res := selRun{host: srv.URL, configDir: dir}.run(t, append([]string{"auth", "logout"}, tc.args...)...)
 
-			want := `{"v":1,"auth":{"host":"` + srv.URL + `",` + tc.want + "\n"
+			want := `{"v":1,"auth":{"host":"` + srv.URL + `"` + tc.want + "\n"
 			if res.exit != 0 || res.stdout != want {
 				t.Errorf("exit %d stdout %q, want exit 0 and %q", res.exit, res.stdout, want)
 			}
