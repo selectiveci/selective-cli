@@ -34,6 +34,11 @@ func transient(err error) bool {
 	return false
 }
 
+func (c *Client) declinesRetry(err error) bool {
+	var apiErr *Error
+	return c.noRateLimitRetry && errors.As(err, &apiErr) && apiErr.Status == http.StatusTooManyRequests
+}
+
 func backoff(attempt int, err error) time.Duration {
 	var apiErr *Error
 	if errors.As(err, &apiErr) && (apiErr.Status == http.StatusTooManyRequests || apiErr.Status == http.StatusServiceUnavailable) {
