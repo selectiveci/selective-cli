@@ -179,14 +179,14 @@ func candidatePaths(root string, args []string) ([]string, error) {
 		if !filepath.IsAbs(arg) {
 			abs = filepath.Join(root, arg)
 		}
-		rel, err := filepath.Rel(root, abs)
+		rel, err := relativeTo(os.DirFS("/"), root, abs)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return nil, contract.Errorf(contract.UsageError, "%s is outside the current directory; pass paths under it", arg)
 		}
 		if _, err := os.Stat(abs); err != nil {
 			return nil, contract.Errorf(contract.UsageError, "no such path: %s", arg)
 		}
-		paths = append(paths, onDiskCase(os.DirFS(root), filepath.ToSlash(rel)))
+		paths = append(paths, filepath.ToSlash(rel))
 	}
 	return paths, nil
 }
@@ -198,8 +198,8 @@ func onDiskCase(fsys fs.FS, rel string) string {
 	var spelled []string
 	dir := "."
 	for _, name := range strings.Split(rel, "/") {
-		entries, _ := fs.ReadDir(fsys, dir)
-		if !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == name }) {
+		if _, err := fs.Stat(fsys, path.Join(dir, name)); err != nil {
+			entries, _ := fs.ReadDir(fsys, dir)
 			if i := slices.IndexFunc(entries, func(e fs.DirEntry) bool { return strings.EqualFold(e.Name(), name) }); i >= 0 {
 				name = entries[i].Name()
 			}
@@ -208,6 +208,13 @@ func onDiskCase(fsys fs.FS, rel string) string {
 		dir = path.Join(dir, name)
 	}
 	return strings.Join(spelled, "/")
+}
+
+func relativeTo(fsys fs.FS, root, abs string) (string, error) {
+	spell := func(p string) string {
+		return filepath.FromSlash("/" + onDiskCase(fsys, strings.Trim(filepath.ToSlash(filepath.Clean(p)), "/")))
+	}
+	return filepath.Rel(spell(root), spell(abs))
 }
 
 func planTest(paths []string, f testFlags) (testPlan, error) {

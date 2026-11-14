@@ -111,3 +111,18 @@ func TestOnDiskCaseSpellsEachPathPartAsTheDirectoryHasIt(t *testing.T) {
 		}
 	}
 }
+
+func TestRelativeToSpellsBothPathsAsTheDiskDoes(t *testing.T) {
+	tree := fstest.MapFS{"users/me/project/tests/test_calc.py": {}}
+	cases := []struct{ root, abs, want string }{
+		{"/Users/me/project", "/users/me/project/tests", "tests"},
+		{"/users/me/project", "/Users/Me/Project/Tests/test_calc.py", "tests/test_calc.py"},
+		{"/Users/me/project", "/users/me/project", "."},
+		{"/Users/me/project", "/users/me/elsewhere", "../elsewhere"},
+	}
+	for _, tc := range cases {
+		if got, err := relativeTo(tree, tc.root, tc.abs); err != nil || got != tc.want {
+			t.Errorf("relativeTo(%q, %q) = %q, %v, want %q", tc.root, tc.abs, got, err, tc.want)
+		}
+	}
+}
