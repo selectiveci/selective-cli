@@ -46,30 +46,49 @@ func newRoot() *cobra.Command {
 }
 
 func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
+	update.Version = version
+	var checker *update.Checker
+	if !isVersionCommand(root, args) {
+		checker = update.StartCheck(version, os.Getenv)
+	}
+	cmd, code := runCommand(root, args, stdout, stderr)
+	checker.Stop()
+	printUpdateNotice(cmd, stdout, stderr)
+	return code
+}
+
+type exitCode int
+
+func (e exitCode) Error() string { return fmt.Sprintf("exit %d", int(e)) }
+
+func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	update.Version = version
 	entered := false
 	markEntered(root, &entered)
 
 	cmd, err := root.ExecuteC()
 	if err == nil {
-		return contract.ExitOK
+		return cmd, contract.ExitOK
+	}
+	var exit exitCode
+	if errors.As(err, &exit) {
+		return cmd, int(exit)
 	}
 	if auth.IsSilent(err) {
-		return contract.ExitFor(contract.Unauthorized, 0)
+		return cmd, contract.ExitFor(contract.Unauthorized, 0)
 	}
 	if auth.IsCancelled(err) {
 		fmt.Fprintf(stderr, "Error: %s\n", err)
-		return contract.ExitInterrupted
+		return cmd, contract.ExitInterrupted
 	}
 	coded := classify(err, entered)
 	if format.JSONMode(cmd.Flags(), stdout) || jsonFlagGiven(args) {
 		_ = format.Error(stdout, coded)
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
-	return coded.ExitCode()
+	return cmd, coded.ExitCode()
 }
 
 func jsonFlagGiven(args []string) bool {
@@ -133,6 +152,7 @@ func authCmd() *cobra.Command {
 
 CI and agents can skip logging in: set SELECTIVE_TOKEN (and SELECTIVE_HOST
 for a server other than app.selective.ci).`,
+		Annotations: map[string]string{"help_unless_flag": "token"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if legacyToken != "" {
 				return auth.LegacyTokenLogin(legacyToken, legacyHost, version, os.Stderr)
@@ -271,7 +291,9 @@ Exit codes:
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			}
-			os.Exit(code)
+			if code != 0 {
+				return exitCode(code)
+			}
 			return nil
 		},
 	}
