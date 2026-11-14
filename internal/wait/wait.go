@@ -14,6 +14,8 @@ import (
 const (
 	MinInterval = 2 * time.Second
 	MaxInterval = 15 * time.Second
+
+	FinalCheckGrace = time.Second
 )
 
 type Clock interface {
@@ -24,6 +26,7 @@ type Clock interface {
 type Options struct {
 	For    string
 	Limit  time.Duration
+	Origin time.Time
 	Out    io.Writer
 	Pretty bool
 	Clock  Clock
@@ -79,22 +82,28 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 		clock = realClock{}
 	}
 	start := clock.Now()
+	origin := opts.Origin
+	if origin.IsZero() {
+		origin = start
+	}
 	delay := MinInterval
 	for {
-		done, retryAfter, err := check(ctx)
+		done, retryAfter, err := runCheck(ctx, clock, start, opts, check)
 		if err != nil {
 			return err
 		}
 		if done {
 			return nil
 		}
-		elapsed := clock.Now().Sub(start)
-		remaining := opts.Limit - elapsed
+		now := clock.Now()
+		remaining := opts.Limit - now.Sub(start)
 		step := max(delay, retryAfter)
 		if remaining <= 0 || retryAfter > remaining {
 			return &ExpiredError{For: opts.For, Limit: opts.Limit}
 		}
-		opts.announce(elapsed)
+		if err := opts.announce(now.Sub(origin)); err != nil {
+			return err
+		}
 		if err := clock.Sleep(ctx, min(step, remaining)); err != nil {
 			return err
 		}
@@ -102,14 +111,31 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 	}
 }
 
-func (o Options) announce(elapsed time.Duration) {
+func (o Options) announce(elapsed time.Duration) error {
 	if o.Out == nil {
-		return
+		return nil
 	}
 	seconds := int(elapsed.Seconds())
 	if o.Pretty {
-		fmt.Fprintf(o.Out, "waiting for %s (%ds)\n", o.For, seconds)
-		return
+		_, err := fmt.Fprintf(o.Out, "waiting for %s (%ds)\n", o.For, seconds)
+		return err
 	}
-	_ = format.EventLine(o.Out, "waiting", map[string]any{"elapsed_s": seconds, "for": o.For})
+	return format.EventLine(o.Out, "waiting", map[string]any{"elapsed_s": seconds, "for": o.For})
+}
+
+func runCheck(ctx context.Context, clock Clock, start time.Time, opts Options, check Check) (bool, time.Duration, error) {
+	if opts.Limit <= 0 {
+		return check(ctx)
+	}
+	remaining := opts.Limit - clock.Now().Sub(start)
+	if remaining <= 0 {
+		remaining = FinalCheckGrace
+	}
+	budget, cancel := context.WithTimeout(ctx, remaining)
+	defer cancel()
+	done, retryAfter, err := check(budget)
+	if errors.Is(err, context.DeadlineExceeded) && budget.Err() != nil && ctx.Err() == nil {
+		return false, 0, &ExpiredError{For: opts.For, Limit: opts.Limit}
+	}
+	return done, retryAfter, err
 }
