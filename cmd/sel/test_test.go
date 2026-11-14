@@ -2,15 +2,16 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"io"
-	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/selectiveci/selective-cli/internal/localrun"
 )
 
 func TestTransportExistsButIsAbsentFromHelpJSON(t *testing.T) {
@@ -46,26 +47,27 @@ func TestTransportKeepsStdoutEmptyWhereTheRootWouldPrint(t *testing.T) {
 }
 
 func TestTransportStdioKeepsRelayingAfterSIGINT(t *testing.T) {
-	dir, err := os.MkdirTemp("", "s")
+	seat, err := localrun.NewSeat(os.Args[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
-	sock := filepath.Join(dir, "s.sock")
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
+	defer seat.Close()
+	var shim string
+	for _, kv := range seat.Env() {
+		if v, ok := strings.CutPrefix(kv, "SELECTIVE_TRANSPORT="); ok {
+			shim = v
+		}
 	}
-	defer ln.Close()
-	cmd := exec.Command(os.Args[0], "__transport", "--stdio")
-	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_SEAT_SOCKET="+sock)
+	cmd := exec.Command(shim, "--stdio")
+	cmd.Env = append(append(os.Environ(), seat.Env()...), "SELECTIVE_TEST_RUN_MAIN=1")
 	stdin, _ := cmd.StdinPipe()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	_ = ln.(*net.UnixListener).SetDeadline(time.Now().Add(3 * time.Second))
-	conn, err := ln.Accept()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := seat.Accept(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
