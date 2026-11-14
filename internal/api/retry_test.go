@@ -182,6 +182,29 @@ func TestRetryAfterReplacesTheBackoff(t *testing.T) {
 	}
 }
 
+func TestARetryAfterOfTenSecondsIsWaitedOut(t *testing.T) {
+	clock := useClock(t)
+	client, rec := scripted(t, reply{429, map[string]string{"Retry-After": "10"}}, reply{status: 200})
+
+	_, err := client.Me()
+
+	if err != nil || rec.count() != 2 || len(clock.sleeps) != 1 || clock.sleeps[0] != 10*time.Second {
+		t.Errorf("err %v after %d requests, sleeps %v, want success on the second after one 10s wait", err, rec.count(), clock.sleeps)
+	}
+}
+
+func TestARetryAfterOverTenSecondsReturnsAtOnceWithTheAdvice(t *testing.T) {
+	clock := useClock(t)
+	client, rec := scripted(t, reply{429, map[string]string{"Retry-After": "11"}}, reply{status: 200})
+
+	_, err := client.Me()
+
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Code != contract.RateLimited || apiErr.Fields["retry_after_s"] != 11 || rec.count() != 1 || len(clock.sleeps) != 0 {
+		t.Errorf("err %v after %d requests, sleeps %v, want rate_limited with retry_after_s 11 after 1 and no wait", err, rec.count(), clock.sleeps)
+	}
+}
+
 func TestAnUnreachableServerIsRetriedTwice(t *testing.T) {
 	clock := useClock(t)
 	srv := httptest.NewServer(http.NotFoundHandler())
@@ -323,5 +346,26 @@ func TestEveryFailedAttemptsBodyIsClosed(t *testing.T) {
 
 	if transport.opened.Load() != 3 || transport.closed.Load() != 3 {
 		t.Errorf("opened %d bodies and closed %d, want 3 and 3", transport.opened.Load(), transport.closed.Load())
+	}
+}
+
+func TestAClientWithoutRetryMakesOneRequestOnA503(t *testing.T) {
+	clock := useClock(t)
+	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
+
+	_, err := client.WithoutRetry().Me()
+
+	if codeOf(t, err) != contract.ServerError || rec.count() != 1 || len(clock.sleeps) != 0 {
+		t.Errorf("err %v after %d requests and %d waits, want the 503 after 1 and 0", err, rec.count(), len(clock.sleeps))
+	}
+}
+
+func TestWithoutRetryLeavesTheOriginalClientRetrying(t *testing.T) {
+	useClock(t)
+	client, rec := scripted(t, reply{status: 503}, reply{status: 200})
+	client.WithoutRetry()
+
+	if _, err := client.Me(); err != nil || rec.count() != 2 {
+		t.Errorf("err %v after %d requests, want success on the second", err, rec.count())
 	}
 }

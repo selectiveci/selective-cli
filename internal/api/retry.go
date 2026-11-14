@@ -16,6 +16,8 @@ const (
 	maxAttempts = 3
 	baseBackoff = time.Second
 	jitter      = 0.2
+
+	maxRetryAfter = 10 * time.Second
 )
 
 func transient(err error) bool {
