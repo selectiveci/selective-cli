@@ -30,6 +30,9 @@ func fakeTailServer(t *testing.T, frames []string, dropWithoutClose bool) (*http
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "sel/") {
+			t.Errorf("websocket User-Agent = %q, want sel/...", r.Header.Get("User-Agent"))
+		}
 		atomic.AddInt32(&connects, 1)
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -229,5 +232,22 @@ func TestStreamRejectedToken(t *testing.T) {
 	}
 	if code != 4 || err == nil {
 		t.Errorf("got exit %d err %v, want exit 4 with an error", code, err)
+	}
+}
+
+func TestLookupBuildCarriesTheCLIUserAgent(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"build_id":"b"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := LookupBuild(srv.URL, "tok", "acme/widget", "abc"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.HasPrefix(seen, "sel/") {
+		t.Errorf("lookup User-Agent = %q, want sel/...", seen)
 	}
 }

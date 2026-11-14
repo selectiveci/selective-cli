@@ -15,6 +15,7 @@ import (
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/update"
 )
 
 var (
@@ -60,7 +61,7 @@ type Client struct {
 func New(host string) *Client {
 	return &Client{
 		Host:  host,
-		HTTP:  &http.Client{Timeout: (holdSeconds + 15) * time.Second},
+		HTTP:  &http.Client{Timeout: (holdSeconds + 15) * time.Second, Transport: update.Transport(nil)},
 		Sleep: sleep,
 		Now:   time.Now,
 	}

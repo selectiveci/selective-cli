@@ -23,6 +23,9 @@ func fakeServer(t *testing.T, script []string) (*httptest.Server, *[]string) {
 	polls := []string{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "sel/") {
+			t.Errorf("%s User-Agent = %q, want sel/...", r.URL.Path, r.Header.Get("User-Agent"))
+		}
 		switch r.URL.Path {
 		case "/api/v1/device/code":
 			var body map[string]string

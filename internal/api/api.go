@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/update"
 )
 
 type Client struct {
@@ -22,7 +23,7 @@ type Client struct {
 }
 
 func New(host, token string) *Client {
-	return &Client{Host: host, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second}}
+	return &Client{Host: host, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second, Transport: update.Transport(nil)}}
 }
 
 type Me struct {

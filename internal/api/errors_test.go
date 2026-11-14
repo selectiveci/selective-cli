@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,5 +144,22 @@ func TestAMalformedSuccessBodyIsAServerError(t *testing.T) {
 	var apiErr *Error
 	if !errors.As(err, &apiErr) || apiErr.Code != contract.ServerError {
 		t.Errorf("err = %v, want server_error", err)
+	}
+}
+
+func TestRequestsCarryTheCLIUserAgent(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := New(srv.URL, "tok").Me(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.HasPrefix(seen, "sel/") || !strings.Contains(seen, "("+runtime.GOOS+"/"+runtime.GOARCH+")") {
+		t.Errorf("User-Agent = %q, want sel/<version> (<os>/<arch>)", seen)
 	}
 }

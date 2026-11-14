@@ -17,6 +17,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/tail"
+	"github.com/selectiveci/selective-cli/internal/update"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,7 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	update.Version = version
 	entered := false
 	markEntered(root, &entered)
 
@@ -280,16 +282,6 @@ Exit codes:
 	cmd.Flags().StringVar(&format, "format", "", `Output format: "ndjson" (default when piped) or "pretty" (default on TTY)`)
 
 	return cmd
-}
-
-func versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version information",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("sel %s (%s)\n", version, commit)
-		},
-	}
 }
 
 type setupFlags struct {
