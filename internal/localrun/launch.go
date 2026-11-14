@@ -257,6 +257,9 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 		c.reap(syscall.SIGINT, syscall.SIGTERM)
 		return sum, ErrInterrupted
 	case <-time.After(c.grace):
+		if errors.Is(c.cmd.Process.Signal(noSignal), os.ErrProcessDone) {
+			return sum, nil
+		}
 		c.reap(syscall.SIGTERM)
 		return sum, contract.Errorf(contract.RunnerError, "the test runner did not exit after reporting its finish; sel stopped it")
 	}
