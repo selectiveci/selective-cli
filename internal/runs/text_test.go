@@ -8,6 +8,12 @@ import (
 	"github.com/selectiveci/selective-cli/internal/setup"
 )
 
+const fullTrends = `{"range":"week","suite_id":"s-1","window":{"from":"2026-11-06T00:00:00Z","to":"2026-11-13T00:00:00Z","bucket":"day"},"summary":{"tests_count":120,"pass_rate":0.9333,"failures_count":8,"flaky_count":2,"median_build_s":41.5,"previous":{"pass_rate":0.9,"failures_count":3,"median_build_s":50}},"outcomes":[{"bucket_start":"2026-11-12T00:00:00Z","passed_count":5,"failed_count":1,"incomplete_count":0,"cancelled_count":0}],"failures":[{"bucket_start":"2026-11-12T00:00:00Z","failures_count":4}],"duration":[{"bucket_start":"2026-11-12T00:00:00Z","avg_build_s":null,"p95_build_s":null,"build_count":0}],"top_failing":[{"test_id":"t-1","test_name":"spec/a_spec.rb","suite_name":"web","fail_count":3,"run_count":10}],"most_flaky":[{"test_id":"t-2","test_name":"spec/b_spec.rb","suite_name":"web","status":"flaky","occurrence_count":4,"branch_count":2}],"slowest":[{"test_id":"t-3","test_name":"spec/c_spec.rb","suite_name":"web","avg_s":1.5,"p95_s":2.25,"max_s":3,"run_count":9,"trend":"up"}]}`
+
+const absentTrends = `{"range":"day","suite_id":null,"summary":{"tests_count":5,"pass_rate":1,"failures_count":0,"previous":{"pass_rate":null,"failures_count":0}}}`
+
+const emptySectionTrends = `{"range":"day","suite_id":null,"window":{"from":"2026-11-12T00:00:00Z","to":"2026-11-13T00:00:00Z","bucket":"hour"},"top_failing":[]}`
+
 func asText(env *setup.Env, out *bytes.Buffer) (*bytes.Buffer, *bytes.Buffer) {
 	env.JSON = false
 	return out, env.Stderr.(*bytes.Buffer)
@@ -107,5 +113,44 @@ func TestBuildTextMatchesGolden(t *testing.T) {
 	assertText(t, "stdout", stdout.String(), golden(t, "build.txt"))
 	if stderr.Len() != 0 {
 		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestTrendsTextMatchesGoldenAndNamesTheWindowOnStderr(t *testing.T) {
+	s := &trendsStub{body: fullTrends}
+	env, out := s.env(t)
+	stdout, stderr := asText(env, out)
+
+	if err := Trends(env, TrendsOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertText(t, "stdout", stdout.String(), golden(t, "trends-full.txt"))
+	assertText(t, "stderr", stderr.String(), "Window: week, 2026-11-06T00:00:00Z to 2026-11-13T00:00:00Z, in day buckets.\n")
+}
+
+func TestTrendsTextTellsUnknownFromEmptyAndNeverPrintsZeroForEither(t *testing.T) {
+	s := &trendsStub{body: absentTrends}
+	env, out := s.env(t)
+	stdout, _ := asText(env, out)
+
+	if err := Trends(env, TrendsOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertText(t, "stdout", stdout.String(), golden(t, "trends-empty.txt"))
+}
+
+func TestTrendsTextSaysWhenASectionHasNoRows(t *testing.T) {
+	s := &trendsStub{body: emptySectionTrends}
+	env, out := s.env(t)
+	stdout, stderr := asText(env, out)
+
+	if err := Trends(env, TrendsOptions{Org: "acme", Section: "top_failing"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if stdout.String() != "TOP FAILING\n" || !strings.HasSuffix(stderr.String(), "No rows in top_failing.\n") {
+		t.Errorf("stdout %q stderr %q", stdout, stderr)
 	}
 }

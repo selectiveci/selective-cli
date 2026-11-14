@@ -1,0 +1,7 @@
+SUMMARY
+METRIC        THIS WINDOW  PREVIOUS
+Tests         5            n/a
+Pass rate     100.0%       -
+Failures      0            0
+Flaky         unknown      n/a
+Median build  unknown      unknown
