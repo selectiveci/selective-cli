@@ -1,0 +1,229 @@
+package flakes
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/setup"
+)
+
+const (
+	measuredFlake   = `{"id":"11111111-1111-4111-8111-111111111111","status":"flaking","test":{"id":"t1","name":"checkout flow","path":"spec/checkout_spec.rb"},"suite":{"id":"s1","name":"web-rspec"},"first_seen_at":"2026-11-01T08:00:00Z","last_seen_at":"2026-11-12T16:30:00Z","flake_rate":0.125,"occurrence_count":7,"retry_minutes":4.5,"sparkline":[0,1,2],"is_new":false,"impact_score":8.3,"window_days":14}`
+	unmeasuredFlake = `{"id":"22222222-2222-4222-8222-222222222222","status":"quarantined","test":{"id":"t2","name":"login","path":"spec/login_spec.rb"},"suite":{"id":"s1","name":"web-rspec"},"first_seen_at":"2026-11-02T08:00:00Z","last_seen_at":"2026-11-12T09:05:00Z","occurrence_count":3,"sparkline":[1,0,0],"is_new":true,"window_days":14}`
+	zeroFlake       = `{"id":"33333333-3333-4333-8333-333333333333","status":"flaking","test":{"id":"t3","name":"search","path":"spec/search_spec.rb"},"suite":{"id":"s2","name":"api-minitest"},"first_seen_at":"2026-11-03T08:00:00Z","last_seen_at":"2026-11-10T00:00:00Z","flake_rate":0.0,"occurrence_count":1,"retry_minutes":0.0,"sparkline":[0,0,1],"is_new":false,"impact_score":0.0,"window_days":14}`
+)
+
+type stub struct {
+	mu      sync.Mutex
+	queries []url.Values
+	pages   map[string]string
+}
+
+func (s *stub) env(t *testing.T, asJSON bool) (*setup.Env, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.queries = append(s.queries, r.URL.Query())
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/orgs/acme/flakes":
+			_, _ = w.Write([]byte(s.pages[r.URL.Query().Get("cursor")]))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	var out, errOut bytes.Buffer
+	return &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut, JSON: asJSON}, &out, &errOut
+}
+
+func page(flakes, next, notices string) string {
+	return `{"flakes":[` + flakes + `],"next_cursor":` + next + `,"notices":` + notices + `}`
+}
+
+func golden(t *testing.T, name string) string {
+	t.Helper()
+	want, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(want)
+}
+
+func assertGolden(t *testing.T, name, got string) {
+	t.Helper()
+	if got != golden(t, name) {
+		t.Errorf("%s:\n%s\nwant:\n%s", name, got, golden(t, name))
+	}
+}
+
+func TestListJSONMatchesGolden(t *testing.T) {
+	s := &stub{pages: map[string]string{"": page(measuredFlake+","+unmeasuredFlake+","+zeroFlake, "null", `["metrics_unavailable"]`)}}
+	env, out, _ := s.env(t, true)
+
+	err := List(env, ListOptions{Org: "acme"})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertGolden(t, "list.json", out.String())
+}
+
+func TestListKeepsUncomputedMetricsAbsentAndComputedZerosPresent(t *testing.T) {
+	s := &stub{pages: map[string]string{"": page(unmeasuredFlake+","+zeroFlake, "null", `["metrics_unavailable"]`)}}
+	env, out, _ := s.env(t, true)
+
+	if err := List(env, ListOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Flakes  []map[string]any `json:"flakes"`
+		Notices []string         `json:"notices"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"flake_rate", "retry_minutes", "impact_score"} {
+		if _, present := doc.Flakes[0][key]; present {
+			t.Errorf("uncomputed flake carries %s = %v, want the key absent", key, doc.Flakes[0][key])
+		}
+		if value, present := doc.Flakes[1][key]; !present || value != 0.0 {
+			t.Errorf("computed zero flake %s = %v (present %v), want 0", key, value, present)
+		}
+	}
+	if len(doc.Notices) != 1 || doc.Notices[0] != "metrics_unavailable" {
+		t.Errorf("notices = %v", doc.Notices)
+	}
+}
+
+func TestListFollowsEveryCursorThroughShortPagesAndUnionsNotices(t *testing.T) {
+	s := &stub{pages: map[string]string{
+		"":   page(measuredFlake, `"c2"`, `["approximate_ranking"]`),
+		"c2": page("", `"c3"`, `["approximate_ranking"]`),
+		"c3": page(unmeasuredFlake, "null", `["approximate_ranking","metrics_unavailable"]`),
+	}}
+	env, out, _ := s.env(t, true)
+
+	err := List(env, ListOptions{Org: "acme", FlakesQuery: api.FlakesQuery{Suite: "web-rspec", Status: "all"}})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Flakes     []json.RawMessage `json:"flakes"`
+		NextCursor *string           `json:"next_cursor"`
+		Notices    []string          `json:"notices"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Flakes) != 2 || doc.NextCursor != nil || strings.Join(doc.Notices, ",") != "approximate_ranking,metrics_unavailable" {
+		t.Errorf("flakes %d next_cursor %v notices %v", len(doc.Flakes), doc.NextCursor, doc.Notices)
+	}
+	if len(s.queries) != 3 || s.queries[0].Get("limit") != "200" || s.queries[1].Get("cursor") != "c2" || s.queries[2].Get("cursor") != "c3" {
+		t.Fatalf("queries = %v", s.queries)
+	}
+	for _, q := range s.queries {
+		if q.Get("suite") != "web-rspec" || q.Get("status") != "all" {
+			t.Errorf("filters lost on %v", q)
+		}
+	}
+}
+
+func TestListWithALimitFetchesOnePageAndReturnsItsCursor(t *testing.T) {
+	s := &stub{pages: map[string]string{"c1": page(measuredFlake, `"c2"`, `[]`)}}
+	env, out, _ := s.env(t, true)
+
+	err := List(env, ListOptions{Org: "acme", FlakesQuery: api.FlakesQuery{Limit: 1, Cursor: "c1"}})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.queries) != 1 || s.queries[0].Get("limit") != "1" || s.queries[0].Get("cursor") != "c1" || !strings.Contains(out.String(), `"next_cursor":"c2"`) {
+		t.Errorf("queries = %v stdout = %s", s.queries, out)
+	}
+}
+
+func TestListWithNoFlakesIsAnEmptyArrayNotNull(t *testing.T) {
+	s := &stub{pages: map[string]string{"": page("", "null", "[]")}}
+	env, out, _ := s.env(t, true)
+
+	if err := List(env, ListOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if out.String() != `{"v":1,"flakes":[],"next_cursor":null,"notices":[]}`+"\n" {
+		t.Errorf("stdout = %s", out)
+	}
+}
+
+func pagesOf(rows int) http.Handler {
+	row := `{"id":"x"}`
+	body := `{"flakes":[` + strings.TrimSuffix(strings.Repeat(row+",", rows), ",") + `],"next_cursor":"more","notices":[]}`
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+}
+
+func walk(t *testing.T, rows int) (flakes int, nextCursor *string, notices []string, requests int) {
+	t.Helper()
+	var mu sync.Mutex
+	handler := pagesOf(rows)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	var out bytes.Buffer
+	env := &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &bytes.Buffer{}, JSON: true}
+
+	if err := List(env, ListOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Flakes     []json.RawMessage `json:"flakes"`
+		NextCursor *string           `json:"next_cursor"`
+		Notices    []string          `json:"notices"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return len(doc.Flakes), doc.NextCursor, doc.Notices, requests
+}
+
+func TestListCapsAutoPaginationByFlakeCountSoShortPagesStillReachTheAdvertisedTotal(t *testing.T) {
+	flakes, next, notices, _ := walk(t, 11)
+
+	if flakes < maxFlakes || flakes >= maxFlakes+11 {
+		t.Errorf("collected %d flakes from 11-row pages, want %d", flakes, maxFlakes)
+	}
+	if next == nil || *next != "more" || !slices.Contains(notices, "pagination_stopped_early") {
+		t.Errorf("next_cursor %v notices %v, want the cursor kept and pagination_stopped_early", next, notices)
+	}
+}
+
+func TestListStopsAtTheRequestCeilingWhenPagesAreEmpty(t *testing.T) {
+	flakes, next, notices, requests := walk(t, 0)
+
+	if requests != maxRequests || flakes != 0 {
+		t.Errorf("requests %d flakes %d, want %d requests and none", requests, flakes, maxRequests)
+	}
+	if next == nil || !slices.Contains(notices, "pagination_stopped_early") {
+		t.Errorf("next_cursor %v notices %v", next, notices)
+	}
+}
