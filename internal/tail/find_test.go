@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -104,5 +105,23 @@ func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
 
 	if err != nil || id != "b9" || !slices.Equal(clock.sleeps, []time.Duration{7 * time.Second}) || calls.Load() != 2 {
 		t.Errorf("id=%q err=%v sleeps=%v lookups=%d, want b9 after one 7s wait", id, err, clock.sleeps, calls.Load())
+	}
+}
+
+func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *testing.T) {
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(stalled.Close)
+	client := api.New(stalled.URL, "tok")
+	client.HTTP.Timeout = 100 * time.Millisecond
+	began := time.Now()
+
+	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour})
+
+	var coded contract.Coded
+	var urlErr *url.Error
+	if errors.As(err, &coded) || !errors.As(err, &urlErr) || time.Since(began) > 5*time.Second {
+		t.Errorf("err = %v after %s, want the client's timeout (a *url.Error), not no_build", err, time.Since(began))
 	}
 }
