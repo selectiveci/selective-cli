@@ -36,7 +36,7 @@ func newRoot() *cobra.Command {
 	}
 	root.PersistentFlags().Bool("json", false, "JSON output (the default when stdout isn't a terminal)")
 
-	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), failuresCmd(), versionCmd())
+	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), failuresCmd(), buildsCmd(), buildCmd(), versionCmd())
 	installHelp(root)
 
 	root.SilenceUsage = true
