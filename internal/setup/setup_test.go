@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -488,5 +489,19 @@ func TestConfigureReportsWhatTheServerReturnedNotWhatWasAsked(t *testing.T) {
 				t.Errorf("text stdout = %q, want %q", got, tc.wantText)
 			}
 		})
+	}
+}
+
+func TestConnectWithAnUnreadableConfigIsAUsageError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SELECTIVE_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Connect("", false)
+
+	if got := codeOf(err); got != contract.UsageError {
+		t.Errorf("code = %q, want %q (err: %v)", got, contract.UsageError, err)
 	}
 }
