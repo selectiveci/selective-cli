@@ -79,7 +79,7 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 			return err
 		}
 	}
-	retryable := method == http.MethodGet || header.Get("Idempotency-Key") != ""
+	retryable := !c.noRetry && (method == http.MethodGet || header.Get("Idempotency-Key") != "")
 	ctx := c.requestContext()
 	clk := currentClock()
 	for attempt := 1; ; attempt++ {
@@ -88,6 +88,9 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 			return err
 		}
 		pause := backoff(attempt, err)
+		if pause > maxRetryAfter {
+			return err
+		}
 		if deadline, ok := ctx.Deadline(); ok && !clk.Now().Add(pause).Before(deadline) {
 			return err
 		}
