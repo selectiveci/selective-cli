@@ -188,3 +188,14 @@ func TestChangedFilesDefaultBaseIsNotShadowedByALocalBranchNamedOriginMain(t *te
 		t.Errorf("changed = %v err %v, want the diff against the remote-tracking origin/main", got, err)
 	}
 }
+
+func TestChangedFilesRefusesAnAgainstValueThatGitWouldReadAsAnOption(t *testing.T) {
+	dir := branchedRepo(t)
+
+	for _, against := range []string{"--octopus", "-h", "--"} {
+		got, err := ChangedFiles(dir, against)
+		if contractCode(err) != contract.UsageError || got != nil {
+			t.Errorf("against %q: changed %v err %v, want a usage_error", against, got, err)
+		}
+	}
+}
