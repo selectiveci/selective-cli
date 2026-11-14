@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -246,4 +247,64 @@ func TestPromptJSONIsTheServerObject(t *testing.T) {
 	}
 
 	assertGolden(t, "prompt.json", out.String())
+}
+
+func pagesOf(rows int) http.Handler {
+	row := `{"id":"x"}`
+	body := `{"flakes":[` + strings.TrimSuffix(strings.Repeat(row+",", rows), ",") + `],"next_cursor":"more","notices":[]}`
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+}
+
+func walk(t *testing.T, rows int) (flakes int, nextCursor *string, notices []string, requests int) {
+	t.Helper()
+	var mu sync.Mutex
+	handler := pagesOf(rows)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	var out bytes.Buffer
+	env := &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &bytes.Buffer{}, JSON: true}
+
+	if err := List(env, ListOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Flakes     []json.RawMessage `json:"flakes"`
+		NextCursor *string           `json:"next_cursor"`
+		Notices    []string          `json:"notices"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return len(doc.Flakes), doc.NextCursor, doc.Notices, requests
+}
+
+func TestListCapsAutoPaginationByFlakeCountSoShortPagesStillReachTheAdvertisedTotal(t *testing.T) {
+	flakes, next, notices, _ := walk(t, 11)
+
+	if flakes < maxFlakes || flakes >= maxFlakes+11 {
+		t.Errorf("collected %d flakes from 11-row pages, want %d", flakes, maxFlakes)
+	}
+	if next == nil || *next != "more" || !slices.Contains(notices, "pagination_stopped_early") {
+		t.Errorf("next_cursor %v notices %v, want the cursor kept and pagination_stopped_early", next, notices)
+	}
+}
+
+func TestListStopsAtTheRequestCeilingWhenPagesAreEmpty(t *testing.T) {
+	flakes, next, notices, requests := walk(t, 0)
+
+	if requests != maxRequests || flakes != 0 {
+		t.Errorf("requests %d flakes %d, want %d requests and none", requests, flakes, maxRequests)
+	}
+	if next == nil || !slices.Contains(notices, "pagination_stopped_early") {
+		t.Errorf("next_cursor %v notices %v", next, notices)
+	}
 }
