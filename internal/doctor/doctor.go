@@ -4,17 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/config"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/credentials"
+	"github.com/selectiveci/selective-cli/internal/gitctx"
+	"github.com/selectiveci/selective-cli/internal/setup"
 )
 
 const (
 	httpTimeout = 10 * time.Second
 	loginFix    = "sel auth login --setup"
+	suiteFix    = "sel suites create --name <name> --framework <type>"
 )
 
 var laterChecks = []string{"socket", "runner", "cli_version"}
@@ -45,7 +50,9 @@ type Report struct {
 
 type Options struct {
 	Hostname string
+	Org      string
 	Timeout  time.Duration
+	Repo     func() (string, error)
 }
 
 type state struct {
@@ -57,6 +64,7 @@ type state struct {
 	client  *api.Client
 	me      *api.Me
 	meErr   error
+	orgSlug string
 }
 
 type step struct {
@@ -69,9 +77,14 @@ var steps = []step{
 	{"config", "", (*state).checkConfig},
 	{"server", "config", (*state).checkServer},
 	{"auth", "server", (*state).checkAuth},
+	{"org", "auth", (*state).checkOrg},
+	{"suite", "org", (*state).checkSuite},
 }
 
 func Run(opts Options) *Report {
+	if opts.Repo == nil {
+		opts.Repo = gitctx.Repo
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
 
@@ -219,5 +232,57 @@ func (s *state) checkAuth() Check {
 		Status:  OK,
 		Message: fmt.Sprintf("logged in as %s (token from %s)", s.me.Email, s.cred.Source),
 		Detail:  map[string]any{"email": s.me.Email, "source": string(s.cred.Source)},
+	}
+}
+
+func (s *state) checkOrg() Check {
+	slug, err := (&setup.Env{Client: s.client}).ResolveOrg(s.opts.Org)
+	if err != nil {
+		fix := ""
+		if codeOf(err) == contract.UsageError {
+			fix = "pass --org SLUG or set SELECTIVE_ORG"
+		}
+		return failFrom("org", err, fix)
+	}
+	orgs, err := s.client.Organizations()
+	if err != nil {
+		return failFrom("org", err, "")
+	}
+	slugs := make([]string, len(orgs))
+	for i, o := range orgs {
+		slugs[i] = o.Slug
+	}
+	if !slices.Contains(slugs, slug) {
+		return fail("org", contract.OrganizationNotFound, fmt.Sprintf("no organization %q among yours: %s", slug, strings.Join(slugs, ", ")), "sel orgs")
+	}
+	s.orgSlug = slug
+	return Check{Name: "org", Status: OK, Message: "using organization " + slug, Detail: map[string]any{"slug": slug}}
+}
+
+func (s *state) checkSuite() Check {
+	repo, err := s.opts.Repo()
+	if err != nil {
+		return Check{Name: "suite", Status: Warn, Message: "no git origin remote here, so no suite to match; run from a checkout"}
+	}
+	all, err := s.client.Suites(s.orgSlug)
+	if err != nil {
+		return failFrom("suite", err, "")
+	}
+	var matches []map[string]any
+	var names []string
+	for _, su := range all {
+		if su.Repo != nil && strings.EqualFold(*su.Repo, repo) {
+			matches = append(matches, map[string]any{"name": su.Name, "type": su.Type, "last_run_at": su.LastRunAt})
+			names = append(names, su.Name)
+		}
+	}
+	if len(matches) == 0 {
+		return fail("suite", contract.SuiteNotFound, fmt.Sprintf("no suite for %s in %s", repo, s.orgSlug), suiteFix)
+	}
+	return Check{
+		Name:    "suite",
+		Status:  OK,
+		Message: fmt.Sprintf("%s: %s", repo, strings.Join(names, ", ")),
+		Detail:  map[string]any{"repo": repo, "suites": matches},
 	}
 }

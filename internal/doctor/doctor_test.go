@@ -18,7 +18,10 @@ import (
 const (
 	token   = "sk_doctor_secret_7f3a9c"
 	meOK    = `{"user_id":"u1","email":"ben@example.com","org_slugs":["acme"]}`
-	allDone = "config=ok server=ok auth=ok socket=skip runner=skip cli_version=skip"
+	oneOrg  = `{"organizations":[{"slug":"acme","name":"Acme","role":"owner"}]}`
+	twoOrgs = `{"organizations":[{"slug":"acme","name":"Acme","role":"owner"},{"slug":"beta","name":"Beta","role":"member"}]}`
+	suites  = `{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":"2026-11-01T12:00:00Z"},{"id":"s-2","name":"Other","type":"pytest","repo":"acme/api","last_run_at":null}]}`
+	allDone = "config=ok server=ok auth=ok org=ok suite=ok socket=skip runner=skip cli_version=skip"
 )
 
 func reply(status int, body string) http.HandlerFunc {
@@ -31,7 +34,9 @@ func reply(status int, body string) http.HandlerFunc {
 
 func healthy() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		"/api/v1/me": reply(200, meOK),
+		"/api/v1/me":               reply(200, meOK),
+		"/api/v1/orgs":             reply(200, oneOrg),
+		"/api/v1/orgs/acme/suites": reply(200, suites),
 	}
 }
 
@@ -63,12 +68,17 @@ func isolate(t *testing.T, tok string) {
 	t.Setenv("SELECTIVE_ORG", "")
 }
 
+func inRepo() (string, error) { return "acme/web", nil }
+
 func run(t *testing.T, host string, opts Options) *Report {
 	t.Helper()
 	isolate(t, token)
 	opts.Hostname = host
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second
+	}
+	if opts.Repo == nil {
+		opts.Repo = inRepo
 	}
 	return Run(opts)
 }
@@ -128,28 +138,56 @@ func TestEveryCheckIsListedInOrderWhateverFails(t *testing.T) {
 			routes: with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"Token revoked."}`)),
 			exit:   4,
 			code:   contract.Unauthorized,
-			shape:  "config=ok server=ok auth=fail socket=skip runner=skip cli_version=skip",
+			shape:  "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
 			name:   "server error",
 			routes: with("/api/v1/me", reply(503, `maintenance`)),
 			exit:   4,
 			code:   contract.ServerError,
-			shape:  "config=ok server=fail auth=skip socket=skip runner=skip cli_version=skip",
+			shape:  "config=ok server=fail auth=skip org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
 			name:   "forbidden token passes its code through",
 			routes: with("/api/v1/me", reply(403, `{"error":"forbidden","message":"Nope."}`)),
 			exit:   6,
 			code:   contract.Forbidden,
-			shape:  "config=ok server=ok auth=fail socket=skip runner=skip cli_version=skip",
+			shape:  "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
 		},
 		{
 			name:   "a code the registry lacks exits by its status",
 			routes: with("/api/v1/me", reply(403, `{"error":"brand_new_refusal","message":"Nope."}`)),
 			exit:   6,
 			code:   contract.Forbidden,
-			shape:  "config=ok server=ok auth=fail socket=skip runner=skip cli_version=skip",
+			shape:  "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip",
+		},
+		{
+			name:   "two orgs and no --org",
+			routes: with("/api/v1/orgs", reply(200, twoOrgs)),
+			exit:   5,
+			code:   contract.UsageError,
+			shape:  "config=ok server=ok auth=ok org=fail suite=skip socket=skip runner=skip cli_version=skip",
+		},
+		{
+			name:   "unknown --org",
+			routes: healthy(),
+			opts:   Options{Org: "nope"},
+			exit:   3,
+			code:   contract.OrganizationNotFound,
+			shape:  "config=ok server=ok auth=ok org=fail suite=skip socket=skip runner=skip cli_version=skip",
+		},
+		{
+			name:   "no suite for the repo",
+			routes: with("/api/v1/orgs/acme/suites", reply(200, `{"suites":[{"id":"s-2","name":"Other","type":"pytest","repo":"acme/api","last_run_at":null}]}`)),
+			exit:   3,
+			code:   contract.SuiteNotFound,
+			shape:  "config=ok server=ok auth=ok org=ok suite=fail socket=skip runner=skip cli_version=skip",
+		},
+		{
+			name:   "no git remote only warns",
+			routes: healthy(),
+			opts:   Options{Repo: func() (string, error) { return "", contract.Errorf(contract.NotFound, "no origin remote") }},
+			shape:  "config=ok server=ok auth=ok org=ok suite=warn socket=skip runner=skip cli_version=skip",
 		},
 	}
 	for _, tc := range cases {
@@ -172,6 +210,16 @@ func TestEveryCheckIsListedInOrderWhateverFails(t *testing.T) {
 	}
 }
 
+func TestReportStatusSummarisesTheChecks(t *testing.T) {
+	pass := run(t, serve(t, healthy()), Options{})
+	warn := run(t, serve(t, healthy()), Options{Repo: func() (string, error) { return "", contract.Errorf(contract.NotFound, "none") }})
+	fail := run(t, serve(t, with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"x"}`))), Options{})
+
+	if pass.Status != "pass" || warn.Status != "warn" || fail.Status != "fail" {
+		t.Errorf("statuses = %q %q %q, want pass warn fail", pass.Status, warn.Status, fail.Status)
+	}
+}
+
 func TestUnreachableServerFailsServerAndSkipsEverythingAfterIt(t *testing.T) {
 	dead := httptest.NewServer(http.NotFoundHandler())
 	host := dead.URL
@@ -179,7 +227,7 @@ func TestUnreachableServerFailsServerAndSkipsEverythingAfterIt(t *testing.T) {
 
 	report := run(t, host, Options{})
 
-	if got, want := shape(report), "config=ok server=fail auth=skip socket=skip runner=skip cli_version=skip"; got != want {
+	if got, want := shape(report), "config=ok server=fail auth=skip org=skip suite=skip socket=skip runner=skip cli_version=skip"; got != want {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
 	if got := check(t, report, "server"); got.Code != contract.NetworkError || exitOf(report) != 4 {
@@ -210,7 +258,7 @@ func TestNoCredentialFailsAuthWithTheLoginFixAndSendsNoToken(t *testing.T) {
 	host := serve(t, routes)
 	isolate(t, "")
 
-	report := Run(Options{Hostname: host, Timeout: time.Minute})
+	report := Run(Options{Hostname: host, Timeout: time.Minute, Repo: inRepo})
 
 	auth := check(t, report, "auth")
 	if auth.Status != Fail || auth.Code != contract.Unauthorized || auth.Fix != "sel auth login --setup" {
@@ -227,13 +275,13 @@ func TestInvalidConfigIsAUsageErrorNamingThePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := Run(Options{Timeout: time.Minute})
+	report := Run(Options{Timeout: time.Minute, Repo: inRepo})
 
 	cfg := check(t, report, "config")
 	if cfg.Status != Fail || cfg.Code != contract.UsageError || !strings.Contains(cfg.Fix, config.Path()) {
 		t.Errorf("config = %+v", cfg)
 	}
-	if got, want := shape(report), "config=fail server=skip auth=skip socket=skip runner=skip cli_version=skip"; got != want {
+	if got, want := shape(report), "config=fail server=skip auth=skip org=skip suite=skip socket=skip runner=skip cli_version=skip"; got != want {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
 	if exitOf(report) != 5 {
@@ -246,6 +294,30 @@ func TestBadHostnameIsAUsageError(t *testing.T) {
 
 	if got := check(t, report, "config"); got.Status != Fail || got.Code != contract.UsageError {
 		t.Errorf("config = %+v", got)
+	}
+}
+
+func TestSuiteCheckReportsEachMatch(t *testing.T) {
+	got := check(t, run(t, serve(t, healthy()), Options{}), "suite")
+
+	raw, _ := json.Marshal(got.Detail)
+	for _, want := range []string{`"name":"RSpec"`, `"type":"rspec"`, `"last_run_at":"2026-11-01T12:00:00Z"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("detail %s lacks %s", raw, want)
+		}
+	}
+	if strings.Contains(string(raw), "Other") {
+		t.Errorf("detail %s lists a suite for another repo", raw)
+	}
+}
+
+func TestMissingSuiteSaysHowToCreateOne(t *testing.T) {
+	routes := with("/api/v1/orgs/acme/suites", reply(200, `{"suites":[]}`))
+
+	got := check(t, run(t, serve(t, routes), Options{}), "suite")
+
+	if got.Fix != "sel suites create --name <name> --framework <type>" {
+		t.Errorf("fix = %q", got.Fix)
 	}
 }
 
@@ -275,7 +347,7 @@ func TestHungServerTimesOutTheRunningCheckAndSkipsTheRest(t *testing.T) {
 	if elapsed > 2500*time.Millisecond {
 		t.Errorf("took %s with a 1s timeout", elapsed)
 	}
-	if got, want := shape(report), "config=ok server=fail auth=skip socket=skip runner=skip cli_version=skip"; got != want {
+	if got, want := shape(report), "config=ok server=fail auth=skip org=skip suite=skip socket=skip runner=skip cli_version=skip"; got != want {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
 	if got := check(t, report, "server"); got.Code != contract.Timeout || exitOf(report) != 8 {
@@ -305,8 +377,8 @@ func TestTheTokenIsNeverInTheReport(t *testing.T) {
 			}
 			report := run(t, serve(t, routes), Options{})
 
-			if len(report.Checks) != 6 {
-				t.Fatalf("report has %d checks, want 6", len(report.Checks))
+			if len(report.Checks) != 8 {
+				t.Fatalf("report has %d checks, want 8", len(report.Checks))
 			}
 			raw, _ := json.Marshal(report)
 			text := string(raw)
