@@ -28,12 +28,13 @@ is known to be empty: an empty window has a null pass_rate, not 0. On a
 terminal, - means empty, unknown means the server did not report it and n/a
 means the previous window doesn't track it; none is ever shown as 0.
 
-A token limited to specific repositories must pass --suite (by name or ID).
+--suite takes a suite ID (sel suites lists them). A token limited to specific
+repositories must pass --suite.
 
 The organization is --org, then SELECTIVE_ORG, then your only one.`,
 		Example: `  sel trends
   sel trends --range week --section top_failing --limit 5
-  sel trends --suite web-rspec --json`,
+  sel trends --suite SUITE_ID --json`,
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
 			"exit_codes": "0,3,4,5,6",
@@ -54,7 +55,7 @@ The organization is --org, then SELECTIVE_ORG, then your only one.`,
 	cmd.Flags().StringVar(&hostname, "hostname", "", "Selective server (default: the one you logged in to)")
 	cmd.Flags().StringVar(&opts.Org, "org", "", "Organization slug (default: SELECTIVE_ORG, then your only organization)")
 	cmd.Flags().StringVar(&opts.Range, "range", "", "day, week or month (default month)")
-	cmd.Flags().StringVar(&opts.Suite, "suite", "", "Only this suite, by name or ID")
+	cmd.Flags().StringVar(&opts.Suite, "suite", "", "Only this suite, by ID (see sel suites)")
 	cmd.Flags().StringVar(&opts.Section, "section", "", "One section: summary, outcomes, failures, duration, top_failing, most_flaky or slowest")
 	cmd.Flags().IntVar(&opts.Limit, "limit", 0, "Length of the ranked lists (default 10, max 50)")
 	return cmd
