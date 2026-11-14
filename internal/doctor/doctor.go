@@ -2,8 +2,10 @@ package doctor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -91,6 +93,7 @@ func Run(opts Options) *Report {
 
 	s := &state{opts: opts}
 	blockedBy := map[string]string{}
+	expired := false
 	report := &Report{Status: "pass"}
 	for _, st := range steps {
 		var c Check
@@ -98,12 +101,16 @@ func Run(opts Options) *Report {
 		case by != "":
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because " + by + " failed"}
 			blockedBy[st.name] = by
-		case ctx.Err() != nil:
+		case expired:
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because the run's timeout expired"}
+		case ctx.Err() != nil:
+			c = timedOut(st.name, opts.Timeout)
+			blockedBy[st.name], expired = st.name, true
 		default:
 			c = runWithin(ctx, s, st)
 			if c.Status == Fail {
 				blockedBy[st.name] = st.name
+				expired = c.Code == contract.Timeout
 			}
 		}
 		report.Checks = append(report.Checks, c)
@@ -125,8 +132,12 @@ func runWithin(ctx context.Context, s *state, st step) Check {
 	case c := <-done:
 		return c
 	case <-ctx.Done():
-		return fail(st.name, contract.Timeout, fmt.Sprintf("did not finish within %s", s.opts.Timeout), "")
+		return timedOut(st.name, s.opts.Timeout)
 	}
+}
+
+func timedOut(name string, limit time.Duration) Check {
+	return fail(name, contract.Timeout, fmt.Sprintf("did not finish within %s", limit), "")
 }
 
 func (c Check) redact(secret string) Check {
@@ -135,7 +146,24 @@ func (c Check) redact(secret string) Check {
 	}
 	c.Message = strings.ReplaceAll(c.Message, secret, "[redacted]")
 	c.Fix = strings.ReplaceAll(c.Fix, secret, "[redacted]")
+	if c.Detail != nil {
+		c.Detail = redactDetail(c.Detail, secret)
+	}
 	return c
+}
+
+func redactDetail(detail map[string]any, secret string) map[string]any {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return map[string]any{}
+	}
+	quoted, _ := json.Marshal(secret)
+	clean := strings.ReplaceAll(string(raw), string(quoted[1:len(quoted)-1]), "[redacted]")
+	var out map[string]any
+	if json.Unmarshal([]byte(clean), &out) != nil {
+		return map[string]any{}
+	}
+	return out
 }
 
 func summarize(checks []Check) string {
@@ -171,6 +199,9 @@ func failFrom(name string, err error, fix string) Check {
 func codeOf(err error) contract.Code {
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) {
+		if apiErr.Status == http.StatusConflict && (!contract.Registered(apiErr.Code) || apiErr.Code == contract.InternalError) {
+			return contract.UsageError
+		}
 		if contract.Registered(apiErr.Code) {
 			return apiErr.Code
 		}
@@ -238,9 +269,12 @@ func (s *state) checkAuth() Check {
 		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, loginFix)
 	}
 	if s.meErr != nil {
-		code := codeOf(s.meErr)
-		if code == contract.Unauthorized {
-			return fail("auth", code, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), loginFix)
+		if errors.Is(s.meErr, api.ErrUnauthorized) {
+			fix := loginFix
+			if s.cred.Source == credentials.SourceEnv {
+				fix = "replace or unset SELECTIVE_TOKEN, then run doctor again"
+			}
+			return fail("auth", contract.Unauthorized, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), fix)
 		}
 		return failFrom("auth", s.meErr, "")
 	}

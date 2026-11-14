@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,5 +101,30 @@ func TestASecretInAStepsTextNeverReachesTheReportOrTheError(t *testing.T) {
 	a := check(t, report, "a")
 	if a.Message != "server echoed [redacted]" || a.Fix != "unset [redacted]" || coded(t, report).Error() != a.Message {
 		t.Errorf("a = %+v, err %v", a, report.Err())
+	}
+}
+
+func TestARunWhoseDeadlineHasAlreadyPassedFailsWithTimeoutInsteadOfPassing(t *testing.T) {
+	report := runSteps(t, 0, stub("a", "", OK, ""), stub("b", "a", OK, ""))
+
+	if got, want := shape(report), "a=fail b=skip"+laterTrailer; got != want {
+		t.Errorf("checks = %s, want %s", got, want)
+	}
+	if a := check(t, report, "a"); a.Code != contract.Timeout || report.Status != "fail" || exitOf(report) != 8 {
+		t.Errorf("a = %+v, status %q, exit %d", a, report.Status, exitOf(report))
+	}
+}
+
+func TestASecretNestedInAStepsDetailIsRedactedToo(t *testing.T) {
+	leaky := step{"a", "", func(s *state) Check {
+		s.secret = "s3cret-<value>"
+		return Check{Name: "a", Status: OK, Detail: map[string]any{"list": []map[string]any{{"name": "x s3cret-<value>"}}}}
+	}}
+
+	report := runSteps(t, time.Minute, leaky)
+
+	raw, _ := json.Marshal(check(t, report, "a").Detail)
+	if strings.Contains(string(raw), "s3cret") || !strings.Contains(string(raw), "x [redacted]") {
+		t.Errorf("detail = %s", raw)
 	}
 }
