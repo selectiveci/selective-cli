@@ -63,27 +63,27 @@ func TestTransportStdioKeepsRelayingAfterSIGINT(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill() })
-	ln.(*net.UnixListener).SetDeadline(time.Now().Add(3 * time.Second))
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	_ = ln.(*net.UnixListener).SetDeadline(time.Now().Add(3 * time.Second))
 	conn, err := ln.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	io.WriteString(stdin, "{\"n\":1}\n")
+	_, _ = io.WriteString(stdin, "{\"n\":1}\n")
 	reader := bufio.NewReader(conn)
 	if line, _ := reader.ReadString('\n'); line != "{\"n\":1}\n" {
 		t.Fatalf("first relayed line = %q", line)
 	}
-	cmd.Process.Signal(syscall.SIGINT)
-	cmd.Process.Signal(syscall.SIGTERM)
+	_ = cmd.Process.Signal(syscall.SIGINT)
+	_ = cmd.Process.Signal(syscall.SIGTERM)
 	time.Sleep(200 * time.Millisecond)
-	io.WriteString(stdin, "{\"n\":2}\n")
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, _ = io.WriteString(stdin, "{\"n\":2}\n")
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if line, _ := reader.ReadString('\n'); line != "{\"n\":2}\n" {
 		t.Errorf("line after SIGINT = %q, want the seat to keep relaying", line)
 	}
-	io.WriteString(stdin, "exit\n")
+	_, _ = io.WriteString(stdin, "exit\n")
 	if err := cmd.Wait(); err != nil {
 		t.Errorf("seat exit after exit line: %v, want 0", err)
 	}

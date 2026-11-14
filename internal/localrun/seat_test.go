@@ -41,7 +41,7 @@ func startSeat(t *testing.T) *seatHarness {
 
 func (h *seatHarness) accept(t *testing.T) net.Conn {
 	t.Helper()
-	h.ln.(*net.UnixListener).SetDeadline(time.Now().Add(3 * time.Second))
+	_ = h.ln.(*net.UnixListener).SetDeadline(time.Now().Add(3 * time.Second))
 	conn, err := h.ln.Accept()
 	if err != nil {
 		t.Fatalf("Accept: %v", err)
@@ -86,11 +86,11 @@ func TestSeatRefusesUnknownArgumentsWithExit2AndNothingOnStdout(t *testing.T) {
 func TestSeatEndsTheStreamOnTheExitLineWithoutForwardingIt(t *testing.T) {
 	h := startSeat(t)
 	conn := h.accept(t)
-	io.WriteString(h.stdin, "{\"type\":\"ping\"}\nexit\n")
+	_, _ = io.WriteString(h.stdin, "{\"type\":\"ping\"}\nexit\n")
 	if c := h.awaitCode(t); c != 0 {
 		t.Errorf("seat exit %d, want 0", c)
 	}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	got, _ := io.ReadAll(conn)
 	if string(got) != "{\"type\":\"ping\"}\n" {
 		t.Errorf("orchestrator received %q, want only the ping frame", got)
@@ -109,7 +109,7 @@ func TestSeatEndsWhenTheClientClosesItsStdin(t *testing.T) {
 func TestSeatRelaysOrchestratorFramesToStdoutAndEndsWhenItHangsUp(t *testing.T) {
 	h := startSeat(t)
 	conn := h.accept(t)
-	io.WriteString(conn, "{\"command\":\"connected\"}\n")
+	_, _ = io.WriteString(conn, "{\"command\":\"connected\"}\n")
 	conn.Close()
 	if c := h.awaitCode(t); c != 0 {
 		t.Errorf("seat exit %d, want 0", c)
