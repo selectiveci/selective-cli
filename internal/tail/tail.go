@@ -15,6 +15,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
+	"github.com/selectiveci/selective-cli/internal/update"
 	"nhooyr.io/websocket"
 )
 
@@ -25,6 +26,8 @@ type BuildLookup struct {
 	SuiteCount int    `json:"suite_count"`
 }
 
+var lookupClient = &http.Client{Transport: update.Transport(nil)}
+
 func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
 	u := fmt.Sprintf("%s/api/v1/builds/lookup?repo=%s&sha=%s", baseURL, url.QueryEscape(repo), url.QueryEscape(sha))
 	req, err := http.NewRequest("GET", u, nil)
@@ -33,7 +36,7 @@ func LookupBuild(baseURL, token, repo, sha string) (*BuildLookup, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := lookupClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("network error: %w", err)
 	}
@@ -145,6 +148,7 @@ func stream(host, token, buildID, fmtFlag string) (int, error) {
 	// access logs.
 	header := http.Header{}
 	header.Set("X-Selective-Token", token)
+	header.Set("User-Agent", update.UserAgent())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

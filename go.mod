@@ -7,6 +7,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20
 	github.com/spf13/cobra v1.8.1
 	github.com/zalando/go-keyring v0.2.6
+	golang.org/x/mod v0.22.0
 	nhooyr.io/websocket v1.8.11
 )
 
