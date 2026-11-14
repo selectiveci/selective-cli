@@ -2,6 +2,7 @@ package localrun
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,15 +16,15 @@ type treeSnapshot struct {
 	Dirty  []string          `json:"dirty"`
 }
 
-func takeSnapshot(dir string) (treeSnapshot, bool) {
-	root, ok := gitOutput(dir, "rev-parse", "--show-toplevel")
-	if !ok || strings.TrimSpace(root) == "" {
-		return treeSnapshot{}, false
+func takeSnapshot(dir string) (treeSnapshot, error) {
+	toplevel, ok := gitOutput(dir, "rev-parse", "--show-toplevel")
+	root := strings.TrimSuffix(toplevel, "\n")
+	if !ok || root == "" {
+		return treeSnapshot{}, errors.New("not a git checkout")
 	}
-	root = strings.TrimSpace(root)
 	listing, ok := gitOutput(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
 	if !ok {
-		return treeSnapshot{}, false
+		return treeSnapshot{}, errors.New("not a git checkout")
 	}
 	sha, _ := gitOutput(root, "rev-parse", "HEAD")
 	snapshot := treeSnapshot{SHA: strings.TrimSpace(sha), Prefix: prefixWithin(root, dir), Files: map[string]string{}}
@@ -33,37 +34,57 @@ func takeSnapshot(dir string) (treeSnapshot, bool) {
 			snapshot.Files[path] = fields[2]
 		}
 	}
-	snapshot.Dirty = foldWorkingTree(root, snapshot.Files)
-	return snapshot, true
+	var err error
+	if snapshot.Dirty, err = foldWorkingTree(root, snapshot.Files); err != nil {
+		return treeSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
-func foldWorkingTree(root string, files map[string]string) []string {
+func foldWorkingTree(root string, files map[string]string) ([]string, error) {
 	status, ok := gitOutput(root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
-	dirty := []string{}
 	if !ok {
-		return dirty
+		return nil, errors.New("git status failed; cannot tell which files are dirty")
 	}
-	var changed, deleted, existing []string
+	var changed, deleted, batched []string
 	for _, entry := range strings.Split(status, "\x00") {
 		if len(entry) < 4 {
 			continue
 		}
 		path := entry[3:]
-		info, statErr := os.Stat(filepath.Join(root, path))
-		if strings.Contains(entry[:2], "D") && statErr != nil {
+		info, statErr := os.Lstat(filepath.Join(root, path))
+		if strings.Contains(entry[:2], "D") && (statErr != nil || info.IsDir()) {
 			delete(files, path)
 			deleted = append(deleted, path)
 			continue
 		}
 		changed = append(changed, path)
-		if statErr == nil && info.Mode().IsRegular() {
-			existing = append(existing, path)
+		if statErr != nil {
+			continue
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			if target, err := os.Readlink(filepath.Join(root, path)); err == nil {
+				hashInto(files, path, root, target, "--stdin")
+			}
+		case info.Mode().IsRegular() && strings.Contains(path, "\n"):
+			hashInto(files, path, root, "", "--", path)
+		case info.Mode().IsRegular():
+			batched = append(batched, path)
 		}
 	}
-	for path, blob := range hashObjects(root, existing) {
+	for path, blob := range hashObjects(root, batched) {
 		files[path] = blob
 	}
-	return append(changed, deleted...)
+	return append(append([]string{}, changed...), deleted...), nil
+}
+
+func hashInto(files map[string]string, path, root, stdin string, args ...string) {
+	cmd := exec.Command("git", append([]string{"-C", root, "hash-object"}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	if out, err := cmd.Output(); err == nil {
+		files[path] = strings.TrimSpace(string(out))
+	}
 }
 
 func hashObjects(root string, paths []string) map[string]string {
