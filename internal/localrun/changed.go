@@ -18,6 +18,9 @@ func ChangedFiles(dir, against string) ([]string, error) {
 			return nil, contract.Errorf(contract.UsageError, "could not tell which branch to compare with (no origin/HEAD, origin/main or origin/master); pass --against REF")
 		}
 	}
+	if strings.HasPrefix(against, "-") {
+		return nil, contract.Errorf(contract.UsageError, "--against %q looks like an option, not a ref", against)
+	}
 	base, ok := gitOutput(dir, "merge-base", "HEAD", against)
 	if !ok {
 		return nil, contract.Errorf(contract.UsageError, "no merge base between HEAD and %q; pass --against REF with a branch this one grew from", against)
