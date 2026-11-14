@@ -18,6 +18,14 @@ import (
 
 const secretKey = "suite-key-should-not-show"
 
+var createReplies = map[string]string{
+	"New":       `"result":"created"`,
+	"OldServer": `"result":"existing"`,
+	"Bound":     `"result":"existing","changed":true`,
+	"Same":      `"result":"existing","changed":false`,
+	"Adopted":   `"result":"adopted_default","changed":true`,
+}
+
 func fakeServer(t *testing.T, orgs string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,14 +34,14 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 		case r.URL.Path == "/api/v1/orgs":
 			_, _ = w.Write([]byte(orgs))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "GET":
-			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null},{"id":"s-2","name":"Bare","type":"rspec","repo":null,"last_run_at":null}]}`))
+			_, _ = w.Write([]byte(`{"suites":[{"id":"s-1","name":"RSpec","type":"rspec","repo":"acme/web","last_run_at":null},{"id":"s-2","name":"Bare","type":"rspec","repo":null,"last_run_at":null},{"id":"s-4","name":"Ignores","type":"rspec","repo":"acme/web","last_run_at":null}]}`))
 		case r.URL.Path == "/api/v1/orgs/acme/repos":
 			_, _ = w.Write([]byte(`{"github_account":"acme","install_url":"http://x/acme/github/install","repos":[{"full_name":"acme/web","private":true}]}`))
 		case r.URL.Path == "/api/v1/orgs/acme/suites" && r.Method == "POST":
 			var body map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["name"] == "New" {
-				_, _ = w.Write([]byte(`{"suite":{"id":"s-3","name":"New","type":"rspec","repo":"acme/web","last_run_at":null},"result":"created"}`))
+			if reply, ok := createReplies[body["name"]]; ok {
+				_, _ = fmt.Fprintf(w, `{"suite":{"id":"s-3","name":%q,"type":"rspec","repo":"acme/web","last_run_at":null},%s}`, body["name"], reply)
 				return
 			}
 			w.WriteHeader(422)
@@ -44,6 +52,8 @@ func fakeServer(t *testing.T, orgs string) *httptest.Server {
 			mode, _ := body["selection_mode"].(string)
 			selects, _ := body["selection_on_default_branch"].(bool)
 			_, _ = fmt.Fprintf(w, `{"suite":{"id":"s-1","name":"RSpec","selection_mode":%q,"selection_on_default_branch":%t},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`, mode, selects)
+		case r.URL.Path == "/api/v1/orgs/acme/suites/s-4" && r.Method == "PATCH":
+			_, _ = w.Write([]byte(`{"suite":{"id":"s-4","name":"Ignores","selection_mode":"off","selection_on_default_branch":false},"previous":{"selection_mode":"off","selection_on_default_branch":false}}`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/orgs/acme/suites/s-") && strings.HasSuffix(r.URL.Path, "/api_key"):
 			_, _ = w.Write([]byte(`{"api_key":"` + secretKey + `"}`))
 		default:
@@ -348,6 +358,134 @@ func TestEveryJSONListEndsWithANullNextCursor(t *testing.T) {
 			cursor, present := doc["next_cursor"]
 			if !present || cursor != nil {
 				t.Errorf("stdout = %q, want next_cursor present and null", out.String())
+			}
+		})
+	}
+}
+
+func TestCreateSuiteJSONReportsTheContractResult(t *testing.T) {
+	cases := []struct{ name, want string }{
+		{"New", "created"},
+		{"Bound", "updated"},
+		{"Adopted", "updated"},
+		{"Same", "unchanged"},
+		{"OldServer", "unchanged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+			e.JSON = true
+
+			if err := e.CreateSuite("acme", tc.name, "acme/web", ""); err != nil {
+				t.Fatal(err)
+			}
+
+			var doc struct {
+				V      int            `json:"v"`
+				Suite  map[string]any `json:"suite"`
+				Result string         `json:"result"`
+				DryRun *bool          `json:"dry_run"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+				t.Fatalf("stdout %q: %v", out.String(), err)
+			}
+			if doc.Result != tc.want || doc.V != 1 || doc.Suite["name"] != tc.name || doc.DryRun == nil || *doc.DryRun {
+				t.Errorf("stdout = %q, want result %q and dry_run false", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestCreateSuiteTextSaysUpdatedOnlyWhenAnExistingSuiteChanged(t *testing.T) {
+	cases := []struct{ name, want string }{
+		{"New", "✓ Created suite \"New\" for acme/web (id s-3)\n"},
+		{"Bound", "✓ Updated suite \"Bound\" for acme/web (id s-3)\n"},
+		{"Adopted", "✓ Set up the organization's default suite as suite \"Adopted\" for acme/web (id s-3)\n"},
+		{"Same", "✓ Found existing suite \"Same\" for acme/web (id s-3)\n"},
+		{"OldServer", "✓ Found existing suite \"OldServer\" for acme/web (id s-3)\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+
+			if err := e.CreateSuite("acme", tc.name, "acme/web", ""); err != nil {
+				t.Fatal(err)
+			}
+
+			if out.String() != tc.want {
+				t.Errorf("stdout = %q, want %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigureJSONReportsTheContractResult(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name     string
+		settings api.SuiteSettings
+		want     string
+	}{
+		{"mode changes", api.SuiteSettings{SelectionMode: "shadow"}, "updated"},
+		{"mode already set", api.SuiteSettings{SelectionMode: "off"}, "unchanged"},
+		{"default branch changes", api.SuiteSettings{SelectionOnDefaultBranch: &yes}, "updated"},
+		{"default branch already set", api.SuiteSettings{SelectionOnDefaultBranch: &no}, "unchanged"},
+		{"one of two changes", api.SuiteSettings{SelectionMode: "off", SelectionOnDefaultBranch: &yes}, "updated"},
+		{"both already set", api.SuiteSettings{SelectionMode: "off", SelectionOnDefaultBranch: &no}, "unchanged"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+			e.JSON = true
+
+			if err := e.Configure("acme", "rspec", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+
+			var doc struct {
+				V        int            `json:"v"`
+				Suite    map[string]any `json:"suite"`
+				Previous map[string]any `json:"previous"`
+				Result   string         `json:"result"`
+				DryRun   *bool          `json:"dry_run"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+				t.Fatalf("stdout %q: %v", out.String(), err)
+			}
+			if doc.Result != tc.want || doc.V != 1 || doc.Suite["name"] != "RSpec" || doc.Previous["selection_mode"] != "off" || doc.DryRun == nil || *doc.DryRun {
+				t.Errorf("stdout = %q, want result %q and dry_run false", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigureReportsWhatTheServerReturnedNotWhatWasAsked(t *testing.T) {
+	yes := true
+	cases := []struct {
+		name     string
+		settings api.SuiteSettings
+		wantText string
+	}{
+		{"mode ignored", api.SuiteSettings{SelectionMode: "shadow"}, `Selection for "Ignores" is already off`},
+		{"default branch ignored", api.SuiteSettings{SelectionOnDefaultBranch: &yes}, `Default-branch runs for "Ignores" already: full`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, out := env(t, oneOrg)
+			e.JSON = true
+			if err := e.Configure("acme", "s-4", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); !strings.Contains(got, `"result":"unchanged"`) {
+				t.Errorf("json stdout = %q, want result unchanged", got)
+			}
+
+			e, out = env(t, oneOrg)
+			if err := e.Configure("acme", "s-4", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); !strings.Contains(got, tc.wantText) {
+				t.Errorf("text stdout = %q, want %q", got, tc.wantText)
 			}
 		})
 	}

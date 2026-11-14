@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,5 +104,56 @@ func TestPlainVersionKeepsItsFirstLine(t *testing.T) {
 
 	if known != "sel 0.1.0 (abc1234)\nlatest: 0.3.0\n" || unknown != "sel 0.1.0 (abc1234)\n" {
 		t.Errorf("known %q, unknown %q", known, unknown)
+	}
+}
+
+func orgsWithServerHeaders(t *testing.T, configDir string) (int, string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(update.LatestHeader, "0.3.0")
+		w.Header().Set(update.MinHeader, "0.2.0")
+		_, _ = w.Write([]byte(`{"organizations":[{"slug":"acme","name":"Acme","role":"owner","github_account":"acme"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("SELECTIVE_CONFIG_DIR", configDir)
+	t.Setenv("SELECTIVE_HOST", srv.URL)
+	t.Setenv("SELECTIVE_TOKEN", "tok")
+	previous := version
+	version = "0.1.0"
+	t.Cleanup(func() { version = previous })
+	captured, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	realStdout := os.Stdout
+	os.Stdout = captured
+	code, _, _ := execute("orgs", "--json")
+	os.Stdout = realStdout
+	printed, err := os.ReadFile(captured.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code, string(printed)
+}
+
+func TestAnUnwritableUpdateCacheLeavesTheCommandsExitAndStdoutUnchanged(t *testing.T) {
+	writable := t.TempDir()
+	wantCode, wantOut := orgsWithServerHeaders(t, writable)
+	if _, err := os.Stat(filepath.Join(writable, "update-check.json")); err != nil || !strings.Contains(wantOut, `"acme"`) {
+		t.Fatalf("control run did not cache the server headers (%v) or print the orgs: %q", err, wantOut)
+	}
+	blocked := t.TempDir()
+	if err := os.Mkdir(filepath.Join(blocked, "update-check.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout := orgsWithServerHeaders(t, blocked)
+
+	if code != wantCode || stdout != wantOut {
+		t.Errorf("exit %d stdout %q, want exit %d stdout %q", code, stdout, wantCode, wantOut)
+	}
+	if entries, err := os.ReadDir(blocked); err != nil || len(entries) != 1 {
+		t.Errorf("config dir holds %v (%v), want only the blocking directory and no leftover temp file", entries, err)
 	}
 }
