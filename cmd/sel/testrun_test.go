@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	suitesBody = `{"suites":[{"id":"suite-1","name":"widget-pytest","type":"pytest","repo":"acme/widget"}]}`
+	twoSuites  = `{"suites":[{"id":"suite-1","name":"a","type":"pytest","repo":"acme/widget"},{"id":"suite-2","name":"b","type":"pytest","repo":"Acme/Widget"}]}`
 	selected   = `{"selection":{"cause":"map","map":{"id":"m1"},"selected":["tests/test_calc.py::test_sub"],"outcome":"select","counts":{"total":3,"selected":1,"skipped":2,"changed_files":1}}}`
 	nothing    = `{"selection":{"cause":"map","map":{"id":"m1"},"selected":[],"outcome":"select","counts":{"total":3,"selected":0,"skipped":3,"changed_files":0}}}`
 	everything = `{"selection":{"cause":"untraced_change","map":{"id":"m1"},"selected":["tests/test_calc.py::test_add","tests/test_calc.py::test_sub","tests/test_calc.py::test_mul"],"outcome":"full","counts":{"total":3,"selected":3,"skipped":0,"changed_files":1}}}`
@@ -24,6 +26,8 @@ const (
 type fakeAPI struct {
 	srv        *httptest.Server
 	mu         sync.Mutex
+	suites     string
+	listed     int
 	status     int
 	reply      string
 	selections []map[string]any
@@ -42,11 +46,14 @@ func (a *fakeAPI) firstSelection(t *testing.T) map[string]any {
 
 func newFakeAPI(t *testing.T, reply string) *fakeAPI {
 	t.Helper()
-	api := &fakeAPI{status: 200, reply: reply}
+	api := &fakeAPI{suites: suitesBody, status: 200, reply: reply}
 	api.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api.mu.Lock()
 		defer api.mu.Unlock()
 		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
+			api.listed++
+			_, _ = io.WriteString(w, api.suites)
 		case r.Method == "POST" && r.URL.Path == "/api/v1/orgs/acme/selections":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -154,7 +161,7 @@ func firstNamed(events []map[string]any, name string) map[string]any {
 
 func selTest(t *testing.T, dir string, api *fakeAPI, args ...string) cliResult {
 	t.Helper()
-	return runBinary(t, dir, api.srv.URL, append([]string{"test", "--org", "acme", "--suite", "suite-1"}, args...)...)
+	return runBinary(t, dir, api.srv.URL, append([]string{"test", "--org", "acme"}, args...)...)
 }
 
 func TestSelTestSendsTheChangeAndShowsTheServersDecisionOnAnNDJSONOnlyStdout(t *testing.T) {
@@ -256,5 +263,49 @@ func TestSelTestRefusesAnArgumentThatIsNotAfterTheDash(t *testing.T) {
 
 	if events := stdoutEvents(t, res.stdout); res.exit != 5 || events[len(events)-1]["error"] != "usage_error" {
 		t.Errorf("exit %d stdout %s, want exit 5 with a usage_error", res.exit, res.stdout)
+	}
+}
+
+func TestSelTestErrorsExitByCodeAndEndTheStreamWithAnErrorObject(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		reply  string
+		suites string
+		exit   int
+		code   string
+		hint   string
+	}{
+		{"unknown suite", 404, `{"error":"suite_not_found","message":"No such suite in this organization."}`, suitesBody, 3, "suite_not_found", ""},
+		{"bad token", 401, `{"error":"unauthorized","message":"Missing, invalid or revoked API token."}`, suitesBody, 4, "unauthorized", ""},
+		{"two suites for one repo", 200, selected, twoSuites, 5, "usage_error", "suite-1, suite-2"},
+		{"no suite for the repo", 200, selected, `{"suites":[]}`, 3, "suite_not_found", "acme/widget"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI(t, tc.reply)
+			api.status, api.suites = tc.status, tc.suites
+			runnerEnv(t)
+
+			res := selTest(t, pytestProject(t), api)
+
+			events := stdoutEvents(t, res.stdout)
+			last := events[len(events)-1]
+			if res.exit != tc.exit || last["error"] != tc.code || !strings.Contains(fmt.Sprint(last["message"]), tc.hint) {
+				t.Errorf("exit %d last line %v, want exit %d with error %q last and %q in its message", res.exit, last, tc.exit, tc.code, tc.hint)
+			}
+		})
+	}
+}
+
+func TestSelTestSuiteFlagSkipsTheListing(t *testing.T) {
+	api := newFakeAPI(t, nothing)
+	api.suites = twoSuites
+	runnerEnv(t)
+
+	res := selTest(t, pytestProject(t), api, "--suite", "suite-2")
+
+	if res.exit != 0 || api.firstSelection(t)["suite_id"] != "suite-2" || api.listed != 0 {
+		t.Errorf("exit %d request %v listings %d, want the given suite and no listing", res.exit, api.firstSelection(t), api.listed)
 	}
 }
