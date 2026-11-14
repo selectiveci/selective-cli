@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -121,7 +122,7 @@ Exit codes:
 			}
 			env, err := setup.Connect(hostname, asJSON)
 			if err != nil {
-				return err
+				return unusableHostIsNetwork(err)
 			}
 			code, err := tail.Run(env.Client, opts)
 			if err != nil {
@@ -152,4 +153,12 @@ func tailFormat(asJSON bool, requested string) (string, error) {
 		return "ndjson", nil
 	}
 	return requested, nil
+}
+
+func unusableHostIsNetwork(err error) error {
+	var coded contract.Coded
+	if errors.As(err, &coded) && coded.ErrorCode() == contract.UsageError {
+		return contract.Errorf(contract.NetworkError, "%s", coded.Error())
+	}
+	return err
 }
