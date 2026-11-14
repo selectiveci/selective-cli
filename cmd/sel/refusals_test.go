@@ -159,7 +159,8 @@ var scannedPackages = []string{
 }
 
 var exemptPackages = map[string]string{
-	"internal/tail": "Run returns its own exit code beside the error and the tail command exits with it, so its errors never reach the contract classifier",
+	"internal/tail":   "Run returns its own exit code beside the error and the tail command exits with it, so its errors never reach the contract classifier",
+	"internal/update": "saveState errors are discarded inside RecordServerHeaders and LoadState returns no error, so none reach a command's exit; TestAnUnwritableUpdateCacheLeavesTheCommandsExitAndStdoutUnchanged proves it",
 }
 
 var apiImports = map[string]bool{
