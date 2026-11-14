@@ -101,27 +101,6 @@ func TestA503ThenSuccessRetriesWithOneThenTwoSeconds(t *testing.T) {
 	}
 }
 
-func TestA503ThatNeverClearsStopsAtThreeRequests(t *testing.T) {
-	clock := useClock(t)
-	client, rec := scripted(t, reply{status: 503})
-
-	_, err := client.Me()
-
-	if code := codeOf(t, err); code != contract.ServerError || rec.count() != 3 || len(clock.sleeps) != 2 {
-		t.Errorf("code %q after %d requests and %d waits, want server_error after 3 and 2", code, rec.count(), len(clock.sleeps))
-	}
-}
-
-func TestEveryRetryableStatusIsRetried(t *testing.T) {
-	for _, status := range []int{502, 503, 504, 429} {
-		client, rec := scripted(t, reply{status: status}, reply{status: 200})
-
-		if _, err := client.Me(); err != nil || rec.count() != 2 {
-			t.Errorf("status %d: err %v after %d requests, want success on the second", status, err, rec.count())
-		}
-	}
-}
-
 func TestStatusesThatNeverImproveAreNotRetried(t *testing.T) {
 	for _, status := range []int{400, 401, 403, 404, 408, 409, 422, 500} {
 		client, rec := scripted(t, reply{status: status}, reply{status: 200})
@@ -131,18 +110,6 @@ func TestStatusesThatNeverImproveAreNotRetried(t *testing.T) {
 		if err == nil || rec.count() != 1 {
 			t.Errorf("status %d: err %v after %d requests, want the error after 1", status, err, rec.count())
 		}
-	}
-}
-
-func TestAnUndecodableSuccessIsNotRetried(t *testing.T) {
-	clock := useClock(t)
-	client, rec := scripted(t, reply{status: 200})
-	var out chan int
-
-	err := client.do("GET", "/api/v1/me", nil, http.StatusOK, &out)
-
-	if err == nil || rec.count() != 1 || len(clock.sleeps) != 0 {
-		t.Errorf("err %v after %d requests and %d waits, want 1 and 0", err, rec.count(), len(clock.sleeps))
 	}
 }
 

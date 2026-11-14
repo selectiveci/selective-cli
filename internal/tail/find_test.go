@@ -109,6 +109,7 @@ func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
 }
 
 func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
