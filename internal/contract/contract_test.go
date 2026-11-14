@@ -15,7 +15,7 @@ func TestRegistryExitCodes(t *testing.T) {
 		"cannot_change_own_role": 5, "request_in_progress": 4, "rate_limited": 4,
 		"server_error": 4, "pending_approval": 7, "approval_expired": 7, "network_error": 4,
 		"usage_error": 5, "timeout": 8, "internal_error": 9,
-		"runner_error": 1,
+		"runner_error": 1, "no_framework": 5, "runner_missing": 5,
 	}
 	for code, exit := range want {
 		if got := ExitFor(code, 0); got != exit {
