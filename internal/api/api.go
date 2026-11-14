@@ -141,19 +141,20 @@ func (c *Client) Suites(org string) ([]Suite, error) {
 	return out.Suites, err
 }
 
-// CreateSuite finds or creates the suite. Result is "created", "existing"
-// or "adopted_default".
-func (c *Client) CreateSuite(org, name, repo, framework string) (*Suite, string, error) {
-	var out struct {
-		Suite  Suite  `json:"suite"`
-		Result string `json:"result"`
-	}
+type CreatedSuite struct {
+	Suite   Suite  `json:"suite"`
+	Result  string `json:"result"`
+	Changed bool   `json:"changed"`
+}
+
+func (c *Client) CreateSuite(org, name, repo, framework string) (*CreatedSuite, error) {
+	var out CreatedSuite
 	body := map[string]string{"name": name, "repo": repo}
 	if framework != "" {
 		body["type"] = framework
 	}
 	err := c.do("POST", "/api/v1/orgs/"+url.PathEscape(org)+"/suites", body, http.StatusOK, &out)
-	return &out.Suite, out.Result, err
+	return &out, err
 }
 
 func (c *Client) SuiteAPIKey(org, suiteID string) (string, error) {
