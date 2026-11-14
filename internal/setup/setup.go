@@ -171,7 +171,7 @@ func (e *Env) CreateSuite(org, name, repo, framework string) error {
 	if err != nil {
 		return err
 	}
-	suite, result, err := e.Client.CreateSuite(org, name, repo, framework)
+	created, err := e.Client.CreateSuite(org, name, repo, framework)
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) && apiErr.InstallURL != "" {
 		apiErr.Message = fmt.Sprintf("%s\n  Ask the user to open %s and give the app access to %s, then try again", apiErr.Message, apiErr.InstallURL, repo)
@@ -180,16 +180,31 @@ func (e *Env) CreateSuite(org, name, repo, framework string) error {
 	if err != nil {
 		return err
 	}
+	suite := created.Suite
 	if e.JSON {
-		return e.json(map[string]any{"suite": suite, "result": result})
+		return format.Write(e.Stdout, "suite", suite, createResult(created), false)
 	}
 	verb := map[string]string{
 		"created":         "Created",
 		"existing":        "Found existing",
 		"adopted_default": "Set up the organization's default suite as",
-	}[result]
+	}[created.Result]
+	if created.Result == "existing" && created.Changed {
+		verb = "Updated"
+	}
 	fmt.Fprintf(e.Stdout, "✓ %s suite %q for %s (id %s)\n", verb, suite.Name, deref(suite.Repo), suite.ID)
 	return nil
+}
+
+func createResult(created *api.CreatedSuite) string {
+	switch {
+	case created.Result == "created":
+		return "created"
+	case created.Result == "adopted_default", created.Changed:
+		return "updated"
+	default:
+		return "unchanged"
+	}
 }
 
 // SelectionModes are what --selection accepts.
@@ -212,7 +227,12 @@ func (e *Env) Configure(org, suite string, settings api.SuiteSettings) error {
 		return err
 	}
 	if e.JSON {
-		return e.json(map[string]any{"suite": updated, "previous": previous})
+		return e.json(struct {
+			Suite    *api.Suite        `json:"suite"`
+			Previous api.SuiteSettings `json:"previous"`
+			Result   string            `json:"result"`
+			DryRun   bool              `json:"dry_run"`
+		}{updated, previous, configureResult(settings, previous), false})
 	}
 	if settings.SelectionMode != "" {
 		if previous.SelectionMode == updated.SelectionMode {
@@ -375,4 +395,14 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+func configureResult(requested, previous api.SuiteSettings) string {
+	modeSame := requested.SelectionMode == "" || requested.SelectionMode == previous.SelectionMode
+	branchSame := requested.SelectionOnDefaultBranch == nil ||
+		(previous.SelectionOnDefaultBranch != nil && *requested.SelectionOnDefaultBranch == *previous.SelectionOnDefaultBranch)
+	if modeSame && branchSame {
+		return "unchanged"
+	}
+	return "updated"
 }
