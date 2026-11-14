@@ -87,3 +87,17 @@ func TestTrendsSendsOnlyTheOptionsItWasGiven(t *testing.T) {
 		})
 	}
 }
+
+func TestTrendsPassesServerNoticesAndUnknownKeysThrough(t *testing.T) {
+	s := &trendsStub{body: `{"range":"day","notices":["metrics_unavailable"],"added_later":{"x":1}}`}
+	env, out := s.env(t)
+
+	if err := Trends(env, TrendsOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := `{"v":1,"added_later":{"x":1},"notices":["metrics_unavailable"],"range":"day"}` + "\n"
+	if out.String() != want {
+		t.Errorf("stdout = %s, want %s", out, want)
+	}
+}

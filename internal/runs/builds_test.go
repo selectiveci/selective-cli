@@ -250,3 +250,63 @@ func TestBuildSendsNoOrgWhenNoneWasGiven(t *testing.T) {
 		t.Errorf("queries = %v", s.queries)
 	}
 }
+
+func noticedPage(rows, next, notices string) string {
+	return `{"builds":[` + rows + `],"next_cursor":` + next + `,"notices":` + notices + `}`
+}
+
+func noticesOf(t *testing.T, out *bytes.Buffer) []string {
+	t.Helper()
+	var doc struct {
+		Notices []string `json:"notices"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc.Notices
+}
+
+func TestBuildsPassesServerNoticesThroughOnASinglePage(t *testing.T) {
+	s := &buildsStub{pages: map[string]string{"": noticedPage(finishedBuild, `"c2"`, `["metrics_unavailable"]`)}}
+	env, out := s.env(t)
+
+	if err := Builds(env, BuildsOptions{Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := noticesOf(t, out); !slices.Equal(got, []string{"metrics_unavailable"}) {
+		t.Errorf("notices = %v, want the server's", got)
+	}
+}
+
+func TestBuildsAllKeepsEveryPagesServerNoticesOnceInOrder(t *testing.T) {
+	s := &buildsStub{pages: map[string]string{
+		"":   noticedPage(runningBuild, `"c2"`, `["metrics_unavailable"]`),
+		"c2": noticedPage(finishedBuild, `"c3"`, `["metrics_unavailable","other_notice"]`),
+		"c3": noticedPage(finishedBuild, "null", `["other_notice"]`),
+	}}
+	env, out := s.env(t)
+
+	if err := Builds(env, BuildsOptions{Org: "acme", All: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := noticesOf(t, out); !slices.Equal(got, []string{"metrics_unavailable", "other_notice"}) {
+		t.Errorf("notices = %v, want every page's notices once each", got)
+	}
+}
+
+func TestBuildsAllAddsTheStoppedEarlyNoticeAfterTheServersOwn(t *testing.T) {
+	rows := strings.TrimSuffix(strings.Repeat(finishedBuild+",", 11), ",")
+	page := noticedPage(rows, `"more"`, `["metrics_unavailable"]`)
+	s := &buildsStub{pages: map[string]string{"": page, "more": page}}
+	env, out := s.env(t)
+
+	if err := Builds(env, BuildsOptions{Org: "acme", All: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := noticesOf(t, out); !slices.Equal(got, []string{"metrics_unavailable", "pagination_stopped_early"}) {
+		t.Errorf("notices = %v, want the server's then pagination_stopped_early", got)
+	}
+}
