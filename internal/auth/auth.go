@@ -58,7 +58,7 @@ func (o LoginOptions) emit(event map[string]any) {
 func Login(opts LoginOptions) error {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("could not load config: %w", err)
+		return contract.Errorf(contract.UsageError, "could not load config: %v", err)
 	}
 	host, err := cfg.ResolveHost(opts.Hostname)
 	if err != nil {

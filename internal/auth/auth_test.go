@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -269,5 +271,18 @@ func TestLoggedInEventNamesTheHostAndUserAndNeverCarriesTheToken(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "sk_live_secret_value") {
 		t.Errorf("stdout carries the token: %q", out.String())
+	}
+}
+
+func TestLoginWithAnUnreadableConfigIsAUsageError(t *testing.T) {
+	setup(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("SELECTIVE_CONFIG_DIR"), "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Login(LoginOptions{WithToken: true, Stdin: strings.NewReader("sk_live_good\n"), Stderr: &bytes.Buffer{}})
+
+	if got := codeOf(err); got != contract.UsageError {
+		t.Errorf("code = %q, want %q (err: %v)", got, contract.UsageError, err)
 	}
 }

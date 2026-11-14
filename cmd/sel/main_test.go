@@ -333,3 +333,17 @@ func TestJSONFlagGivenAcceptsBooleanSpellings(t *testing.T) {
 		}
 	}
 }
+
+func TestUnreadableConfigIsAUsageErrorObjectFromEveryCommandThatConnects(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SELECTIVE_CONFIG_DIR", dir)
+	if err := os.WriteFile(dir+"/config.json", []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, _ := execute("orgs")
+
+	if code != contract.ExitUsage || !strings.HasPrefix(stdout, `{"v":1,"error":"usage_error","message":"could not load config`) {
+		t.Errorf("exit %d stdout %q, want exit 5 and a usage_error object", code, stdout)
+	}
+}
