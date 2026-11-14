@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -204,12 +205,50 @@ func TestHelpJSONListsDoctorWithItsExitCodes(t *testing.T) {
 	for _, f := range out.Command.Flags {
 		flags[f.Name] = f.Default
 	}
-	if out.Command.Path != "doctor" || len(out.Command.ExitCodes) != 6 || out.Command.Mutates || flags["timeout"] != "30s" {
+	if out.Command.Path != "doctor" || !slices.Equal(out.Command.ExitCodes, []int{0, 3, 4, 5, 6, 8}) || out.Command.Mutates || flags["timeout"] != "30s" {
 		t.Errorf("help doctor = %+v, flags %v", out.Command, flags)
 	}
 	for _, name := range []string{"org", "hostname", "json"} {
 		if _, ok := flags[name]; !ok {
 			t.Errorf("doctor lacks --%s", name)
 		}
+	}
+}
+
+func TestDoctorTimeoutFlagBoundsTheRunAndExitsEight(t *testing.T) {
+	cleanDoctorEnv(t)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	began := time.Now()
+	res := runBinary(t, checkoutOfAcmeWeb(t), srv.URL, "doctor", "--timeout", "1s", "--json")
+	elapsed := time.Since(began)
+
+	select {
+	case <-entered:
+	default:
+		t.Fatal("the handler never received the request, so nothing was hanging")
+	}
+	doc := oneLineDocument(t, res.stdout)
+	var serverCode string
+	for _, c := range doc.Doctor.Checks {
+		if c.Name == "server" && c.Status == "fail" {
+			serverCode = c.Code
+		}
+	}
+	if res.exit != contract.ExitTimeout || doc.Error != "timeout" || serverCode != "timeout" {
+		t.Errorf("exit %d, error %q, server check code %q", res.exit, doc.Error, serverCode)
+	}
+	if elapsed > 6*time.Second {
+		t.Errorf("took %s: --timeout 1s did not bound the run (the client's own 10s timeout would explain more than this)", elapsed)
 	}
 }
