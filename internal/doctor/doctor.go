@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -186,6 +187,9 @@ func failFrom(name string, err error, fix string) Check {
 func codeOf(err error) contract.Code {
 	var apiErr *api.Error
 	if errors.As(err, &apiErr) {
+		if apiErr.Status == http.StatusConflict && (!contract.Registered(apiErr.Code) || apiErr.Code == contract.InternalError) {
+			return contract.UsageError
+		}
 		if contract.Registered(apiErr.Code) {
 			return apiErr.Code
 		}
@@ -248,14 +252,24 @@ func (s *state) checkServer() Check {
 	return Check{Name: "server", Status: OK, Message: fmt.Sprintf("%s answered in %dms", s.host, ms), MS: &ms}
 }
 
+func (s *state) loginCommand() string {
+	if s.host == config.DefaultHost {
+		return loginFix
+	}
+	return loginFix + " --hostname " + s.host
+}
+
 func (s *state) checkAuth() Check {
 	if s.credErr != nil {
-		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, loginFix)
+		return fail("auth", contract.Unauthorized, "not logged in to "+s.host, s.loginCommand())
 	}
 	if s.meErr != nil {
-		code := codeOf(s.meErr)
-		if code == contract.Unauthorized {
-			return fail("auth", code, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), loginFix)
+		if errors.Is(s.meErr, api.ErrUnauthorized) {
+			fix := s.loginCommand()
+			if s.cred.Source == credentials.SourceEnv {
+				fix = "replace or unset SELECTIVE_TOKEN, then run doctor again"
+			}
+			return fail("auth", contract.Unauthorized, fmt.Sprintf("the server rejected the token from %s: %v", s.cred.Source, s.meErr), fix)
 		}
 		return failFrom("auth", s.meErr, "")
 	}

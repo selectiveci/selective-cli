@@ -115,6 +115,20 @@ func TestARunWhoseDeadlineHasAlreadyPassedFailsWithTimeoutInsteadOfPassing(t *te
 	}
 }
 
+func TestASecretNestedInAStepsDetailIsRedactedToo(t *testing.T) {
+	leaky := step{"a", "", func(s *state) Check {
+		s.secret = "s3cret-<value>"
+		return Check{Name: "a", Status: OK, Detail: map[string]any{"list": []map[string]any{{"name": "x s3cret-<value>"}}}}
+	}}
+
+	report := runSteps(t, time.Minute, leaky)
+
+	raw, _ := json.Marshal(check(t, report, "a").Detail)
+	if strings.Contains(string(raw), "s3cret") || !strings.Contains(string(raw), "x [redacted]") {
+		t.Errorf("detail = %s", raw)
+	}
+}
+
 func TestASecretInDetailNeverReachesTheReportJSONOrTheErrorsDoctorField(t *testing.T) {
 	leaky := step{"a", "", func(s *state) Check {
 		s.secret = "s3cret-value"

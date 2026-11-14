@@ -213,7 +213,7 @@ func TestNoCredentialFailsAuthWithTheLoginFixAndSendsNoToken(t *testing.T) {
 	report := Run(Options{Hostname: host, Timeout: time.Minute})
 
 	auth := check(t, report, "auth")
-	if auth.Status != Fail || auth.Code != contract.Unauthorized || auth.Fix != "sel auth login --setup" {
+	if auth.Status != Fail || auth.Code != contract.Unauthorized || auth.Fix != "sel auth login --setup --hostname "+host {
 		t.Errorf("auth = %+v", auth)
 	}
 	if check(t, report, "server").Status != OK || sawAuthorization != "" {
@@ -356,5 +356,59 @@ func TestAServerThatEchoesTheTokenNeverGetsItIntoTheReportOrTheError(t *testing.
 				t.Errorf("report and error text: %s", text)
 			}
 		})
+	}
+}
+
+func TestAnHTTP401IsAlwaysARejectedCredentialWhateverCodeTheBodyCarries(t *testing.T) {
+	report := run(t, serve(t, with("/api/v1/me", reply(401, `{"error":"invalid_key","message":"Nope."}`))), Options{})
+
+	auth := check(t, report, "auth")
+	if auth.Code != contract.Unauthorized || auth.Fix == "" || exitOf(report) != 4 {
+		t.Errorf("auth = %+v, exit %d", auth, exitOf(report))
+	}
+}
+
+func TestARejectedTokenGetsAFixThatCanWorkForItsSource(t *testing.T) {
+	rejected := serve(t, with("/api/v1/me", reply(401, `{"error":"unauthorized","message":"Revoked."}`)))
+
+	fromEnv := check(t, run(t, rejected, Options{}), "auth")
+	isolate(t, "")
+	if err := keyring.Set("selective-cli", rejected, token); err != nil {
+		t.Fatal(err)
+	}
+	fromKeychain := check(t, Run(Options{Hostname: rejected, Timeout: time.Minute}), "auth")
+
+	if !strings.Contains(fromEnv.Fix, "SELECTIVE_TOKEN") || strings.Contains(fromEnv.Fix, "sel auth login") {
+		t.Errorf("env fix = %q", fromEnv.Fix)
+	}
+	if fromKeychain.Fix != "sel auth login --setup --hostname "+rejected {
+		t.Errorf("keychain fix = %q", fromKeychain.Fix)
+	}
+}
+
+func TestAnUnregisteredHTTP409IsAUsageErrorLikeTheContractSaysForAConflict(t *testing.T) {
+	report := run(t, serve(t, with("/api/v1/me", reply(409, `{}`))), Options{})
+
+	if got := check(t, report, "auth"); got.Code != contract.UsageError || exitOf(report) != 5 {
+		t.Errorf("auth = %+v, exit %d", got, exitOf(report))
+	}
+}
+
+func TestATokenEchoedAsTheEmailNeverReachesTheReportDetailOrError(t *testing.T) {
+	echoed := `{"user_id":"u1","email":"` + token + `","org_slugs":["acme"]}`
+	report := run(t, serve(t, with("/api/v1/me", reply(200, echoed))), Options{})
+
+	raw, _ := json.Marshal(report)
+	if strings.Contains(string(raw), token) || check(t, report, "auth").Detail["email"] != "[redacted]" {
+		t.Errorf("report: %s", raw)
+	}
+}
+
+func TestTheLoginFixOmitsTheHostnameOnlyForTheDefaultServer(t *testing.T) {
+	if got := (&state{host: config.DefaultHost}).loginCommand(); got != "sel auth login --setup" {
+		t.Errorf("default host fix = %q", got)
+	}
+	if got := (&state{host: "http://localhost:4444"}).loginCommand(); got != "sel auth login --setup --hostname http://localhost:4444" {
+		t.Errorf("other host fix = %q", got)
 	}
 }
