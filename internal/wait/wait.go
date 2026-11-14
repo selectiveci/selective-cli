@@ -24,6 +24,7 @@ type Clock interface {
 type Options struct {
 	For    string
 	Limit  time.Duration
+	Origin time.Time
 	Out    io.Writer
 	Pretty bool
 	Clock  Clock
@@ -79,6 +80,10 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 		clock = realClock{}
 	}
 	start := clock.Now()
+	origin := opts.Origin
+	if origin.IsZero() {
+		origin = start
+	}
 	delay := MinInterval
 	for {
 		done, retryAfter, err := check(ctx)
@@ -88,13 +93,13 @@ func Poll(ctx context.Context, opts Options, check Check) error {
 		if done {
 			return nil
 		}
-		elapsed := clock.Now().Sub(start)
-		remaining := opts.Limit - elapsed
+		now := clock.Now()
+		remaining := opts.Limit - now.Sub(start)
 		step := max(delay, retryAfter)
 		if remaining <= 0 || retryAfter > remaining {
 			return &ExpiredError{For: opts.For, Limit: opts.Limit}
 		}
-		opts.announce(elapsed)
+		opts.announce(now.Sub(origin))
 		if err := clock.Sleep(ctx, min(step, remaining)); err != nil {
 			return err
 		}

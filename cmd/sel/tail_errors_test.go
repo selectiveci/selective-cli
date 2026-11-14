@@ -51,3 +51,9 @@ func TestTailRefusesFlagsAndArgumentsItCannotHonourWithAUsageError(t *testing.T)
 		})
 	}
 }
+
+func TestTailKeepsAnUnusableHostAsANetworkError(t *testing.T) {
+	res := runBinary(t, gitRepo(t), "   ", "tail", "--json")
+
+	assertRefusal(t, res, 4, "network_error")
+}
