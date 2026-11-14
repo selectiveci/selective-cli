@@ -3,19 +3,14 @@ package tail
 import (
 	"context"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/wait"
 )
 
-func TestMain(m *testing.M) {
-	api.SetClock(&fakeClock{})
-	os.Exit(m.Run())
-}
-
 func TestAOneShotLookupKeepsTheClientRetries(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
 	unavailable := func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
 	client, calls := lookupServer(t, unavailable, unavailable, found)
 
