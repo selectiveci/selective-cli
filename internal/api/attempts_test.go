@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,5 +116,26 @@ func TestACancelledSecondWaitReportsTwoAttemptsAndTheCancel(t *testing.T) {
 
 	if n, _ := attemptsOf(t, err); n != 2 || !errors.Is(err, context.Canceled) {
 		t.Errorf("attempts = %v err %v, want 2 and context.Canceled", n, err)
+	}
+}
+
+func TestAContextThatExpiresDuringTheSecondAttemptReportsTwoAttempts(t *testing.T) {
+	t.Cleanup(SetClock(&fakeClock{}))
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := New(srv.URL, "tok").WithContext(ctx).Me()
+
+	if n, _ := attemptsOf(t, err); n != 2 || !errors.Is(err, context.DeadlineExceeded) || hits.Load() != 2 {
+		t.Errorf("attempts = %v err %v after %d requests, want 2 and the deadline after 2", n, err, hits.Load())
 	}
 }
