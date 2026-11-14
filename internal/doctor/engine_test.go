@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,5 +112,27 @@ func TestARunWhoseDeadlineHasAlreadyPassedFailsWithTimeoutInsteadOfPassing(t *te
 	}
 	if a := check(t, report, "a"); a.Code != contract.Timeout || report.Status != "fail" || exitOf(report) != 8 {
 		t.Errorf("a = %+v, status %q, exit %d", a, report.Status, exitOf(report))
+	}
+}
+
+func TestASecretInDetailNeverReachesTheReportJSONOrTheErrorsDoctorField(t *testing.T) {
+	leaky := step{"a", "", func(s *state) Check {
+		s.secret = "s3cret-value"
+		return Check{
+			Name:    "a",
+			Status:  Fail,
+			Code:    contract.Unauthorized,
+			Message: "rejected s3cret-value",
+			Detail:  map[string]any{"who": "s3cret-value", "deep": map[string]any{"list": []string{"x s3cret-value"}}},
+		}
+	}}
+
+	report := runSteps(t, time.Minute, leaky)
+
+	fields := coded(t, report).(contract.Fielded).ErrorFields()
+	inError, _ := json.Marshal(fields)
+	inReport, _ := json.Marshal(report)
+	if text := string(inError) + string(inReport); strings.Contains(text, "s3cret-value") || !strings.Contains(text, "x [redacted]") {
+		t.Errorf("report and the error's doctor field: %s", text)
 	}
 }
