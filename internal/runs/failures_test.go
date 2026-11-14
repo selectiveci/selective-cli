@@ -2,10 +2,12 @@ package runs
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -167,5 +169,57 @@ func TestFailuresTakesPageMetadataFromTheLastPageFetched(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stdout lacks %s: %s", want, out)
 		}
+	}
+}
+
+func walkNotices(t *testing.T, rows string, opts FailuresOptions) (failures int, next *string, notices []string, requests int) {
+	t.Helper()
+	s := &stub{pages: map[string]string{"": page(rows, `"more"`), "more": page(rows, `"more"`)}}
+	env, out, _ := s.env(t, true)
+
+	if err := Failures(env, opts); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Failures   []json.RawMessage `json:"failures"`
+		NextCursor *string           `json:"next_cursor"`
+		Notices    []string          `json:"notices"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return len(doc.Failures), doc.NextCursor, doc.Notices, len(s.queries)
+}
+
+func TestFailuresCapsAutoPaginationByCountSoShortPagesStillReachTheTotal(t *testing.T) {
+	rows := strings.TrimSuffix(strings.Repeat(failedRow+",", 11), ",")
+
+	failures, next, notices, _ := walkNotices(t, rows, FailuresOptions{Build: "b-1"})
+
+	if failures < maxFailures || failures >= maxFailures+11 {
+		t.Errorf("collected %d failures from 11-row pages, want %d", failures, maxFailures)
+	}
+	if next == nil || *next != "more" || !slices.Contains(notices, "pagination_stopped_early") {
+		t.Errorf("next_cursor %v notices %v, want the cursor kept and pagination_stopped_early", next, notices)
+	}
+}
+
+func TestFailuresStopsAtTheRequestCeilingWhenNoRowSurvivesTheSuiteFilter(t *testing.T) {
+	failures, next, notices, requests := walkNotices(t, failedRow, FailuresOptions{Build: "b-1", Suite: "other"})
+
+	if requests != maxRequests || failures != 0 {
+		t.Errorf("requests %d failures %d, want %d requests and none", requests, failures, maxRequests)
+	}
+	if next == nil || !slices.Contains(notices, "pagination_stopped_early") {
+		t.Errorf("next_cursor %v notices %v", next, notices)
+	}
+}
+
+func TestFailuresWithALimitNeverAddsTheStoppedEarlyNotice(t *testing.T) {
+	_, next, notices, _ := walkNotices(t, failedRow, FailuresOptions{Build: "b-1", Limit: 1})
+
+	if next == nil || len(notices) != 0 {
+		t.Errorf("next_cursor %v notices %v", next, notices)
 	}
 }
