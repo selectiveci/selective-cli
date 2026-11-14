@@ -158,12 +158,11 @@ var scannedPackages = []string{
 	"internal/doctor",
 	"internal/runs",
 	"internal/setup",
+	"internal/tail",
 	"internal/wait",
 }
 
-var exemptPackages = map[string]string{
-	"internal/tail": "Run returns its own exit code beside the error and the tail command exits with it, so its errors never reach the contract classifier",
-}
+var exemptPackages = map[string]string{}
 
 var apiImports = map[string]bool{
 	"github.com/selectiveci/selective-cli/internal/api": true,
