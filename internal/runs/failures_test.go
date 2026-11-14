@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -71,6 +72,23 @@ func TestFailuresJSONMatchesGolden(t *testing.T) {
 	}
 }
 
+func TestFailuresTextMatchesGolden(t *testing.T) {
+	s := &stub{pages: map[string]string{"": page(failedRow+","+flakyRow, `"next-1"`)}}
+	env, out, errOut := s.env(t, false)
+
+	err := Failures(env, FailuresOptions{Build: "b-1", Outcome: "all", Limit: 2})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != golden(t, "failures.txt") {
+		t.Errorf("stdout:\n%s\nwant:\n%s", out, golden(t, "failures.txt"))
+	}
+	if errOut.String() != golden(t, "failures.stderr.txt") {
+		t.Errorf("stderr:\n%s\nwant:\n%s", errOut, golden(t, "failures.stderr.txt"))
+	}
+}
+
 func TestFailuresFollowsEveryCursorWithoutALimit(t *testing.T) {
 	s := &stub{pages: map[string]string{
 		"":   page(failedRow, `"c2"`),
@@ -127,30 +145,102 @@ func TestFailuresSuiteFiltersByNameOrID(t *testing.T) {
 	}
 }
 
-func TestFailuresWithNoneWritesAnEmptyArray(t *testing.T) {
+func TestFailuresWithNoneWritesAnEmptyArrayInJSONAndAHintInText(t *testing.T) {
 	archived := `{"build_id":"b-1","status":"completed","archived":true,"archived_failed_count":4,"archived_flaky_failed_count":1,"failures":[],"next_cursor":null}`
 	s := &stub{pages: map[string]string{"": archived}}
-	env, out, _ := s.env(t, true)
 
-	if err := Failures(env, FailuresOptions{Build: "b-1"}); err != nil {
+	jsonEnv, jsonOut, _ := s.env(t, true)
+	textEnv, textOut, textErr := s.env(t, false)
+
+	if err := Failures(jsonEnv, FailuresOptions{Build: "b-1"}); err != nil {
 		t.Fatal(err)
 	}
-
-	if !strings.Contains(out.String(), `"failures":[]`) {
-		t.Errorf("json = %s", out)
+	if err := Failures(textEnv, FailuresOptions{Build: "b-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jsonOut.String(), `"failures":[]`) {
+		t.Errorf("json = %s", jsonOut)
+	}
+	if textOut.Len() != 0 || !strings.Contains(textErr.String(), "4 failed and 1 flaky") {
+		t.Errorf("stdout %q, stderr %q", textOut, textErr)
 	}
 }
 
-func TestFailuresKeepsTheCursorWhenSuiteFilteringEmptiesThePage(t *testing.T) {
+func TestFailuresTextKeepsTheContinuationWhenSuiteFilteringEmptiesThePage(t *testing.T) {
 	s := &stub{pages: map[string]string{"": page(failedRow, `"next-1"`)}}
-	env, out, _ := s.env(t, true)
+	jsonEnv, jsonOut, _ := s.env(t, true)
+	textEnv, textOut, textErr := s.env(t, false)
+	opts := FailuresOptions{Build: "b-1", Suite: "api-minitest", Limit: 1}
 
-	if err := Failures(env, FailuresOptions{Build: "b-1", Suite: "api-minitest", Limit: 1}); err != nil {
+	if err := Failures(jsonEnv, opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := Failures(textEnv, opts); err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(out.String(), `"failures":[]`) || !strings.HasSuffix(out.String(), `"next_cursor":"next-1"}`+"\n") {
-		t.Errorf("json = %s", out)
+	if !strings.Contains(jsonOut.String(), `"failures":[]`) || !strings.HasSuffix(jsonOut.String(), `"next_cursor":"next-1"}`+"\n") {
+		t.Errorf("json = %s", jsonOut)
+	}
+	want := "More results: sel failures 'b-1' --suite 'api-minitest' --limit 1 --cursor 'next-1'\n"
+	if textOut.Len() != 0 || !strings.HasSuffix(textErr.String(), want) {
+		t.Errorf("stdout %q, stderr %q, want stderr ending %q", textOut, textErr, want)
+	}
+}
+
+func TestFailuresContinuationKeepsHostnameAndOrgAndShellQuotesEveryValue(t *testing.T) {
+	cases := map[string]string{
+		"$VERSION":    `'$VERSION'`,
+		"$(id)":       `'$(id)'`,
+		"it's `x`":    `'it'\''s ` + "`x`" + `'`,
+		"two  words;": `'two  words;'`,
+	}
+	for suite, quoted := range cases {
+		t.Run(suite, func(t *testing.T) {
+			s := &stub{pages: map[string]string{"": page(failedRow, `"c$2"`)}}
+			env, _, errOut := s.env(t, false)
+
+			err := Failures(env, FailuresOptions{Build: "b-1", Hostname: "http://h:4000", Org: "ac me", Suite: suite, Limit: 1})
+
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "More results: sel failures 'b-1' --hostname 'http://h:4000' --org 'ac me' --suite " + quoted + " --limit 1 --cursor 'c$2'\n"
+			if !strings.HasSuffix(errOut.String(), want) {
+				t.Errorf("stderr %q, want suffix %q", errOut, want)
+			}
+		})
+	}
+}
+
+func TestQuotersEscapeAnEmbeddedSingleQuoteForTheirShell(t *testing.T) {
+	cases := []struct{ goos, value, want string }{
+		{"linux", "it's $(id)", `'it'\''s $(id)'`},
+		{"darwin", "it's", `'it'\''s'`},
+		{"windows", "it's $(id)", `'it''s $(id)'`},
+		{"windows", "plain", `'plain'`},
+	}
+	for _, tc := range cases {
+		if got := quoteFor(tc.goos, tc.value); got != tc.want {
+			t.Errorf("quoteFor(%q, %q) = %s, want %s", tc.goos, tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestContinuationHintUsesTheHostShellQuoting(t *testing.T) {
+	hostOS = "windows"
+	t.Cleanup(func() { hostOS = runtime.GOOS })
+	s := &stub{pages: map[string]string{"": page(failedRow, `"c'2"`)}}
+	env, _, errOut := s.env(t, false)
+
+	err := Failures(env, FailuresOptions{Build: "b-1", Suite: "it's", Limit: 1})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "More results: sel failures 'b-1' --suite 'it''s' --limit 1 --cursor 'c''2'\n"
+	if !strings.HasSuffix(errOut.String(), want) {
+		t.Errorf("stderr %q, want suffix %q", errOut, want)
 	}
 }
 
@@ -221,5 +311,20 @@ func TestFailuresWithALimitNeverAddsTheStoppedEarlyNotice(t *testing.T) {
 
 	if next == nil || len(notices) != 0 {
 		t.Errorf("next_cursor %v notices %v", next, notices)
+	}
+}
+
+func TestFailuresTextExplainsAnEarlyStopAndKeepsTheContinuation(t *testing.T) {
+	rows := strings.TrimSuffix(strings.Repeat(failedRow+",", 11), ",")
+	s := &stub{pages: map[string]string{"": page(rows, `"more"`), "more": page(rows, `"more"`)}}
+	env, _, errOut := s.env(t, false)
+
+	if err := Failures(env, FailuresOptions{Build: "b-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Notice: stopped early after 20009 failures; run the command below to continue\nMore results: sel failures 'b-1' --cursor 'more'\n"
+	if !strings.HasSuffix(errOut.String(), want) {
+		t.Errorf("stderr %q, want suffix %q", errOut, want)
 	}
 }
