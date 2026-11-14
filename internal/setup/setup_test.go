@@ -134,6 +134,30 @@ func TestKeyIntoGithubSecretOnlyOnStdin(t *testing.T) {
 	}
 }
 
+func TestKeyIntoGithubSecretReportsAnUpdateAsJSON(t *testing.T) {
+	e, out := env(t, oneOrg)
+	e.JSON = true
+	e.RunGh = func(string, ...string) error { return nil }
+	if err := e.Key("acme", "s-1", KeyOptions{GithubSecret: "SELECTIVE_API_KEY"}); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		V      int    `json:"v"`
+		Result string `json:"result"`
+		DryRun *bool  `json:"dry_run"`
+		Secret string `json:"secret"`
+		Repo   string `json:"repo"`
+		Suite  string `json:"suite"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("stdout = %q: %v", out.String(), err)
+	}
+	if doc.V != 1 || doc.Result != "updated" || doc.DryRun == nil || *doc.DryRun ||
+		doc.Secret != "SELECTIVE_API_KEY" || doc.Repo != "acme/web" || doc.Suite != "RSpec" {
+		t.Errorf("stdout = %q", out.String())
+	}
+}
+
 func TestResolveOrg(t *testing.T) {
 	t.Setenv("SELECTIVE_ORG", "")
 	e, _ := env(t, oneOrg)
