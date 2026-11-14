@@ -27,6 +27,8 @@ const (
 
 var Version = "dev"
 
+var goos = runtime.GOOS
+
 type State struct {
 	LatestVersion       string     `json:"latest_version,omitempty"`
 	CheckedAt           *time.Time `json:"checked_at,omitempty"`
@@ -48,6 +50,13 @@ type Info struct {
 	UpgradeCommand  string     `json:"upgrade_command,omitempty"`
 }
 
+func upgradeCommand() string {
+	if goos == "windows" {
+		return ""
+	}
+	return UpgradeCommand
+}
+
 func UserAgent() string {
 	return fmt.Sprintf("sel/%s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH)
 }
@@ -58,7 +67,7 @@ func ReleaseURL(version string) string {
 
 func cleanVersion(raw string) string {
 	v := strings.TrimPrefix(strings.TrimSpace(raw), "v")
-	if v == "" || !semver.IsValid("v"+v) {
+	if v == "" || semver.Canonical("v"+v) != "v"+v {
 		return ""
 	}
 	return v
@@ -149,11 +158,11 @@ func RecordServerHeaders(h http.Header) {
 	modifyState(func(st *State) {
 		if latest != "" {
 			st.ServerLatestVersion = latest
+			st.ServerSeenAt = now()
 		}
 		if minimum != "" {
 			st.ServerMinVersion = minimum
 		}
-		st.ServerSeenAt = now()
 	})
 }
 
@@ -203,7 +212,7 @@ func Status(version, commit string, st State) Info {
 		info.MinVersion = minimum
 	}
 	if outdated || unsupported {
-		info.UpgradeCommand = UpgradeCommand
+		info.UpgradeCommand = upgradeCommand()
 	}
 	return info
 }
