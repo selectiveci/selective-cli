@@ -102,7 +102,7 @@ Exit codes:
 			}
 			env, err := setup.Connect(hostname, asJSON)
 			if err != nil {
-				return unusableHostIsNetwork(err)
+				return tailConnectError(err)
 			}
 			code, err := tail.Run(env.Client, opts)
 			if err != nil {
@@ -132,10 +132,16 @@ func tailFormat(asJSON bool, requested string) (string, error) {
 	return requested, nil
 }
 
-func unusableHostIsNetwork(err error) error {
+func tailConnectError(err error) error {
 	var coded contract.Coded
-	if errors.As(err, &coded) && coded.ErrorCode() == contract.UsageError {
+	if !errors.As(err, &coded) {
+		return err
+	}
+	switch coded.ErrorCode() {
+	case contract.UsageError:
 		return contract.Errorf(contract.NetworkError, "%s", coded.Error())
+	case contract.Unauthorized:
+		return contract.Errorf(contract.Unauthorized, "not logged in; run: sel auth login")
 	}
 	return err
 }
