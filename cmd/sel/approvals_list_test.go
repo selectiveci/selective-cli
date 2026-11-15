@@ -161,5 +161,5 @@ func TestApprovalsListPicksTheOrgFromTheFlagThenTheEnvironmentThenTheOnlyOne(t *
 }
 
 func TestHelpListsApprovalsListAsAReadWithTheTokensExitCodes(t *testing.T) {
-	assertReadExitCodes(t, "approvals list")
+	assertReadHelp(t, "approvals list", []int{0, 3, 4, 5, 6}, nil, "")
 }

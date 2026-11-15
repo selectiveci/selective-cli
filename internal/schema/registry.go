@@ -48,6 +48,7 @@ var events = []Event{
 	{"heartbeat", "cli"},
 	{"rerun_started", "cli"},
 	{"done", "cli"},
+	{"approved", "cli"},
 	{"test_pass", "cli"},
 	{"authorize", "cli"},
 	{"logged_in", "cli"},

@@ -152,6 +152,7 @@ func uncodedErrorConstructors(t *testing.T, dir string) []string {
 var scannedPackages = []string{
 	"cmd/sel",
 	"internal/api",
+	"internal/approvals",
 	"internal/auth",
 	"internal/config",
 	"internal/devicelogin",
