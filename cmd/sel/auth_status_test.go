@@ -199,6 +199,9 @@ func TestAuthStatusWhenTheTokenObjectCannotBeReadAfterAGoodMe(t *testing.T) {
 		{"500 propagates", statusServer(t, 200, meBody, 500, `{"error":"server_error","message":"boom"}`).URL, 4, "server_error", "boom"},
 		{"200 without a token object", statusServer(t, 200, meBody, 200, `{}`).URL, 4, "server_error", "no token object"},
 		{"200 with a null token", statusServer(t, 200, meBody, 200, `{"token":null}`).URL, 4, "server_error", "no token object"},
+		{"200 with an array token", statusServer(t, 200, meBody, 200, `{"token":[]}`).URL, 4, "server_error", "no token object"},
+		{"200 with a string token", statusServer(t, 200, meBody, 200, `{"token":"unexpected"}`).URL, 4, "server_error", "no token object"},
+		{"200 with a number token", statusServer(t, 200, meBody, 200, `{"token":123}`).URL, 4, "server_error", "no token object"},
 		{"connection drops", closedAfterMe(), 4, "network_error", "could not reach"},
 	}
 	for _, tc := range cases {

@@ -68,7 +68,7 @@ func (c *Client) CurrentToken() (json.RawMessage, error) {
 	if err := c.do("GET", "/api/v1/tokens/current", nil, http.StatusOK, &body); err != nil {
 		return nil, err
 	}
-	if len(body.Token) == 0 || string(body.Token) == "null" {
+	if len(body.Token) == 0 || body.Token[0] != '{' {
 		return nil, &Error{Code: contract.ServerError, Message: "unexpected response from /api/v1/tokens/current: no token object"}
 	}
 	return body.Token, nil
