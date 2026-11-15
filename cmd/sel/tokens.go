@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/spf13/cobra"
 )
+
+var tokenID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 var tokenReadAnnotations = map[string]string{"exit_codes": "0,3,4,5,6"}
 
@@ -111,6 +114,9 @@ Agent tokens cannot revoke tokens: the server answers 403 (exit 6).`,
 		Args:        cobra.ExactArgs(1),
 		Annotations: map[string]string{"exit_codes": "0,3,4,5,6", "mutates": "true", "destructive": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !tokenID.MatchString(args[0]) {
+				return contract.Errorf(contract.UsageError, "%q is not a token id (a UUID, shown by sel tokens list); to revoke the token this command line uses, run: sel auth logout", args[0])
+			}
 			if !opts.yes && !opts.dryRun {
 				return contract.Errorf(contract.UsageError, "revoking a token needs --yes (or --dry-run to preview)")
 			}

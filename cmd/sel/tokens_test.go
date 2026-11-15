@@ -77,6 +77,20 @@ func TestTokensListWalksEveryPageAndPrintsOneDocument(t *testing.T) {
 	}
 }
 
+func TestTokensListKeepsTheNoticesEveryPageCarries(t *testing.T) {
+	stub := &tokensStub{pages: map[string]string{
+		"":       `{"tokens":[` + userToken + `],"next_cursor":"page-2","notices":["first_notice"]}`,
+		"page-2": `{"tokens":[` + agentToken + `],"next_cursor":null,"notices":["second_notice","first_notice"]}`,
+	}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "tokens", "list", "--json")
+
+	if !strings.HasSuffix(res.stdout, `"next_cursor":null,"notices":["first_notice","second_notice"]}`+"\n") {
+		t.Errorf("stdout %q, want both pages' notices once each", res.stdout)
+	}
+}
+
 func TestTokensListWithNoTokensPrintsAnEmptyList(t *testing.T) {
 	srv := (&tokensStub{pages: map[string]string{"": `{"tokens":[],"next_cursor":null}`}}).start(t)
 
@@ -351,6 +365,22 @@ func TestTokensRevokeWithoutYesIsAUsageErrorAndSendsNothing(t *testing.T) {
 	assertRefusal(t, res, 5, "usage_error")
 	if len(stub.requests) != 0 {
 		t.Errorf("requests = %v, want none", stub.requests)
+	}
+}
+
+func TestTokensRevokeRejectsAnyIDThatIsNotAUUIDBeforeSendingAnything(t *testing.T) {
+	for _, id := range []string{"current", "../x", "", "not-a-uuid", revokeID + "/extra"} {
+		for _, flag := range []string{"--yes", "--dry-run"} {
+			stub := &revokeStub{status: 204}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", id, flag, "--json")
+
+			assertRefusal(t, res, 5, "usage_error")
+			if len(stub.requests) != 0 || (id == "current" && !strings.Contains(res.stdout, "sel auth logout")) {
+				t.Errorf("revoke %q %s: requests %v stdout %q, want none and a pointer to sel auth logout", id, flag, stub.requests, res.stdout)
+			}
+		}
 	}
 }
 
