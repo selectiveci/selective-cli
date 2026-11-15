@@ -3,15 +3,20 @@ package localrun
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 const (
-	socketEnv = "SELECTIVE_SEAT_SOCKET"
-	seatUsage = "usage:\n  sel __transport --stdio\n"
+	transportEnv = "SELECTIVE_TRANSPORT"
+	socketEnv    = "SELECTIVE_SEAT_SOCKET"
+	seatUsage    = "usage:\n  sel __transport --stdio\n"
+	maxSocketLen = 100
 )
 
 func RunSeat(args []string, in io.Reader, out, errw io.Writer) int {
@@ -70,4 +75,74 @@ func exitCodeFor(err error) int {
 		return 1
 	}
 	return 0
+}
+
+type Seat struct {
+	dir  string
+	shim string
+	sock string
+	ln   net.Listener
+}
+
+func NewSeat(sel string) (*Seat, error) {
+	dir, err := os.MkdirTemp(shortTempBase(), "sel")
+	if err != nil {
+		return nil, err
+	}
+	seat := &Seat{dir: dir, shim: filepath.Join(dir, "transport"), sock: filepath.Join(dir, "s.sock")}
+	script := "#!/bin/sh\nexec " + shellQuote(sel) + " __transport \"$@\"\n"
+	if err := os.WriteFile(seat.shim, []byte(script), 0o700); err != nil {
+		seat.Close()
+		return nil, err
+	}
+	if seat.ln, err = net.Listen("unix", seat.sock); err != nil {
+		seat.Close()
+		return nil, err
+	}
+	return seat, nil
+}
+
+func shortTempBase() string {
+	base := os.TempDir()
+	if len(base)+len("/sel0000000000/s.sock") > maxSocketLen {
+		return "/tmp"
+	}
+	return base
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func (s *Seat) Env() []string {
+	return []string{transportEnv + "=" + s.shim, socketEnv + "=" + s.sock}
+}
+
+func (s *Seat) Accept(ctx context.Context) (net.Conn, error) {
+	type accepted struct {
+		conn net.Conn
+		err  error
+	}
+	result := make(chan accepted, 1)
+	go func() {
+		conn, err := s.ln.Accept()
+		result <- accepted{conn, err}
+	}()
+	select {
+	case a := <-result:
+		return a.conn, a.err
+	case <-ctx.Done():
+		s.ln.Close()
+		if a := <-result; a.conn != nil {
+			a.conn.Close()
+		}
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Seat) Close() error {
+	if s.ln != nil {
+		s.ln.Close()
+	}
+	return os.RemoveAll(s.dir)
 }
