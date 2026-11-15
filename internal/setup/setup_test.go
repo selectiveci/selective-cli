@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,6 +132,30 @@ func TestKeyIntoGithubSecretOnlyOnStdin(t *testing.T) {
 	}
 	if strings.Contains(out.String(), secretKey) {
 		t.Fatal("key printed")
+	}
+}
+
+func TestKeyIntoGithubSecretReportsAnUpdateAsJSON(t *testing.T) {
+	e, out := env(t, oneOrg)
+	e.JSON = true
+	e.RunGh = func(string, ...string) error { return nil }
+	if err := e.Key("acme", "s-1", KeyOptions{GithubSecret: "SELECTIVE_API_KEY"}); err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		V      int    `json:"v"`
+		Result string `json:"result"`
+		DryRun *bool  `json:"dry_run"`
+		Secret string `json:"secret"`
+		Repo   string `json:"repo"`
+		Suite  string `json:"suite"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatalf("stdout = %q: %v", out.String(), err)
+	}
+	if doc.V != 1 || doc.Result != "updated" || doc.DryRun == nil || *doc.DryRun ||
+		doc.Secret != "SELECTIVE_API_KEY" || doc.Repo != "acme/web" || doc.Suite != "RSpec" {
+		t.Errorf("stdout = %q", out.String())
 	}
 }
 
@@ -488,5 +513,19 @@ func TestConfigureReportsWhatTheServerReturnedNotWhatWasAsked(t *testing.T) {
 				t.Errorf("text stdout = %q, want %q", got, tc.wantText)
 			}
 		})
+	}
+}
+
+func TestConnectWithAnUnreadableConfigIsAUsageError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SELECTIVE_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Connect("", false)
+
+	if got := codeOf(err); got != contract.UsageError {
+		t.Errorf("code = %q, want %q (err: %v)", got, contract.UsageError, err)
 	}
 }
