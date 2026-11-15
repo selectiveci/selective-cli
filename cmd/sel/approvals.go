@@ -17,12 +17,13 @@ func approvalsCmd() *cobra.Command {
 		Short: "Inspect approval requests",
 		Long: `Inspect approval requests.
 
+  sel approvals list  The organization's approvals, newest first
   sel approvals show  One approval: its status, who asked and what for
 
 A person decides an approval in the dashboard, never here.`,
 		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(approvalsShowCmd())
+	cmd.AddCommand(approvalsListCmd(), approvalsShowCmd())
 	return cmd
 }
 

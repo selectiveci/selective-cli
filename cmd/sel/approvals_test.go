@@ -129,6 +129,11 @@ func TestApprovalsShowCardStatesEachStatusAndPrintsTheURL(t *testing.T) {
 }
 
 func TestHelpListsApprovalsShowAsAReadWithTheTokensExitCodes(t *testing.T) {
+	assertReadExitCodes(t, "approvals show")
+}
+
+func assertReadExitCodes(t *testing.T, path string) {
+	t.Helper()
 	_, stdout, _ := execute("help", "--json")
 	var doc struct {
 		Help struct {
@@ -143,14 +148,14 @@ func TestHelpListsApprovalsShowAsAReadWithTheTokensExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range doc.Help.Commands {
-		if c.Path == "approvals show" {
+		if c.Path == path {
 			if !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6}) || c.Mutates {
-				t.Errorf("approvals show = %+v, want exit codes 0,3,4,5,6 and no mutates", c)
+				t.Errorf("%s = %+v, want exit codes 0,3,4,5,6 and no mutates", path, c)
 			}
 			return
 		}
 	}
-	t.Error("help --json lists no approvals show")
+	t.Errorf("help --json lists no %s", path)
 }
 
 func TestApprovalsShowCardNamesTheSubjectByTypeAndIDWhenItHasNoLabel(t *testing.T) {

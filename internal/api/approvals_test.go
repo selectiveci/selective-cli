@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync/atomic"
 	"testing"
 )
 
@@ -30,5 +32,23 @@ func TestGetApprovalDecodesNullableFieldsAndKeepsParamsAsSent(t *testing.T) {
 	}
 	if a.DecidedAt == nil || *a.DecidedAt != "2026-11-14T11:00:00.5Z" || string(a.Params) != `{"role":"user"}` {
 		t.Errorf("decided_at %v params %s", a.DecidedAt, a.Params)
+	}
+}
+
+func TestApprovalsStopsAtTheRequestCapKeepsTheCursorAndSaysSo(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		fmt.Fprint(w, `{"approvals":[],"next_cursor":"more"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	page, err := New(srv.URL, "tok").Approvals("acme", "")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int(requests.Load()) != maxApprovalRequests || page.NextCursor == nil || *page.NextCursor != "more" || !slices.Equal(page.Notices, []string{PaginationStoppedEarly}) {
+		t.Errorf("requests %d next %v notices %v, want the cap, the cursor kept and the notice", requests.Load(), page.NextCursor, page.Notices)
 	}
 }

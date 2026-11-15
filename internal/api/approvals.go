@@ -4,6 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
+)
+
+const (
+	approvalsPageSize   = 200
+	maxApprovals        = 20000
+	maxApprovalRequests = 2000
 )
 
 type ApprovalSubject struct {
@@ -42,4 +49,36 @@ func (c *Client) GetApproval(id string) (*Approval, error) {
 		return nil, err
 	}
 	return &out.Approval, nil
+}
+
+type ApprovalsPage struct {
+	Approvals  []Approval `json:"approvals"`
+	NextCursor *string    `json:"next_cursor"`
+	Notices    []string   `json:"notices,omitempty"`
+}
+
+func (c *Client) Approvals(org, status string) (*ApprovalsPage, error) {
+	merged := &ApprovalsPage{Approvals: []Approval{}}
+	params := url.Values{"limit": {strconv.Itoa(approvalsPageSize)}}
+	if status != "" {
+		params.Set("status", status)
+	}
+	path := "/api/v1/orgs/" + url.PathEscape(org) + "/approvals"
+	for requests := 0; requests < maxApprovalRequests; requests++ {
+		var page ApprovalsPage
+		if err := c.do("GET", withQuery(path, params), nil, http.StatusOK, &page); err != nil {
+			return nil, err
+		}
+		merged.Approvals = append(merged.Approvals, page.Approvals...)
+		merged.Notices = appendMissing(merged.Notices, page.Notices...)
+		merged.NextCursor = page.NextCursor
+		if page.NextCursor == nil || len(merged.Approvals) >= maxApprovals {
+			break
+		}
+		params.Set("cursor", *page.NextCursor)
+	}
+	if merged.NextCursor != nil {
+		merged.Notices = appendMissing(merged.Notices, PaginationStoppedEarly)
+	}
+	return merged, nil
 }
