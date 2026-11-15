@@ -27,6 +27,7 @@ type createOptions struct {
 	scopes       []string
 	expiresIn    string
 	dryRun       bool
+	noApproval   bool
 	toStdout     bool
 	output       string
 	githubSecret string
@@ -48,6 +49,9 @@ shown once and appears nowhere else, so exactly one of these is required
   --output PATH                  a new file, mode 0600; an existing file is refused
   --github-secret NAME           a GitHub Actions secret, set through gh;
     --secret-repo owner/name     the repository that gets it
+
+Agent tokens ask for approval before gated actions by default; --no-approval
+(agent tokens only) turns that off. User tokens never ask.
 
 --repo limits the token to those repositories and needs --org. --expires-in takes
 a number of days (90d) or a Go duration (12h); the server caps it at 365 days.
@@ -74,6 +78,7 @@ the token's id and prefix and exits 9, so you can revoke it.`,
 	flags.StringVar(&opts.name, "name", "", "Token name (required)")
 	_ = cmd.MarkFlagRequired("name")
 	flags.BoolVar(&opts.agent, "agent", false, "Create an agent token (default: a user token)")
+	flags.BoolVar(&opts.noApproval, "no-approval", false, "Let the agent token run gated actions without approval (needs --agent)")
 	flags.StringVar(&f.org, "org", "", "Limit the token to this organization slug")
 	flags.StringArrayVar(&opts.repos, "repo", nil, "Limit the token to owner/name (repeatable; needs --org)")
 	flags.StringSliceVar(&opts.scopes, "scope", nil, "read or write (repeatable)")
@@ -126,6 +131,13 @@ func (o createOptions) request() (api.MintRequest, error) {
 	req := api.MintRequest{Name: o.name, Scopes: o.scopes, Organization: o.org, Repos: o.repos, ExpiresInS: seconds}
 	if o.agent {
 		req.Kind = "agent"
+	}
+	if o.noApproval {
+		if !o.agent {
+			return api.MintRequest{}, contract.Errorf(contract.UsageError, "--no-approval only applies to agent tokens; add --agent")
+		}
+		trusted := false
+		req.RequiresApproval = &trusted
 	}
 	return req, nil
 }

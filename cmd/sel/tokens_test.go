@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -140,6 +141,54 @@ func TestTokensListTextShowsServerNoticesOnStderrAndLeavesStdoutAlone(t *testing
 	}
 	if out.String() != plainOut.String() {
 		t.Errorf("stdout changed by notices:\n%s\nvs\n%s", out.String(), plainOut.String())
+	}
+}
+
+func TestTokensListAndShowCarryRequiresApprovalAndLeaveAnAbsentOneAbsent(t *testing.T) {
+	asking := strings.Replace(agentToken, `"expires_at"`, `"requires_approval":true,"expires_at"`, 1)
+	trusted := strings.Replace(agentToken, `"expires_at"`, `"requires_approval":false,"expires_at"`, 1)
+	list := (&tokensStub{pages: map[string]string{"": `{"tokens":[` + asking + `,` + trusted + `,` + userToken + `],"next_cursor":null}`}}).start(t)
+	show := (&tokensStub{body: `{"token":` + trusted + `}`}).start(t)
+
+	listed := runBinary(t, t.TempDir(), list.URL, "tokens", "list", "--json")
+	shown := runBinary(t, t.TempDir(), show.URL, "tokens", "show", "--json")
+
+	if want := `{"v":1,"tokens":[` + asking + `,` + trusted + `,` + userToken + `],"next_cursor":null}` + "\n"; listed.stdout != want {
+		t.Errorf("list stdout %q, want %q", listed.stdout, want)
+	}
+	if want := `{"v":1,"token":` + trusted + `}` + "\n"; shown.stdout != want {
+		t.Errorf("show stdout %q, want %q", shown.stdout, want)
+	}
+}
+
+func TestTokensTextShowsApprovalInListAndShow(t *testing.T) {
+	asking := strings.Replace(agentToken, `"expires_at"`, `"requires_approval":true,"expires_at"`, 1)
+	trusted := strings.Replace(strings.Replace(agentToken, `"expires_at"`, `"requires_approval":false,"expires_at"`, 1), `"name":"ci"`, `"name":"bot"`, 1)
+	srv := (&tokensStub{pages: map[string]string{"": `{"tokens":[` + asking + `,` + trusted + `,` + userToken + `],"next_cursor":null}`}}).start(t)
+	showSrv := (&tokensStub{body: `{"token":` + trusted + `}`}).start(t)
+	var out, showOut bytes.Buffer
+
+	if err := tokensList(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokensShow(&setup.Env{Client: api.New(showSrv.URL, "tok"), Stdout: &showOut, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	gap := regexp.MustCompile(` {2,}`)
+	var approvalCells [][]string
+	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		approvalCells = append(approvalCells, gap.Split(strings.TrimRight(line, " "), -1))
+	}
+	last := func(cells []string) string { return cells[len(cells)-1] }
+	if len(approvalCells) != 4 || last(approvalCells[0]) != "APPROVAL" || len(approvalCells[0]) != 8 ||
+		len(approvalCells[1]) != 8 || last(approvalCells[1]) != "required" ||
+		len(approvalCells[2]) != 8 || last(approvalCells[2]) != "not required" ||
+		len(approvalCells[3]) != 7 || last(approvalCells[3]) != "never" {
+		t.Errorf("list text, split into cells: %q\n%s", approvalCells, out.String())
+	}
+	if !strings.Contains(showOut.String(), "Approval:  not required\n") {
+		t.Errorf("show text:\n%s", showOut.String())
 	}
 }
 

@@ -108,6 +108,32 @@ func TestTokensCreateOmitsEveryKeyTheUserDidNotSet(t *testing.T) {
 	}
 }
 
+func TestTokensCreateSendsRequiresApprovalFalseOnlyWithNoApproval(t *testing.T) {
+	for _, c := range []struct {
+		opts createOptions
+		want map[string]any
+	}{
+		{createOptions{name: "ci", agent: true, noApproval: true, toStdout: true}, map[string]any{"name": "ci", "kind": "agent", "requires_approval": false}},
+		{createOptions{name: "ci", agent: true, toStdout: true}, map[string]any{"name": "ci", "kind": "agent"}},
+	} {
+		stub := created()
+		runCreate(t, stub, false, c.opts)
+		if len(stub.bodies) != 1 || !reflect.DeepEqual(stub.bodies[0], c.want) {
+			t.Errorf("noApproval=%v body = %v, want %v", c.opts.noApproval, stub.bodies, c.want)
+		}
+	}
+}
+
+func TestTokensCreateDryRunWithNoApprovalSendsTheKeyAndPrintsTheServersValue(t *testing.T) {
+	stub := &mintStub{status: 200, body: `{"token":{"name":"ci","kind":"agent","requires_approval":false},"result":"created","dry_run":true}`}
+
+	run := runCreate(t, stub, false, createOptions{name: "ci", agent: true, noApproval: true, dryRun: true})
+
+	if run.err != nil || stub.requests[0] != "POST /api/v1/tokens?dry_run=true" || stub.bodies[0]["requires_approval"] != false || !strings.Contains(run.stdout, `"requires_approval":false`) {
+		t.Errorf("err %v requests %q bodies %v stdout %q, want the key sent and the server's false printed", run.err, stub.requests, stub.bodies, run.stdout)
+	}
+}
+
 func TestTokensCreateExpiresInTakesDaysAndGoDurations(t *testing.T) {
 	for in, want := range map[string]float64{"90d": 7776000, "12h": 43200, "1h30m": 5400, "45s": 45} {
 		stub := created()
@@ -137,6 +163,7 @@ func TestTokensCreateRefusesBadInputBeforeAnyRequest(t *testing.T) {
 		"secret repo with output":   {o: createOptions{name: "ci", output: filepath.Join(t.TempDir(), "o"), secretRepo: "a/b"}},
 		"secret repo with stdout":   {o: createOptions{name: "ci", toStdout: true, secretRepo: "a/b"}},
 		"secret repo on a dry run":  {o: createOptions{name: "ci", dryRun: true, secretRepo: "a/b"}},
+		"no approval without agent": {o: createOptions{name: "ci", toStdout: true, noApproval: true}},
 		"two sinks on a dry run":    {o: createOptions{name: "ci", dryRun: true, toStdout: true, output: "x"}},
 		"no name":                   {o: createOptions{toStdout: true}},
 		"expires zero":              {o: createOptions{name: "ci", toStdout: true, expiresIn: "0d"}},
