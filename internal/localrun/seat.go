@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -15,7 +16,7 @@ import (
 const (
 	transportEnv = "SELECTIVE_TRANSPORT"
 	socketEnv    = "SELECTIVE_SEAT_SOCKET"
-	seatUsage    = "usage:\n  sel __transport --stdio\n"
+	seatUsage    = "usage:\n  sel __transport --stdio\n  sel __transport --snapshot [dir]\n  sel __transport --build-env\n"
 	maxSocketLen = 100
 )
 
@@ -26,9 +27,34 @@ func RunSeat(args []string, in io.Reader, out, errw io.Writer) int {
 		return 0
 	case len(args) == 1 && args[0] == "--stdio":
 		return relayStdio(in, out, errw)
+	case len(args) == 1 && args[0] == "--build-env":
+		return emit(out, errw, localBuildEnv())
+	case len(args) == 1 && args[0] == "--snapshot":
+		return snapshotOf(".", out, errw)
+	case len(args) == 2 && args[0] == "--snapshot":
+		return snapshotOf(args[1], out, errw)
 	}
 	fmt.Fprintf(errw, "unsupported arguments %q\n%s", args, seatUsage)
 	return 2
+}
+
+func snapshotOf(dir string, out, errw io.Writer) int {
+	snapshot, ok := takeSnapshot(dir)
+	if !ok {
+		fmt.Fprintln(errw, "not a git checkout")
+		return 1
+	}
+	return emit(out, errw, snapshot)
+}
+
+func emit(out, errw io.Writer, v any) int {
+	encoder := json.NewEncoder(out)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		fmt.Fprintln(errw, err)
+		return 1
+	}
+	return 0
 }
 
 func relayStdio(in io.Reader, out, errw io.Writer) int {
