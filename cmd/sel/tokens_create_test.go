@@ -337,6 +337,29 @@ func TestTokensCreateStdoutPropertyHoldsWhenTheCommandIsNotResolved(t *testing.T
 	}
 }
 
+func TestSecretFlagRedirectsOnlyWhereTheCommandOrTheTreeDeclaresIt(t *testing.T) {
+	cases := map[string]struct {
+		args     []string
+		onStdout string
+	}{
+		"test leaf, flag after the terminator":                 {[]string{"test", "--json", "--", "--stdout"}, `"error":`},
+		"suites key declares no secret flag":                   {[]string{"suites", "key", "abc", "--stdout", "--json"}, `"error":`},
+		"orgs leaf, flag after the terminator":                 {[]string{"orgs", "--json", "--", "--stdout"}, `"error":"usage_error"`},
+		"orgs leaf, unknown flag":                              {[]string{"orgs", "--stdout", "--json"}, `"error":"usage_error"`},
+		"secret command, flag after the terminator":            {[]string{"tokens", "create", "--name", "x", "--json", "--", "--stdout"}, `"error":"usage_error"`},
+		"help for a secret command, flag after the terminator": {[]string{"tokens", "create", "--help", "--", "--stdout"}, "Create an API token"},
+		"subcommand typo stays off stdout":                     {[]string{"tokens", "creat", "--name", "x", "--stdout"}, ""},
+		"flag before the command stays off stdout":             {[]string{"--stdout", "tokens", "create", "--name", "x"}, ""},
+	}
+	for name, c := range cases {
+		res := runBinary(t, t.TempDir(), "http://127.0.0.1:9", c.args...)
+
+		if c.onStdout == "" && res.stdout != "" || c.onStdout != "" && !strings.Contains(res.stdout, c.onStdout) || res.exit == 0 && c.onStdout != "Create an API token" {
+			t.Errorf("%s: exit %d stdout %q stderr %q, want %q on stdout", name, res.exit, res.stdout, res.stderr, c.onStdout)
+		}
+	}
+}
+
 func runWithStdout(t *testing.T, host string, stdout *os.File, args ...string) (int, string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)

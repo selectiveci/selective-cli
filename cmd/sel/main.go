@@ -61,12 +61,11 @@ type exitCode int
 func (e exitCode) Error() string { return fmt.Sprintf("exit %d", int(e)) }
 
 func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
-	secretOnCommandLine := secretFlagGiven(root, args)
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	if secretOnCommandLine {
-		helpToStderr(root, stderr)
+	if secretFlagGiven(root, args) {
+		helpToStderr(root, args, stderr)
 	}
 	entered := false
 	markEntered(root, &entered)
@@ -89,7 +88,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := stdout
-		if secretOnCommandLine {
+		if secretFlagGivenFor(root, cmd, args) {
 			sink = stderr
 		}
 		_ = format.Error(sink, coded)
@@ -108,36 +107,54 @@ func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bo
 	return format.JSONMode(cmd.Flags(), stdout)
 }
 
-func helpToStderr(root *cobra.Command, stderr io.Writer) {
+func helpToStderr(root *cobra.Command, args []string, stderr io.Writer) {
 	help, usage := root.HelpFunc(), root.UsageFunc()
-	root.SetHelpFunc(func(c *cobra.Command, args []string) {
-		c.SetOut(stderr)
-		help(c, args)
+	root.SetHelpFunc(func(c *cobra.Command, helpArgs []string) {
+		if secretFlagGivenFor(root, c, args) {
+			c.SetOut(stderr)
+		}
+		help(c, helpArgs)
 	})
 	root.SetUsageFunc(func(c *cobra.Command) error {
-		c.SetOut(stderr)
+		if secretFlagGivenFor(root, c, args) {
+			c.SetOut(stderr)
+		}
 		return usage(c)
 	})
 }
 
 func secretFlagGiven(root *cobra.Command, args []string) bool {
-	for _, name := range secretFlagNames(root) {
-		if flagGiven(args, name) {
-			return true
-		}
-	}
-	return false
+	return anyFlagGiven(args, treeSecretFlags(root))
 }
 
-func secretFlagNames(c *cobra.Command) []string {
+func secretFlagGivenFor(root, resolved *cobra.Command, args []string) bool {
+	if resolved != nil && resolved.Runnable() && resolved.Name() != "help" {
+		return anyFlagGiven(args, ownSecretFlags(resolved))
+	}
+	return secretFlagGiven(root, args)
+}
+
+func anyFlagGiven(args, names []string) bool {
+	if end := slices.Index(args, "--"); end >= 0 {
+		args = args[:end]
+	}
+	return slices.ContainsFunc(names, func(name string) bool { return flagGiven(args, name) })
+}
+
+func ownSecretFlags(c *cobra.Command) []string {
 	var names []string
 	for _, name := range strings.Split(c.Annotations["secret_flags"], ",") {
 		if name = strings.TrimSpace(name); name != "" {
 			names = append(names, name)
 		}
 	}
+	return names
+}
+
+func treeSecretFlags(c *cobra.Command) []string {
+	names := ownSecretFlags(c)
 	for _, sub := range c.Commands() {
-		names = append(names, secretFlagNames(sub)...)
+		names = append(names, treeSecretFlags(sub)...)
 	}
 	return names
 }
