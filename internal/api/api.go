@@ -133,8 +133,18 @@ func (c *Client) attempt(header http.Header, method, path string, data []byte, w
 	if !acceptable {
 		return decodeError(resp)
 	}
+	payload, readErr := io.ReadAll(resp.Body)
+	if readErr == nil {
+		if err := pendingResponse(resp.StatusCode, payload, path); err != nil {
+			return err
+		}
+	}
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		err := readErr
+		if err == nil {
+			err = json.NewDecoder(bytes.NewReader(payload)).Decode(out)
+		}
+		if err != nil {
 			code := contract.ServerError
 			var netErr net.Error
 			if errors.As(err, &netErr) {

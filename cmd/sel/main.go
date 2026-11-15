@@ -85,6 +85,11 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 		fmt.Fprintf(stderr, "Error: %s\n", err)
 		return cmd, contract.ExitInterrupted
 	}
+	var pending *api.PendingApproval
+	if errors.As(err, &pending) {
+		reportPending(root, cmd, args, stdout, stderr, pending)
+		return cmd, pending.ExitCode()
+	}
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := stdout
@@ -95,6 +100,34 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()
+}
+
+func pendingSentence(p *api.PendingApproval) string {
+	if p.DryRun {
+		return "Dry run: this needs a person's approval; nothing was requested."
+	}
+	url, _ := p.Approval["url"].(string)
+	expires, _ := p.Approval["expires_at"].(string)
+	if url == "" {
+		return "Approval needed. Run the same command again once it is approved."
+	}
+	return fmt.Sprintf("Approval needed: %s (expires %s UTC). Run the same command again once it is approved.", url, utcMinute(expires))
+}
+
+func reportPending(root, cmd *cobra.Command, args []string, stdout, stderr io.Writer, p *api.PendingApproval) {
+	if !errorObjectOnStdout(cmd, args, stdout) {
+		fmt.Fprintln(stderr, pendingSentence(p))
+		return
+	}
+	sink := stdout
+	if secretFlagGivenFor(root, cmd, args) {
+		sink = stderr
+	}
+	_ = format.Document(sink, struct {
+		Result   string         `json:"result"`
+		DryRun   bool           `json:"dry_run"`
+		Approval map[string]any `json:"approval,omitempty"`
+	}{"pending_approval", p.DryRun, p.Approval})
 }
 
 func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bool {
