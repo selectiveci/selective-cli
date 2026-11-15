@@ -116,15 +116,15 @@ func TestChangedFilesDefaultBranchFallsBackToOriginMainThenFailsAsUsage(t *testi
 	}
 }
 
-func TestChangedFilesRefusesAnUnknownRefAndANonCheckout(t *testing.T) {
+func TestChangedFilesRefusesAnUnknownRefAsUsageAndANonCheckoutAsGitRepoNotFound(t *testing.T) {
 	dir := branchedRepo(t)
 	if _, err := ChangedFiles(dir, "no-such-ref"); contractCode(err) != contract.UsageError {
 		t.Errorf("unknown ref: err = %v, want usage_error", err)
 	}
 	outside := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
-	if _, err := ChangedFiles(outside, ""); contractCode(err) != contract.UsageError {
-		t.Errorf("outside a checkout: err = %v, want usage_error", err)
+	if _, err := ChangedFiles(outside, ""); contractCode(err) != contract.GitRepoNotFound {
+		t.Errorf("outside a checkout: err = %v, want git_repo_not_found", err)
 	}
 }
 
