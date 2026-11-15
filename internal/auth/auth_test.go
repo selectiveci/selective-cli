@@ -85,6 +85,25 @@ func TestWithTokenStatusLogout(t *testing.T) {
 	}
 }
 
+func TestTextStatusMakesOnlyTheMeRequest(t *testing.T) {
+	setup(t)
+	t.Setenv("SELECTIVE_TOKEN", "sk_live_abcdef0123456789")
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		_, _ = w.Write([]byte(`{"email":"ben@example.com","org_slugs":["acme","beta"],"scopes":["read","setup"]}`))
+	}))
+	t.Cleanup(srv.Close)
+	var stdout bytes.Buffer
+
+	err := Status(srv.URL, false, &stdout)
+
+	want := srv.URL + "\n  ✓ Logged in as ben@example.com\n  Organizations: acme, beta\n  Token: sk_live_abcdef… (from SELECTIVE_TOKEN)\n  Scopes: read setup\n"
+	if err != nil || stdout.String() != want || strings.Join(paths, ",") != "/api/v1/me" {
+		t.Errorf("err %v stdout %q requests %v, want %q from /api/v1/me alone", err, stdout.String(), paths, want)
+	}
+}
+
 func TestWithTokenRejectsBadInput(t *testing.T) {
 	setup(t)
 	srv, _ := fakeAPI(t)

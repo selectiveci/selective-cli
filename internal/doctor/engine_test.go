@@ -2,7 +2,9 @@ package doctor
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,6 +114,27 @@ func TestARunWhoseDeadlineHasAlreadyPassedFailsWithTimeoutInsteadOfPassing(t *te
 	}
 	if a := check(t, report, "a"); a.Code != contract.Timeout || report.Status != "fail" || exitOf(report) != 8 {
 		t.Errorf("a = %+v, status %q, exit %d", a, report.Status, exitOf(report))
+	}
+}
+
+func TestARunWhoseDeadlineHasAlreadyPassedNeverStartsAStep(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	var started atomic.Bool
+	probe := step{"a", "", func(*state) Check {
+		started.Store(true)
+		return Check{Name: "a", Status: OK}
+	}}
+
+	report := runSteps(t, 0, probe)
+	for i := 0; i < 100 && !started.Load(); i++ {
+		runtime.Gosched()
+	}
+
+	if a := check(t, report, "a"); a.Code != contract.Timeout {
+		t.Errorf("a = %+v, want a timeout", a)
+	}
+	if started.Load() {
+		t.Error("the step started after the deadline had passed")
 	}
 }
 

@@ -61,6 +61,19 @@ func (c *Client) RevokeCurrent() error {
 	return c.do("DELETE", "/api/v1/tokens/current", nil, http.StatusNoContent, nil)
 }
 
+func (c *Client) CurrentTokenRaw() (json.RawMessage, error) {
+	var body struct {
+		Token json.RawMessage `json:"token"`
+	}
+	if err := c.do("GET", "/api/v1/tokens/current", nil, http.StatusOK, &body); err != nil {
+		return nil, err
+	}
+	if len(body.Token) == 0 || body.Token[0] != '{' {
+		return nil, &Error{Code: contract.ServerError, Message: "unexpected response from /api/v1/tokens/current: no token object"}
+	}
+	return body.Token, nil
+}
+
 func (c *Client) requestContext() context.Context {
 	if c.ctx == nil {
 		return context.Background()
@@ -85,7 +98,7 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 	clk := currentClock()
 	for attempt := 1; ; attempt++ {
 		err := c.attempt(header, method, path, data, want, out)
-		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !transient(err) || c.declinesRetry(err) {
+		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !Transient(err) || c.declinesRetry(err) {
 			return withAttempts(err, attempt)
 		}
 		pause := backoff(attempt, err)
@@ -133,8 +146,18 @@ func (c *Client) attempt(header http.Header, method, path string, data []byte, w
 	if !acceptable {
 		return decodeError(resp)
 	}
-	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	payload, readErr := io.ReadAll(resp.Body)
+	if readErr == nil {
+		if err := pendingResponse(resp.StatusCode, payload, path); err != nil {
+			return err
+		}
+	}
+	if out != nil || readErr != nil {
+		err := readErr
+		if err == nil {
+			err = json.NewDecoder(bytes.NewReader(payload)).Decode(out)
+		}
+		if err != nil {
 			code := contract.ServerError
 			var netErr net.Error
 			if errors.As(err, &netErr) {

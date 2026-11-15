@@ -146,14 +146,14 @@ func hangingLookupServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func TestTailWaitBoundsALookupThatHangs(t *testing.T) {
+func TestTailWaitBoundsALookupThatHangsAndExitsFourWhenTheWaitExpires(t *testing.T) {
 	srv := hangingLookupServer(t)
 	began := time.Now()
 
 	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--wait=1s", "--json")
 
-	if el := time.Since(began); res.exit != 3 || el > 8*time.Second || !strings.Contains(res.stdout, `"error":"no_build"`) {
-		t.Errorf("exit = %d after %s stdout = %q, want exit 3 no_build within the wait", res.exit, el, res.stdout)
+	if el := time.Since(began); res.exit != 4 || el > 8*time.Second || !strings.Contains(res.stdout, `"error":"network_error"`) {
+		t.Errorf("exit = %d after %s stdout = %q, want exit 4 network_error within the wait", res.exit, el, res.stdout)
 	}
 }
 

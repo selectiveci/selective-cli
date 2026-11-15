@@ -4,6 +4,7 @@ package auth
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -183,17 +184,12 @@ func readToken(r io.Reader) (string, error) {
 	return token, nil
 }
 
-type StatusToken struct {
-	Prefix string   `json:"prefix,omitempty"`
-	Scopes []string `json:"scopes,omitempty"`
-}
-
 type StatusInfo struct {
-	Host        string      `json:"host"`
-	Email       string      `json:"email"`
-	Orgs        []string    `json:"orgs"`
-	TokenSource string      `json:"token_source,omitempty"`
-	Token       StatusToken `json:"token"`
+	Host        string          `json:"host"`
+	Email       string          `json:"email"`
+	Orgs        []string        `json:"orgs"`
+	TokenSource string          `json:"token_source,omitempty"`
+	Token       json.RawMessage `json:"token"`
 }
 
 func loginCommand(host string) string {
@@ -233,7 +229,12 @@ func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 		return errSilent
 	}
 
-	me, err := api.New(host, cred.Token).Me()
+	client := api.New(host, cred.Token)
+	me, err := client.Me()
+	var token json.RawMessage
+	if err == nil && jsonMode {
+		token, err = client.CurrentTokenRaw()
+	}
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
 		if jsonMode {
@@ -250,7 +251,7 @@ func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 			Email:       me.Email,
 			Orgs:        append([]string{}, me.OrgSlugs...),
 			TokenSource: tokenSource(cred.Source),
-			Token:       StatusToken{Prefix: tokenPrefix(cred.Token), Scopes: me.Scopes},
+			Token:       token,
 		})
 	}
 	fmt.Fprintf(stdout, "%s\n  ✓ Logged in as %s\n  Organizations: %s\n  Token: %s (from %s)\n",
@@ -308,6 +309,10 @@ func Logout(opts LogoutOptions) error {
 	}
 
 	revokeErr := api.New(host, cred.Token).RevokeCurrent()
+	var pending *api.PendingApproval
+	if errors.As(revokeErr, &pending) {
+		return revokeErr
+	}
 	if err := credentials.Forget(cfg, host); err != nil {
 		return err
 	}

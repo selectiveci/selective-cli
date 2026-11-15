@@ -101,16 +101,6 @@ func TestUnreachableServerIsANetworkError(t *testing.T) {
 	}
 }
 
-func TestAcceptedResponseBodyPassesThrough(t *testing.T) {
-	client := serve(t, 202, nil, `{"user_id":"pending"}`)
-
-	me, err := client.Me()
-
-	if err != nil || me.UserID != "pending" {
-		t.Errorf("me %+v err %v, want the 202 body decoded", me, err)
-	}
-}
-
 func TestUndecodableSuccessBodyIsAServerError(t *testing.T) {
 	_, err := serve(t, 200, nil, `not json`).Me()
 
