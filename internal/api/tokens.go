@@ -55,6 +55,30 @@ func (c *Client) Tokens() (*TokensPage, error) {
 	return merged, nil
 }
 
+type RevokedToken struct {
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Prefix string `json:"prefix,omitempty"`
+}
+
+type Revocation struct {
+	Token  RevokedToken `json:"token"`
+	Result string       `json:"result"`
+	DryRun bool         `json:"dry_run"`
+}
+
+func (c *Client) RevokeToken(id string, dryRun bool) (*Revocation, error) {
+	params := url.Values{}
+	if dryRun {
+		params.Set("dry_run", "true")
+	}
+	var out Revocation
+	if err := c.do("DELETE", withQuery("/api/v1/tokens/"+url.PathEscape(id), params), nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func appendMissing(notices []string, add ...string) []string {
 	for _, n := range add {
 		if !slices.Contains(notices, n) {

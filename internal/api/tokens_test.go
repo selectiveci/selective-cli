@@ -98,3 +98,28 @@ func TestTokensStopsAtTheRequestCeilingAndKeepsTheCursor(t *testing.T) {
 		t.Errorf("requests %d, next_cursor %v, notices %v", requests.Load(), page.NextCursor, page.Notices)
 	}
 }
+
+func TestRevokeTokenSendsDeleteWithDryRunOnlyWhenAsked(t *testing.T) {
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		fmt.Fprint(w, `{"token":{"id":"a/b","name":"ci","prefix":"sel_ab12"},"result":"deleted","dry_run":false}`)
+	}))
+	t.Cleanup(srv.Close)
+	client := New(srv.URL, "tok")
+
+	real, err := client.RevokeToken("a/b", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RevokeToken("a/b", true); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := []string{"DELETE /api/v1/tokens/a%2Fb", "DELETE /api/v1/tokens/a%2Fb?dry_run=true"}; len(requests) != 2 || requests[0] != want[0] || requests[1] != want[1] {
+		t.Errorf("requests = %v, want %v", requests, want)
+	}
+	if real.Token.Name != "ci" || real.Token.Prefix != "sel_ab12" || real.Result != "deleted" || real.DryRun {
+		t.Errorf("revocation = %+v", real)
+	}
+}
