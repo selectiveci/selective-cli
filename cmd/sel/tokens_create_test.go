@@ -360,6 +360,57 @@ func TestSecretFlagRedirectsOnlyWhereTheCommandOrTheTreeDeclaresIt(t *testing.T)
 	}
 }
 
+func TestTokensCreateRefusesAnOutputPathItCannotInspectBeforeAnyRequest(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can search any directory")
+	}
+	locked := filepath.Join(t.TempDir(), "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	path := filepath.Join(locked, "ci.token")
+	stub := created()
+
+	run := runCreate(t, stub, false, createOptions{name: "ci", output: path})
+
+	if exitOf(run.err) != 5 || len(stub.requests) != 0 || run.err == nil || !strings.Contains(run.err.Error(), path) {
+		t.Errorf("exit %d requests %v err %v, want exit 5, no request, and the path named", exitOf(run.err), stub.requests, run.err)
+	}
+}
+
+func TestHelpReportsTokensCreateNameAsRequiredAndAMissingNameIsStillAUsageError(t *testing.T) {
+	_, stdout, _ := execute("help", "tokens", "create", "--json")
+	var doc struct {
+		Command struct {
+			Flags []struct {
+				Name     string `json:"name"`
+				Required bool   `json:"required"`
+			} `json:"flags"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	required := map[string]bool{}
+	for _, f := range doc.Command.Flags {
+		required[f.Name] = f.Required
+	}
+	if !required["name"] || required["agent"] {
+		t.Errorf("required flags = %v, want name required and agent not", required)
+	}
+	stub := created()
+	srv := stub.start(t)
+	res := runBinary(t, t.TempDir(), srv.URL, "tokens", "create", "--output", filepath.Join(t.TempDir(), "x"))
+	assertRefusal(t, res, 5, "usage_error")
+	if len(stub.requests) != 0 {
+		t.Errorf("requests = %v, want none", stub.requests)
+	}
+}
+
 func runWithStdout(t *testing.T, host string, stdout *os.File, args ...string) (int, string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)
