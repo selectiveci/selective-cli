@@ -18,6 +18,9 @@ import (
 const (
 	storedToken = "sk_live_abcdef0123456789"
 	meBody      = `{"user_id":"u1","email":"ben@example.com","org_slugs":["acme","beta"],"scopes":["read","setup"]}`
+
+	tokenObject      = `{"id":"7f3c2a10-0000-4000-8000-000000000001","name":"ci","prefix":"sk_live_abcdef...","kind":"api","scopes":["read","setup"],"organization":null,"repos":null,"expires_at":null,"source":"api","inserted_at":"2026-11-14T10:00:00Z"}`
+	currentTokenBody = `{"token":` + tokenObject + `}`
 )
 
 type selRun struct {
@@ -56,14 +59,23 @@ func (r selRun) run(t *testing.T, args ...string) cliResult {
 
 func meServer(t *testing.T, status int, body string) *httptest.Server {
 	t.Helper()
+	return statusServer(t, status, body, http.StatusOK, currentTokenBody)
+}
+
+func statusServer(t *testing.T, meStatus int, meResponse string, currentStatus int, currentResponse string) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != "/api/v1/me" {
+		switch r.URL.Path {
+		case "/api/v1/me":
+			w.WriteHeader(meStatus)
+			_, _ = w.Write([]byte(meResponse))
+		case "/api/v1/tokens/current":
+			w.WriteHeader(currentStatus)
+			_, _ = w.Write([]byte(currentResponse))
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -79,20 +91,20 @@ func storeInConfigFile(t *testing.T, host string) string {
 	return dir
 }
 
-func TestAuthStatusPipedIsAJSONAuthObjectWithATokenObject(t *testing.T) {
+func TestAuthStatusPipedIsAJSONAuthObjectCarryingTheServersTokenObject(t *testing.T) {
 	full := meServer(t, 200, meBody)
-	bare := meServer(t, 200, `{"email":"ben@example.com","org_slugs":null}`)
+	bare := statusServer(t, 200, `{"email":"ben@example.com","org_slugs":null}`, 200, `{"token":{"id":"t1","organization":null,"repos":null,"expires_at":null}}`)
 	cases := []struct {
 		name string
 		run  selRun
 		want string
 	}{
 		{"env token", selRun{host: full.URL, token: storedToken},
-			`{"v":1,"auth":{"host":"` + full.URL + `","email":"ben@example.com","orgs":["acme","beta"],"token_source":"env","token":{"prefix":"sk_live_abcdef","scopes":["read","setup"]}}}`},
+			`{"v":1,"auth":{"host":"` + full.URL + `","email":"ben@example.com","orgs":["acme","beta"],"token_source":"env","token":` + tokenObject + `}}`},
 		{"config file token", selRun{host: full.URL, configDir: storeInConfigFile(t, full.URL)},
-			`{"v":1,"auth":{"host":"` + full.URL + `","email":"ben@example.com","orgs":["acme","beta"],"token_source":"config","token":{"prefix":"sk_live_abcdef","scopes":["read","setup"]}}}`},
-		{"short token, no scopes, no orgs", selRun{host: bare.URL, token: "sk_live_short"},
-			`{"v":1,"auth":{"host":"` + bare.URL + `","email":"ben@example.com","orgs":[],"token_source":"env","token":{}}}`},
+			`{"v":1,"auth":{"host":"` + full.URL + `","email":"ben@example.com","orgs":["acme","beta"],"token_source":"config","token":` + tokenObject + `}}`},
+		{"no orgs, null token fields", selRun{host: bare.URL, token: "sk_live_short"},
+			`{"v":1,"auth":{"host":"` + bare.URL + `","email":"ben@example.com","orgs":[],"token_source":"env","token":{"id":"t1","organization":null,"repos":null,"expires_at":null}}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,6 +167,47 @@ func TestAuthStatusFailuresAreErrorObjectsOnStdout(t *testing.T) {
 			}
 			if !strings.HasPrefix(res.stderr, "Error: ") {
 				t.Errorf("stderr = %q, want Error: …", res.stderr)
+			}
+		})
+	}
+}
+
+func TestAuthStatusWhenTheTokenObjectCannotBeReadAfterAGoodMe(t *testing.T) {
+	closedAfterMe := func() string {
+		srv := httptest.NewUnstartedServer(nil)
+		srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/me" {
+				srv.CloseClientConnections()
+				return
+			}
+			_, _ = w.Write([]byte(meBody))
+		})
+		srv.Start()
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	cases := []struct {
+		name string
+		host string
+		exit int
+		code string
+	}{
+		{"401 maps like me's 401", statusServer(t, 200, meBody, 401, `{"error":"unauthorized","message":"revoked"}`).URL, 4, "unauthorized"},
+		{"404 propagates", statusServer(t, 200, meBody, 404, `{"error":"not_found","message":"no"}`).URL, 3, "not_found"},
+		{"403 propagates", statusServer(t, 200, meBody, 403, `{"error":"forbidden","message":"no"}`).URL, 6, "forbidden"},
+		{"500 propagates", statusServer(t, 200, meBody, 500, `{"error":"server_error","message":"boom"}`).URL, 4, "server_error"},
+		{"200 without a token object", statusServer(t, 200, meBody, 200, `{}`).URL, 4, "server_error"},
+		{"200 with a null token", statusServer(t, 200, meBody, 200, `{"token":null}`).URL, 4, "server_error"},
+		{"connection drops", closedAfterMe(), 4, "network_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := selRun{host: tc.host, token: storedToken}.run(t, "auth", "status")
+
+			var doc map[string]any
+			err := json.Unmarshal([]byte(res.stdout), &doc)
+			if err != nil || strings.Count(res.stdout, "\n") != 1 || res.exit != tc.exit || doc["error"] != tc.code || doc["auth"] != nil {
+				t.Errorf("exit %d stdout %q (%v), want exit %d and one %s error object with no auth", res.exit, res.stdout, err, tc.exit, tc.code)
 			}
 		})
 	}
