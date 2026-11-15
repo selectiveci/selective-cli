@@ -11,7 +11,7 @@ const (
 	tokensPageSize         = 200
 	maxTokens              = 20000
 	maxTokenRequests       = 2000
-	paginationStoppedEarly = "pagination_stopped_early"
+	PaginationStoppedEarly = "pagination_stopped_early"
 )
 
 type Token struct {
@@ -50,7 +50,7 @@ func (c *Client) Tokens() (*TokensPage, error) {
 		params.Set("cursor", *page.NextCursor)
 	}
 	if merged.NextCursor != nil {
-		merged.Notices = appendMissing(merged.Notices, paginationStoppedEarly)
+		merged.Notices = appendMissing(merged.Notices, PaginationStoppedEarly)
 	}
 	return merged, nil
 }

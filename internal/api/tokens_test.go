@@ -94,7 +94,7 @@ func TestTokensStopsAtTheRequestCeilingAndKeepsTheCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != maxTokenRequests || page.NextCursor == nil || len(page.Notices) != 1 || page.Notices[0] != paginationStoppedEarly {
+	if requests.Load() != maxTokenRequests || page.NextCursor == nil || len(page.Notices) != 1 || page.Notices[0] != PaginationStoppedEarly {
 		t.Errorf("requests %d, next_cursor %v, notices %v", requests.Load(), page.NextCursor, page.Notices)
 	}
 }
