@@ -1,0 +1,3 @@
+ID   STATUS   BRANCH   TESTS  FAILED  FLAKY    STARTED               DURATION  TITLE
+b-2  running  unknown  10     1       0        2026-11-13T10:00:00Z  -         Fix login
+b-1  success  main     40     0       unknown  2026-11-13T09:00:00Z  5m0s      unknown
