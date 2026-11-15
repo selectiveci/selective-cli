@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/wait"
 	"nhooyr.io/websocket"
 )
 
@@ -29,6 +31,9 @@ func fakeTailServer(t *testing.T, frames []string, dropWithoutClose bool) (*http
 		if r.Header.Get("X-Selective-Token") != "tok" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
+		}
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "sel/") {
+			t.Errorf("websocket User-Agent = %q, want sel/...", r.Header.Get("User-Agent"))
 		}
 		atomic.AddInt32(&connects, 1)
 		c, err := websocket.Accept(w, r, nil)
@@ -229,5 +234,33 @@ func TestStreamRejectedToken(t *testing.T) {
 	}
 	if code != 4 || err == nil {
 		t.Errorf("got exit %d err %v, want exit 4 with an error", code, err)
+	}
+}
+
+func TestEveryPollOfTheBuildLookupCarriesTheCLIUserAgent(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("User-Agent"))
+		if len(seen) < 3 {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"no_build"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"build_id":"b"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	id, err := findBuild(context.Background(), api.New(srv.URL, "tok"), "acme/widget", "abc1234", wait.Options{Limit: time.Hour, Clock: &fakeClock{}})
+
+	if err != nil || id != "b" {
+		t.Fatalf("findBuild = %q, %v, want b", id, err)
+	}
+	if len(seen) != 3 {
+		t.Fatalf("server saw %d lookups, want 3", len(seen))
+	}
+	for i, ua := range seen {
+		if !strings.HasPrefix(ua, "sel/") {
+			t.Errorf("lookup %d User-Agent = %q, want sel/...", i+1, ua)
+		}
 	}
 }

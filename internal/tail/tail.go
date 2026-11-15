@@ -18,6 +18,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
+	"github.com/selectiveci/selective-cli/internal/update"
 	"github.com/selectiveci/selective-cli/internal/wait"
 	"nhooyr.io/websocket"
 )
@@ -232,6 +233,7 @@ func stream(parent context.Context, commandStart time.Time, host, token, buildID
 	// access logs.
 	header := http.Header{}
 	header.Set("X-Selective-Token", token)
+	header.Set("User-Agent", update.UserAgent())
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()

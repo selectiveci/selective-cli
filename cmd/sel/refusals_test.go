@@ -163,7 +163,9 @@ var scannedPackages = []string{
 	"internal/wait",
 }
 
-var exemptPackages = map[string]string{}
+var exemptPackages = map[string]string{
+	"internal/update": "saveState errors are discarded inside RecordServerHeaders and LoadState returns no error, so none reach a command's exit; TestAnUnwritableUpdateCacheLeavesTheCommandsExitAndStdoutUnchanged proves it",
+}
 
 var apiImports = map[string]bool{
 	"github.com/selectiveci/selective-cli/internal/api": true,

@@ -16,6 +16,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
+	"github.com/selectiveci/selective-cli/internal/update"
 	"github.com/spf13/cobra"
 )
 
@@ -47,6 +48,7 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	update.Version = version
 	entered := false
 	markEntered(root, &entered)
 
@@ -123,16 +125,6 @@ func markEntered(c *cobra.Command, entered *bool) {
 	}
 	for _, sub := range c.Commands() {
 		markEntered(sub, entered)
-	}
-}
-
-func versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version information",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("sel %s (%s)\n", version, commit)
-		},
 	}
 }
 
