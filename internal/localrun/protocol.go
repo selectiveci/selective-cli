@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -43,6 +44,8 @@ type Selector func(context.Context, Manifest) (Selection, error)
 type Options struct {
 	Selector       Selector
 	Passes         bool
+	List           bool
+	Paths          []string
 	Timeout        time.Duration
 	HeartbeatEvery time.Duration
 }
@@ -54,6 +57,7 @@ type Summary struct {
 	Selected int
 	Skipped  int
 	MS       int64
+	Reported bool
 }
 
 type inbound struct {
@@ -145,7 +149,8 @@ func (r *run) handle(ctx context.Context, frame inbound) (bool, error) {
 			return false, contract.Errorf(contract.RunnerError, "the test runner reported its finish with %d selected tests still outstanding", len(r.outstanding))
 		}
 		r.sum.MS = time.Since(r.start).Milliseconds()
-		r.event("summary", r.summaryFields())
+		r.event("summary", summaryFields(r.sum))
+		r.sum.Reported = true
 		return true, nil
 	}
 	return false, nil
@@ -167,7 +172,9 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	}
 	manifest := Manifest{Tree: raw.Tree}
 	for _, c := range *raw.TestCases {
-		manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
+		if underAny(c.FilePath, r.opts.Paths) {
+			manifest.Cases = append(manifest.Cases, Case{ID: c.ID, FilePath: c.FilePath})
+		}
 	}
 	r.event("build_start", buildStartFields(raw.Tree))
 	if r.writeErr != nil {
@@ -196,11 +203,29 @@ func (r *run) onManifest(ctx context.Context, data json.RawMessage) error {
 	r.total = len(ids)
 	r.sum.Selected = len(ids)
 	r.sum.Skipped = max(len(manifest.Cases)-len(ids), 0)
-	r.event("selection", selectionFields(selection, r.sum, len(manifest.Cases)))
-	if len(ids) == 0 {
+	fields := selectionFields(selection, r.sum, len(manifest.Cases))
+	if r.opts.List {
+		fields["ids"] = append([]string{}, ids...)
+		r.outstanding = map[string]bool{}
+	}
+	r.event("selection", fields)
+	if len(ids) == 0 || r.opts.List {
 		return r.close()
 	}
 	return r.send(map[string]any{"command": "run_test_cases", "test_case_ids": ids})
+}
+
+func underAny(file string, paths []string) bool {
+	if len(paths) == 0 {
+		return true
+	}
+	file = path.Clean(file)
+	for _, p := range paths {
+		if p == "." || file == p || strings.HasPrefix(file, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *run) onResult(data json.RawMessage) error {
