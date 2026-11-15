@@ -52,3 +52,23 @@ func TestApprovalsStopsAtTheRequestCapKeepsTheCursorAndSaysSo(t *testing.T) {
 		t.Errorf("requests %d next %v notices %v, want the cap, the cursor kept and the notice", requests.Load(), page.NextCursor, page.Notices)
 	}
 }
+
+func TestApprovalsKeepsAServerNoticeOnceAcrossPages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cursor") == "" {
+			fmt.Fprint(w, `{"approvals":[],"next_cursor":"page-2","notices":["deprecated"]}`)
+			return
+		}
+		fmt.Fprint(w, `{"approvals":[],"next_cursor":null,"notices":["deprecated"]}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	page, err := New(srv.URL, "tok").Approvals("acme", "")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(page.Notices, []string{"deprecated"}) {
+		t.Errorf("notices = %v, want deprecated once", page.Notices)
+	}
+}
