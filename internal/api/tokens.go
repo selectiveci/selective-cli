@@ -15,16 +15,17 @@ const (
 )
 
 type Token struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Prefix       string   `json:"prefix"`
-	Kind         string   `json:"kind"`
-	Scopes       []string `json:"scopes"`
-	Organization *string  `json:"organization"`
-	Repos        []string `json:"repos"`
-	ExpiresAt    *string  `json:"expires_at"`
-	Source       string   `json:"source"`
-	InsertedAt   string   `json:"inserted_at"`
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Prefix           string   `json:"prefix"`
+	Kind             string   `json:"kind"`
+	Scopes           []string `json:"scopes"`
+	Organization     *string  `json:"organization"`
+	Repos            []string `json:"repos"`
+	RequiresApproval *bool    `json:"requires_approval,omitempty"`
+	ExpiresAt        *string  `json:"expires_at"`
+	Source           string   `json:"source"`
+	InsertedAt       string   `json:"inserted_at"`
 }
 
 type TokensPage struct {
@@ -99,12 +100,13 @@ func (c *Client) CurrentToken() (*Token, error) {
 }
 
 type MintRequest struct {
-	Name         string   `json:"name"`
-	Kind         string   `json:"kind,omitempty"`
-	Scopes       []string `json:"scopes,omitempty"`
-	Organization string   `json:"organization,omitempty"`
-	Repos        []string `json:"repos,omitempty"`
-	ExpiresInS   int64    `json:"expires_in_s,omitempty"`
+	Name             string   `json:"name"`
+	Kind             string   `json:"kind,omitempty"`
+	Scopes           []string `json:"scopes,omitempty"`
+	Organization     string   `json:"organization,omitempty"`
+	Repos            []string `json:"repos,omitempty"`
+	ExpiresInS       int64    `json:"expires_in_s,omitempty"`
+	RequiresApproval *bool    `json:"requires_approval,omitempty"`
 }
 
 type MintedToken struct {

@@ -157,9 +157,9 @@ func tokensList(env *setup.Env) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(env.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tPREFIX\tKIND\tSCOPES\tORG\tREPOS\tEXPIRES (UTC)")
+	fmt.Fprintln(w, "NAME\tPREFIX\tKIND\tSCOPES\tORG\tREPOS\tEXPIRES (UTC)\tAPPROVAL")
 	for _, t := range page.Tokens {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.Name, t.Prefix, t.Kind, strings.Join(t.Scopes, ","), orAll(t.Organization), repoList(t.Repos), expiry(t.ExpiresAt))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", t.Name, t.Prefix, t.Kind, strings.Join(t.Scopes, ","), orAll(t.Organization), repoList(t.Repos), expiry(t.ExpiresAt), approval(t.RequiresApproval))
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -223,7 +223,20 @@ func renderToken(w io.Writer, t *api.Token) {
 	fmt.Fprintf(w, "%s\n\n", t.Name)
 	fmt.Fprintf(w, "ID:        %s\nPrefix:    %s\nKind:      %s\nScopes:    %s\n", t.ID, t.Prefix, t.Kind, strings.Join(t.Scopes, ","))
 	fmt.Fprintf(w, "Org:       %s\nRepos:     %s\nExpires:   %s\n", orAll(t.Organization), repoList(t.Repos), expiry(t.ExpiresAt))
+	if t.RequiresApproval != nil {
+		fmt.Fprintf(w, "Approval:  %s\n", approval(t.RequiresApproval))
+	}
 	fmt.Fprintf(w, "Source:    %s\nCreated:   %s UTC\n", t.Source, utcMinute(t.InsertedAt))
+}
+
+func approval(requires *bool) string {
+	switch {
+	case requires == nil:
+		return ""
+	case *requires:
+		return "required"
+	}
+	return "not required"
 }
 
 func orAll(s *string) string {

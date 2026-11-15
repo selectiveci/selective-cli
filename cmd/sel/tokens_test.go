@@ -143,6 +143,46 @@ func TestTokensListTextShowsServerNoticesOnStderrAndLeavesStdoutAlone(t *testing
 	}
 }
 
+func TestTokensListAndShowCarryRequiresApprovalAndLeaveAnAbsentOneAbsent(t *testing.T) {
+	asking := strings.Replace(agentToken, `"expires_at"`, `"requires_approval":true,"expires_at"`, 1)
+	trusted := strings.Replace(agentToken, `"expires_at"`, `"requires_approval":false,"expires_at"`, 1)
+	list := (&tokensStub{pages: map[string]string{"": `{"tokens":[` + asking + `,` + trusted + `,` + userToken + `],"next_cursor":null}`}}).start(t)
+	show := (&tokensStub{body: `{"token":` + trusted + `}`}).start(t)
+
+	listed := runBinary(t, t.TempDir(), list.URL, "tokens", "list", "--json")
+	shown := runBinary(t, t.TempDir(), show.URL, "tokens", "show", "--json")
+
+	if want := `{"v":1,"tokens":[` + asking + `,` + trusted + `,` + userToken + `],"next_cursor":null}` + "\n"; listed.stdout != want {
+		t.Errorf("list stdout %q, want %q", listed.stdout, want)
+	}
+	if want := `{"v":1,"token":` + trusted + `}` + "\n"; shown.stdout != want {
+		t.Errorf("show stdout %q, want %q", shown.stdout, want)
+	}
+}
+
+func TestTokensTextShowsApprovalInListAndShow(t *testing.T) {
+	asking := strings.Replace(agentToken, `"expires_at"`, `"requires_approval":true,"expires_at"`, 1)
+	trusted := strings.Replace(strings.Replace(agentToken, `"expires_at"`, `"requires_approval":false,"expires_at"`, 1), `"name":"ci"`, `"name":"bot"`, 1)
+	srv := (&tokensStub{pages: map[string]string{"": `{"tokens":[` + asking + `,` + trusted + `,` + userToken + `],"next_cursor":null}`}}).start(t)
+	showSrv := (&tokensStub{body: `{"token":` + trusted + `}`}).start(t)
+	var out, showOut bytes.Buffer
+
+	if err := tokensList(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokensShow(&setup.Env{Client: api.New(showSrv.URL, "tok"), Stdout: &showOut, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if !strings.HasSuffix(lines[0], "APPROVAL") || !strings.HasSuffix(lines[1], "required") || !strings.HasSuffix(lines[2], "not required") || strings.HasSuffix(lines[3], "required") {
+		t.Errorf("list text:\n%s", out.String())
+	}
+	if !strings.Contains(showOut.String(), "Approval:  not required\n") {
+		t.Errorf("show text:\n%s", showOut.String())
+	}
+}
+
 func TestTokensListNeverEchoesAPlaintextSecret(t *testing.T) {
 	leaky := strings.Replace(userToken, `"source"`, `"token":"`+leakedSecret+`","source"`, 1)
 	srv := (&tokensStub{pages: map[string]string{"": `{"tokens":[` + leaky + `],"next_cursor":null,"token":"` + leakedSecret + `"}`}}).start(t)
