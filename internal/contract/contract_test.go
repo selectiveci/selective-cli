@@ -6,7 +6,7 @@ func TestRegistryExitCodes(t *testing.T) {
 	want := map[Code]int{
 		"unauthorized": 4, "insufficient_scope": 6, "forbidden": 6, "token_scope_exceeded": 6,
 		"not_enabled": 6, "approval_denied": 6, "not_found": 3, "organization_not_found": 3,
-		"suite_not_found": 3, "no_build": 3, "runner_not_found": 3, "invalid_request": 5,
+		"suite_not_found": 3, "no_build": 3, "runner_not_found": 3, "git_repo_not_found": 3, "invalid_request": 5,
 		"validation_failed": 5, "name_required": 5, "repo_required": 5, "invalid_type": 5,
 		"invalid": 5, "repo_not_installed": 5, "name_taken": 5, "invalid_scope": 5,
 		"invalid_key": 5, "idempotency_key_reused": 5, "ambiguous_build": 5,
