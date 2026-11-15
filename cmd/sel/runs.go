@@ -131,7 +131,7 @@ Exit codes:
 				return err
 			}
 			if code != contract.ExitOK {
-				os.Exit(code)
+				return exitCode(code)
 			}
 			return nil
 		},
