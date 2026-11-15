@@ -16,6 +16,7 @@ func versionAs(t *testing.T, build string, cache string, args ...string) (int, s
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("SELECTIVE_CONFIG_DIR", dir)
+	t.Setenv("SELECTIVE_NO_UPDATE_NOTIFIER", "1")
 	if cache != "" {
 		if err := os.WriteFile(filepath.Join(dir, "update-check.json"), []byte(cache), 0o600); err != nil {
 			t.Fatal(err)
@@ -116,6 +117,7 @@ func orgsWithServerHeaders(t *testing.T, configDir string) (int, string) {
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("SELECTIVE_CONFIG_DIR", configDir)
+	t.Setenv(update.OptOutVariable, "1")
 	t.Setenv("SELECTIVE_HOST", srv.URL)
 	t.Setenv("SELECTIVE_TOKEN", "tok")
 	previous := version

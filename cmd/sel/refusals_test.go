@@ -164,7 +164,7 @@ var scannedPackages = []string{
 }
 
 var exemptPackages = map[string]string{
-	"internal/update": "saveState errors are discarded inside RecordServerHeaders and LoadState returns no error, so none reach a command's exit; TestAnUnwritableUpdateCacheLeavesTheCommandsExitAndStdoutUnchanged proves it",
+	"internal/update": "cache write failures are discarded and fetch failures are recorded in the cache, never returned to a command, so none reach a command's exit; TestAnUnwritableUpdateCacheLeavesTheCommandsExitAndStdoutUnchanged and TestAFailedUpdateCheckLeavesTheCommandsExitAndStdoutUnchanged prove it",
 }
 
 var apiImports = map[string]bool{

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/config"
@@ -20,6 +21,7 @@ const (
 	MinHeader      = "X-Selective-Cli-Min-Version"
 	UpgradeCommand = "curl -fsSL https://raw.githubusercontent.com/selectiveci/selective-cli/main/install.sh | sh"
 	releaseTagURL  = "https://github.com/selectiveci/selective-cli/releases/tag/v"
+	releasesPage   = "https://github.com/selectiveci/selective-cli/releases/latest"
 	cacheFile      = "update-check.json"
 )
 
@@ -30,6 +32,7 @@ var goos = runtime.GOOS
 type State struct {
 	LatestVersion       string     `json:"latest_version,omitempty"`
 	CheckedAt           *time.Time `json:"checked_at,omitempty"`
+	FailedAt            *time.Time `json:"failed_at,omitempty"`
 	ServerLatestVersion string     `json:"server_latest_version,omitempty"`
 	ServerMinVersion    string     `json:"server_min_version,omitempty"`
 	ServerSeenAt        *time.Time `json:"server_seen_at,omitempty"`
@@ -128,6 +131,16 @@ func saveState(st State) error {
 	return nil
 }
 
+var stateMu sync.Mutex
+
+func modifyState(change func(*State)) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	st := LoadState()
+	change(&st)
+	_ = saveState(st)
+}
+
 func now() *time.Time {
 	t := time.Now().UTC().Truncate(time.Second)
 	return &t
@@ -142,15 +155,15 @@ func RecordServerHeaders(h http.Header) {
 	if latest == "" && minimum == "" {
 		return
 	}
-	st := LoadState()
-	if latest != "" {
-		st.ServerLatestVersion = latest
-		st.ServerSeenAt = now()
-	}
-	if minimum != "" {
-		st.ServerMinVersion = minimum
-	}
-	_ = saveState(st)
+	modifyState(func(st *State) {
+		if latest != "" {
+			st.ServerLatestVersion = latest
+			st.ServerSeenAt = now()
+		}
+		if minimum != "" {
+			st.ServerMinVersion = minimum
+		}
+	})
 }
 
 type transport struct {
