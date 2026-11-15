@@ -61,7 +61,7 @@ func (c *Client) RevokeCurrent() error {
 	return c.do("DELETE", "/api/v1/tokens/current", nil, http.StatusNoContent, nil)
 }
 
-func (c *Client) CurrentToken() (json.RawMessage, error) {
+func (c *Client) CurrentTokenRaw() (json.RawMessage, error) {
 	var body struct {
 		Token json.RawMessage `json:"token"`
 	}

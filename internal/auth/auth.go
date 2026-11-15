@@ -233,7 +233,7 @@ func Status(hostname string, jsonMode bool, stdout io.Writer) error {
 	me, err := client.Me()
 	var token json.RawMessage
 	if err == nil && jsonMode {
-		token, err = client.CurrentToken()
+		token, err = client.CurrentTokenRaw()
 	}
 	switch {
 	case errors.Is(err, api.ErrUnauthorized):
