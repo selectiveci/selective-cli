@@ -64,10 +64,10 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	secretOnCommandLine := secretFlagGiven(root, args)
 	root.SetArgs(args)
 	root.SetOut(stdout)
-	if secretOnCommandLine && (flagGiven(args, "help") || slices.Contains(args, "-h")) {
-		root.SetOut(stderr)
-	}
 	root.SetErr(stderr)
+	if secretOnCommandLine {
+		helpToStderr(root, stderr)
+	}
 	entered := false
 	markEntered(root, &entered)
 
@@ -106,6 +106,18 @@ func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bo
 		return f.Value.String() == "ndjson"
 	}
 	return format.JSONMode(cmd.Flags(), stdout)
+}
+
+func helpToStderr(root *cobra.Command, stderr io.Writer) {
+	help, usage := root.HelpFunc(), root.UsageFunc()
+	root.SetHelpFunc(func(c *cobra.Command, args []string) {
+		c.SetOut(stderr)
+		help(c, args)
+	})
+	root.SetUsageFunc(func(c *cobra.Command) error {
+		c.SetOut(stderr)
+		return usage(c)
+	})
 }
 
 func secretFlagGiven(root *cobra.Command, args []string) bool {

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
@@ -86,8 +88,11 @@ func tokensCreate(env *setup.Env, o createOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := o.checkSink(env.StdoutIsTerminal); err != nil {
+	if err := o.checkSink(env); err != nil {
 		return err
+	}
+	if o.toStdout {
+		signal.Ignore(syscall.SIGPIPE)
 	}
 	minted, err := env.Client.MintToken(req, o.dryRun)
 	if err != nil {
@@ -145,7 +150,7 @@ func parseExpiresIn(s string) (int64, error) {
 	return seconds, nil
 }
 
-func (o createOptions) checkSink(stdoutIsTerminal bool) error {
+func (o createOptions) checkSink(env *setup.Env) error {
 	chosen := 0
 	for _, set := range []bool{o.toStdout, o.output != "", o.githubSecret != ""} {
 		if set {
@@ -159,8 +164,10 @@ func (o createOptions) checkSink(stdoutIsTerminal bool) error {
 		return contract.Errorf(contract.UsageError, "say where the secret goes: --stdout (piped), --output PATH or --github-secret NAME --secret-repo owner/name")
 	case o.toStdout && o.json:
 		return contract.Errorf(contract.UsageError, "--stdout prints the secret, so it can't be combined with --json")
-	case o.toStdout && stdoutIsTerminal:
+	case o.toStdout && env.StdoutIsTerminal:
 		return contract.Errorf(contract.UsageError, "refusing to print a token to a terminal; pipe --stdout into a secret store")
+	case o.toStdout && !isPipeOrSocket(env.Stdout):
+		return contract.Errorf(contract.UsageError, "--stdout needs stdout to be a pipe, not a file or device; use --output PATH to write a file")
 	case o.secretRepo != "" && o.githubSecret == "":
 		return contract.Errorf(contract.UsageError, "--secret-repo only goes with --github-secret NAME")
 	case o.githubSecret != "" && o.secretRepo == "":
@@ -172,6 +179,15 @@ func (o createOptions) checkSink(stdoutIsTerminal bool) error {
 		}
 	}
 	return nil
+}
+
+func isPipeOrSocket(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return true
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&(os.ModeNamedPipe|os.ModeSocket) != 0
 }
 
 func (o createOptions) deliver(env *setup.Env, secret string) error {

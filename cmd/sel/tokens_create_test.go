@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -314,6 +315,10 @@ func TestTokensCreateStdoutPropertyHoldsWhenTheCommandIsNotResolved(t *testing.T
 		"help flag":                {[]string{"tokens", "create", "--name", "x", "--stdout", "--help"}, 0},
 		"short help flag":          {[]string{"tokens", "create", "--name", "x", "--stdout", "-h"}, 0},
 		"help flag before stdout":  {[]string{"tokens", "create", "--help", "--stdout"}, 0},
+		"help flag with value":     {[]string{"tokens", "create", "--name", "x", "--stdout", "-h=true"}, 0},
+		"long help flag numeric":   {[]string{"tokens", "create", "--name", "x", "--stdout", "--help=1"}, 0},
+		"glued help value":         {[]string{"tokens", "create", "--name", "x", "--stdout", "-htrue"}, 5},
+		"help command":             {[]string{"help", "tokens", "create", "--stdout"}, 5},
 		"typo in an unrelated cmd": {[]string{"nosuchcommand", "--stdout"}, 5},
 	}
 	for name, c := range cases {
@@ -329,6 +334,67 @@ func TestTokensCreateStdoutPropertyHoldsWhenTheCommandIsNotResolved(t *testing.T
 	plain := runBinary(t, t.TempDir(), "http://unused", "tokens", "create", "--help")
 	if plain.exit != 0 || !strings.Contains(plain.stdout, "Create an API token") {
 		t.Errorf("help without a secret flag: exit %d stdout %q, want it on stdout as before", plain.exit, plain.stdout)
+	}
+}
+
+func runWithStdout(t *testing.T, host string, stdout *os.File, args ...string) (int, string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], args...)
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+host, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = stdout, &stderr
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), stderr.String()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return 0, stderr.String()
+}
+
+func TestTokensCreateStdoutWithTheReaderGoneAfterTheMintExitsNineNamingTheToken(t *testing.T) {
+	stub := created()
+	srv := stub.start(t)
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader.Close()
+	defer writer.Close()
+
+	exit, stderr := runWithStdout(t, srv.URL, writer, "tokens", "create", "--name", "ci", "--stdout")
+
+	if exit != 9 || len(stub.requests) != 1 || !strings.Contains(stderr, "id 9") || !strings.Contains(stderr, "sel_ab12") || strings.Contains(stderr, leakedSecret) {
+		t.Errorf("exit %d requests %v stderr %q, want exit 9, one POST, the token's id and prefix, and no secret", exit, stub.requests, stderr)
+	}
+}
+
+func TestTokensCreateStdoutRefusesAFileOrADeviceBeforeAnyRequest(t *testing.T) {
+	regular, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer regular.Close()
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	for name, target := range map[string]*os.File{"regular file": regular, "dev null": devNull} {
+		stub := created()
+		srv := stub.start(t)
+
+		exit, stderr := runWithStdout(t, srv.URL, target, "tokens", "create", "--name", "ci", "--stdout")
+
+		if exit != 5 || len(stub.requests) != 0 || !strings.Contains(stderr, `"error":"usage_error"`) {
+			t.Errorf("%s: exit %d requests %v stderr %q, want exit 5, no request, usage_error on stderr", name, exit, stub.requests, stderr)
+		}
+	}
+	if info, _ := regular.Stat(); info.Size() != 0 {
+		t.Errorf("the regular file holds %d bytes, want 0", info.Size())
 	}
 }
 
