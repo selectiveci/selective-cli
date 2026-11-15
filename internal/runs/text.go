@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -12,8 +14,9 @@ import (
 )
 
 const (
-	unknownCell = "unknown"
-	emptyCell   = "-"
+	unknownCell    = "unknown"
+	emptyCell      = "-"
+	notTrackedCell = "n/a"
 )
 
 type fields map[string]json.RawMessage
@@ -79,6 +82,12 @@ func table(w io.Writer, rows [][]string) {
 		fmt.Fprintln(tw, strings.Join(row, "\t"))
 	}
 	_ = tw.Flush()
+}
+
+func percent(rate float64) string { return strconv.FormatFloat(rate*100, 'f', 1, 64) + "%" }
+
+func seconds(s float64) string {
+	return strconv.FormatFloat(math.Round(s*100)/100, 'f', -1, 64) + "s"
 }
 
 func millis(ms float64) string {
