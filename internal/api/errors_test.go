@@ -4,6 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,5 +145,55 @@ func TestAMalformedSuccessBodyIsAServerError(t *testing.T) {
 	var apiErr *Error
 	if !errors.As(err, &apiErr) || apiErr.Code != contract.ServerError {
 		t.Errorf("err = %v, want server_error", err)
+	}
+}
+
+func TestRequestsCarryTheCLIUserAgent(t *testing.T) {
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := New(srv.URL, "tok").Me(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.HasPrefix(seen, "sel/") || !strings.Contains(seen, "("+runtime.GOOS+"/"+runtime.GOARCH+")") {
+		t.Errorf("User-Agent = %q, want sel/<version> (<os>/<arch>)", seen)
+	}
+}
+
+func TestEveryRetriedAttemptCarriesTheCLIUserAgent(t *testing.T) {
+	useClock(t)
+	var mu sync.Mutex
+	var agents []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		agents = append(agents, r.Header.Get("User-Agent"))
+		n := len(agents)
+		mu.Unlock()
+		if n < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	if _, err := New(srv.URL, "tok").Me(); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(agents) != 3 {
+		t.Fatalf("server saw %d attempts, want 3", len(agents))
+	}
+	for i, ua := range agents {
+		if !strings.HasPrefix(ua, "sel/") {
+			t.Errorf("attempt %d User-Agent = %q, want sel/...", i+1, ua)
+		}
 	}
 }
