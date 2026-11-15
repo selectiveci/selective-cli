@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"strconv"
@@ -70,6 +72,7 @@ the token's id and prefix and exits 9, so you can revoke it.`,
 	f.bind(cmd, false)
 	flags := cmd.Flags()
 	flags.StringVar(&opts.name, "name", "", "Token name (required)")
+	_ = cmd.MarkFlagRequired("name")
 	flags.BoolVar(&opts.agent, "agent", false, "Create an agent token (default: a user token)")
 	flags.StringVar(&f.org, "org", "", "Limit the token to this organization slug")
 	flags.StringArrayVar(&opts.repos, "repo", nil, "Limit the token to owner/name (repeatable; needs --org)")
@@ -174,8 +177,12 @@ func (o createOptions) checkSink(env *setup.Env) error {
 		return contract.Errorf(contract.UsageError, "--github-secret needs --secret-repo owner/name (--repo limits the token, not where the secret goes)")
 	}
 	if o.output != "" {
-		if _, err := os.Lstat(o.output); err == nil {
+		_, err := os.Lstat(o.output)
+		switch {
+		case err == nil:
 			return contract.Errorf(contract.UsageError, "%s already exists; remove it or choose another --output path", o.output)
+		case !errors.Is(err, fs.ErrNotExist):
+			return contract.Errorf(contract.UsageError, "cannot use --output %s: %v", o.output, err)
 		}
 	}
 	return nil
