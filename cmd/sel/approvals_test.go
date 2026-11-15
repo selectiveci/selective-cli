@@ -152,3 +152,17 @@ func TestHelpListsApprovalsShowAsAReadWithTheTokensExitCodes(t *testing.T) {
 	}
 	t.Error("help --json lists no approvals show")
 }
+
+func TestApprovalsShowCardNamesTheSubjectByTypeAndIDWhenItHasNoLabel(t *testing.T) {
+	body := strings.Replace(pendingApproval.json(), `"label":"web-rspec"`, `"label":null`, 1)
+	srv := (&revokeStub{status: 200, body: `{"approval":` + body + `}`}).start(t)
+	var out bytes.Buffer
+
+	if err := approvalsShow(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &bytes.Buffer{}}, approvalUUID); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "suite.delete suite suite-1\n"; !strings.HasPrefix(out.String(), want) {
+		t.Errorf("card = %q, want it to start with %q", out.String(), want)
+	}
+}

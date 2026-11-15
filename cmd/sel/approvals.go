@@ -71,15 +71,15 @@ func approvalsShow(env *setup.Env, id string) error {
 }
 
 func renderApproval(w io.Writer, a *api.Approval) {
-	label := ""
+	subject := a.Subject.Type + " " + a.Subject.ID
 	if a.Subject.Label != nil {
-		label = " " + *a.Subject.Label
+		subject = *a.Subject.Label
 	}
 	requester := "unknown"
 	if a.RequestedBy.TokenName != nil {
 		requester = *a.RequestedBy.TokenName
 	}
-	fmt.Fprintf(w, "%s%s\n\n", a.Action, label)
+	fmt.Fprintf(w, "%s %s\n\n", a.Action, subject)
 	fmt.Fprintf(w, "Status:     %s\n", approvalStatusLine(a))
 	if a.Status == "denied" && a.DecisionNote != nil {
 		fmt.Fprintf(w, "Note:       %s\n", *a.DecisionNote)
