@@ -109,6 +109,13 @@ func optionalUTC(at *string) string {
 	return utcMinute(*at) + " UTC"
 }
 
+func minuteOrUnknown(at *string) string {
+	if at == nil {
+		return "unknown"
+	}
+	return utcMinute(*at)
+}
+
 func subjectName(a *api.Approval) string {
 	if a.Subject.Label != nil {
 		return *a.Subject.Label

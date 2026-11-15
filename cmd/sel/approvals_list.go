@@ -88,7 +88,7 @@ func renderApprovals(env *setup.Env, approvals []api.Approval) error {
 		if a.RequestedBy.TokenName != nil {
 			requester = *a.RequestedBy.TokenName
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Status, a.Action, subjectName(a), requester, utcMinute(a.InsertedAt), expiry(a.ExpiresAt))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Status, a.Action, subjectName(a), requester, utcMinute(a.InsertedAt), minuteOrUnknown(a.ExpiresAt))
 	}
 	return w.Flush()
 }
