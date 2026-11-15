@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/setup"
 )
 
 type approvalsListStub struct {
@@ -162,4 +166,49 @@ func TestApprovalsListPicksTheOrgFromTheFlagThenTheEnvironmentThenTheOnlyOne(t *
 
 func TestHelpListsApprovalsListAsAReadWithTheTokensExitCodes(t *testing.T) {
 	assertReadExitCodes(t, "approvals list")
+}
+
+func TestApprovalsListTableShowsOneRowPerApprovalAndNamesAnUnlabeledSubject(t *testing.T) {
+	unlabeled := strings.Replace(deniedApproval.json(), `"label":"web-rspec"`, `"label":null`, 1)
+	srv := (&approvalsListStub{pages: map[string]string{"": listPage(pendingApproval.json()+","+unlabeled, "null")}}).start(t)
+	var out, errOut bytes.Buffer
+
+	if err := approvalsList(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut}, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := approvalsTable(
+		[]string{"ID", "STATUS", "ACTION", "SUBJECT", "REQUESTED-BY", "REQUESTED (UTC)", "EXPIRES (UTC)"},
+		[]string{approvalUUID, "pending", "suite.delete", "web-rspec", "ci-agent", "2026-11-14 10:00", "2026-11-15 10:00"},
+		[]string{approvalUUID, "denied", "suite.delete", "suite suite-1", "ci-agent", "2026-11-14 10:00", "2026-11-15 10:00"},
+	)
+	if out.String() != want || errOut.Len() != 0 {
+		t.Errorf("table:\n%s\nwant:\n%s\nstderr %q", out.String(), want, errOut.String())
+	}
+}
+
+func TestApprovalsListEmptyListSaysSoOnStderrAndServerNoticesFollow(t *testing.T) {
+	page := strings.Replace(listPage("", "null"), `"next_cursor":null`, `"next_cursor":null,"notices":["some_notice"]`, 1)
+	srv := (&approvalsListStub{pages: map[string]string{"": page}}).start(t)
+	var out, errOut bytes.Buffer
+
+	if err := approvalsList(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut}, "acme", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "No approvals.\nNotice: some_notice\n"; out.Len() != 0 || errOut.String() != want {
+		t.Errorf("stdout %q stderr %q, want empty stdout and %q", out.String(), errOut.String(), want)
+	}
+}
+
+func approvalsTable(rows ...[]string) string {
+	widths := []int{38, 9, 14, 15, 14, 18}
+	var b strings.Builder
+	for _, row := range rows {
+		for i, cell := range row[:len(widths)] {
+			fmt.Fprintf(&b, "%-*s", widths[i], cell)
+		}
+		b.WriteString(row[len(widths)] + "\n")
+	}
+	return b.String()
 }

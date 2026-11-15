@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
+	"text/tabwriter"
 
+	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
@@ -59,5 +62,33 @@ func approvalsList(env *setup.Env, org, status string) error {
 	if err != nil {
 		return err
 	}
-	return format.Document(env.Stdout, page)
+	if env.JSON {
+		return format.Document(env.Stdout, page)
+	}
+	if len(page.Approvals) == 0 {
+		fmt.Fprintln(env.Stderr, "No approvals.")
+	} else if err := renderApprovals(env, page.Approvals); err != nil {
+		return err
+	}
+	for _, notice := range page.Notices {
+		if notice == api.PaginationStoppedEarly {
+			notice = fmt.Sprintf("stopped early after %d approvals; more exist on the server", len(page.Approvals))
+		}
+		fmt.Fprintf(env.Stderr, "Notice: %s\n", notice)
+	}
+	return nil
+}
+
+func renderApprovals(env *setup.Env, approvals []api.Approval) error {
+	w := tabwriter.NewWriter(env.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSTATUS\tACTION\tSUBJECT\tREQUESTED-BY\tREQUESTED (UTC)\tEXPIRES (UTC)")
+	for i := range approvals {
+		a := &approvals[i]
+		requester := "unknown"
+		if a.RequestedBy.TokenName != nil {
+			requester = *a.RequestedBy.TokenName
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", a.ID, a.Status, a.Action, subjectName(a), requester, utcMinute(a.InsertedAt), expiry(a.ExpiresAt))
+	}
+	return w.Flush()
 }
