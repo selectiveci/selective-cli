@@ -136,6 +136,11 @@ func TestApprovalsShowCardStatesEachStatusAndPrintsTheURL(t *testing.T) {
 }
 
 func TestHelpListsApprovalsShowAsAReadWithTheTokensExitCodes(t *testing.T) {
+	assertReadHelp(t, "approvals show", []int{0, 3, 4, 5, 6, 7, 8}, []string{"waiting", "approved"}, "10m")
+}
+
+func assertReadHelp(t *testing.T, path string, exitCodes []int, events []string, waitDefault string) {
+	t.Helper()
 	_, stdout, _ := execute("help", "--json")
 	var doc struct {
 		Help struct {
@@ -152,14 +157,14 @@ func TestHelpListsApprovalsShowAsAReadWithTheTokensExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range doc.Help.Commands {
-		if c.Path == "approvals show" {
-			if !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6, 7, 8}) || !slices.Equal(c.Events, []string{"waiting", "approved"}) || c.WaitDefault != "10m" || c.Mutates {
-				t.Errorf("approvals show = %+v, want exit codes 0,3,4,5,6,7,8, events waiting+approved, wait_default 10m and no mutates", c)
+		if c.Path == path {
+			if !slices.Equal(c.ExitCodes, exitCodes) || !slices.Equal(c.Events, events) || c.WaitDefault != waitDefault || c.Mutates {
+				t.Errorf("%s = %+v, want exit codes %v, events %v, wait_default %q and no mutates", path, c, exitCodes, events, waitDefault)
 			}
 			return
 		}
 	}
-	t.Error("help --json lists no approvals show")
+	t.Errorf("help --json lists no %s", path)
 }
 
 func TestApprovalsShowCardNamesTheSubjectByTypeAndIDWhenItHasNoLabel(t *testing.T) {
