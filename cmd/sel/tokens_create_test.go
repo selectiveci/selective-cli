@@ -55,8 +55,6 @@ type mintRun struct {
 	err    error
 	stdout string
 	stderr string
-	gh     []string
-	ghIn   string
 }
 
 func runCreate(t *testing.T, stub *mintStub, tty bool, o createOptions) mintRun {
@@ -70,10 +68,6 @@ func runCreate(t *testing.T, stub *mintStub, tty bool, o createOptions) mintRun 
 		Stderr:           &errOut,
 		JSON:             o.json || !tty,
 		StdoutIsTerminal: tty,
-		RunGh: func(stdin string, args ...string) error {
-			run.ghIn, run.gh = stdin, args
-			return nil
-		},
 	}
 	run.err = tokensCreate(env, o)
 	run.stdout, run.stderr = out.String(), errOut.String()
@@ -88,11 +82,13 @@ func exitOf(err error) int {
 	return 1
 }
 
+func sinkPath(t *testing.T) string { return filepath.Join(t.TempDir(), "sink.token") }
+
 func created() *mintStub { return &mintStub{status: 201, body: mintedBody} }
 
 func TestTokensCreateSendsExactlyTheDocumentedBodyKeys(t *testing.T) {
 	stub := created()
-	runCreate(t, stub, false, createOptions{name: "ci", agent: true, org: "acme", repos: []string{"acme/web", "acme/api"}, scopes: []string{"read"}, expiresIn: "90d", toStdout: true})
+	runCreate(t, stub, false, createOptions{name: "ci", agent: true, org: "acme", repos: []string{"acme/web", "acme/api"}, scopes: []string{"read"}, expiresIn: "90d", output: sinkPath(t)})
 	want := map[string]any{"name": "ci", "kind": "agent", "scopes": []any{"read"}, "organization": "acme", "repos": []any{"acme/web", "acme/api"}, "expires_in_s": float64(90 * 86400)}
 	if len(stub.bodies) != 1 || !reflect.DeepEqual(stub.bodies[0], want) || stub.requests[0] != "POST /api/v1/tokens" {
 		t.Errorf("requests %q bodies %v, want one POST with %v", stub.requests, stub.bodies, want)
@@ -101,7 +97,7 @@ func TestTokensCreateSendsExactlyTheDocumentedBodyKeys(t *testing.T) {
 
 func TestTokensCreateOmitsEveryKeyTheUserDidNotSet(t *testing.T) {
 	stub := created()
-	runCreate(t, stub, false, createOptions{name: "ci", toStdout: true})
+	runCreate(t, stub, false, createOptions{name: "ci", output: sinkPath(t)})
 	if want := map[string]any{"name": "ci"}; !reflect.DeepEqual(stub.bodies[0], want) {
 		t.Errorf("body = %v, want %v", stub.bodies[0], want)
 	}
@@ -110,7 +106,7 @@ func TestTokensCreateOmitsEveryKeyTheUserDidNotSet(t *testing.T) {
 func TestTokensCreateExpiresInTakesDaysAndGoDurations(t *testing.T) {
 	for in, want := range map[string]float64{"90d": 7776000, "12h": 43200, "1h30m": 5400, "45s": 45} {
 		stub := created()
-		runCreate(t, stub, false, createOptions{name: "ci", toStdout: true, expiresIn: in})
+		runCreate(t, stub, false, createOptions{name: "ci", output: sinkPath(t), expiresIn: in})
 		if got := stub.bodies[0]["expires_in_s"]; got != want {
 			t.Errorf("--expires-in %s sent %v, want %v", in, got, want)
 		}
@@ -122,41 +118,22 @@ func TestTokensCreateRefusesBadInputBeforeAnyRequest(t *testing.T) {
 	if err := os.WriteFile(existing, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string]struct {
-		tty bool
-		o   createOptions
-	}{
-		"no sink":                   {o: createOptions{name: "ci"}},
-		"two sinks":                 {o: createOptions{name: "ci", toStdout: true, output: "x"}},
-		"three sinks":               {o: createOptions{name: "ci", toStdout: true, output: "x", githubSecret: "S", secretRepo: "a/b"}},
-		"stdout on a terminal":      {tty: true, o: createOptions{name: "ci", toStdout: true}},
-		"output already exists":     {o: createOptions{name: "ci", output: existing}},
-		"github secret no repo":     {o: createOptions{name: "ci", githubSecret: "S", repos: []string{"a/b"}}},
-		"stdout with json":          {o: createOptions{name: "ci", toStdout: true, json: true}},
-		"two sinks on a dry run":    {o: createOptions{name: "ci", dryRun: true, toStdout: true, output: "x"}},
-		"no name":                   {o: createOptions{toStdout: true}},
-		"expires zero":              {o: createOptions{name: "ci", toStdout: true, expiresIn: "0d"}},
-		"expires negative":          {o: createOptions{name: "ci", toStdout: true, expiresIn: "-5h"}},
-		"expires fractional second": {o: createOptions{name: "ci", toStdout: true, expiresIn: "1500ms"}},
-		"expires junk":              {o: createOptions{name: "ci", toStdout: true, expiresIn: "soon"}},
-		"expires huge days":         {o: createOptions{name: "ci", toStdout: true, expiresIn: "99999999999d"}},
+	cases := map[string]createOptions{
+		"no sink":                   {name: "ci"},
+		"output already exists":     {name: "ci", output: existing},
+		"no name":                   {output: sinkPath(t)},
+		"expires zero":              {name: "ci", output: sinkPath(t), expiresIn: "0d"},
+		"expires negative":          {name: "ci", output: sinkPath(t), expiresIn: "-5h"},
+		"expires fractional second": {name: "ci", output: sinkPath(t), expiresIn: "1500ms"},
+		"expires junk":              {name: "ci", output: sinkPath(t), expiresIn: "soon"},
+		"expires huge days":         {name: "ci", output: sinkPath(t), expiresIn: "99999999999d"},
 	}
-	for name, c := range cases {
+	for name, o := range cases {
 		stub := created()
-		run := runCreate(t, stub, c.tty, c.o)
+		run := runCreate(t, stub, false, o)
 		if exitOf(run.err) != 5 || len(stub.requests) != 0 || run.stdout != "" {
 			t.Errorf("%s: exit %d, %d requests, stdout %q; want exit 5 and nothing sent or printed (err %v)", name, exitOf(run.err), len(stub.requests), run.stdout, run.err)
 		}
-	}
-}
-
-func TestTokensCreateStdoutWritesTheSecretAndOneNewlineOnly(t *testing.T) {
-	run := runCreate(t, created(), false, createOptions{name: "ci", toStdout: true})
-	if run.err != nil || run.stdout != leakedSecret+"\n" {
-		t.Errorf("err %v stdout %q, want exactly the secret and a newline", run.err, run.stdout)
-	}
-	if !strings.Contains(run.stderr, "sel_ab12") || !strings.Contains(run.stderr, "stdout") {
-		t.Errorf("stderr %q, want a line naming the prefix and the sink", run.stderr)
 	}
 }
 
@@ -182,13 +159,6 @@ func TestTokensCreateOutputWritesAPrivateFileAndAMetadataDocument(t *testing.T) 
 	}
 }
 
-func TestTokensCreateGithubSecretSendsTheSecretOnStdinNotArgv(t *testing.T) {
-	run := runCreate(t, created(), false, createOptions{name: "ci", githubSecret: "SEL_TOKEN", secretRepo: "acme/web"})
-	if run.err != nil || run.ghIn != leakedSecret || strings.Join(run.gh, " ") != "secret set SEL_TOKEN --repo acme/web" {
-		t.Errorf("err %v gh stdin %q args %q, want the secret on stdin and a secret-free argv", run.err, run.ghIn, run.gh)
-	}
-}
-
 func TestTokensCreateDryRunSendsDryRunWritesNothingAndNeedsNoSink(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "never")
 	for _, o := range []createOptions{{name: "ci", dryRun: true}, {name: "ci", dryRun: true, output: path}} {
@@ -209,10 +179,8 @@ func TestTokensCreateNeverPrintsThePlaintextOutsideTheSink(t *testing.T) {
 		tty bool
 		o   createOptions
 	}{
-		"stdout":      {o: createOptions{name: "ci", toStdout: true}},
 		"output json": {o: createOptions{name: "ci", output: filepath.Join(dir, "a"), json: true}},
 		"output text": {tty: true, o: createOptions{name: "ci", output: filepath.Join(dir, "b")}},
-		"github":      {o: createOptions{name: "ci", githubSecret: "S", secretRepo: "a/b"}},
 		"sink fails":  {o: createOptions{name: "ci", output: filepath.Join(dir, "missing", "c")}},
 	}
 	for name, m := range modes {
@@ -220,9 +188,6 @@ func TestTokensCreateNeverPrintsThePlaintextOutsideTheSink(t *testing.T) {
 		leaked := run.stdout + run.stderr
 		if run.err != nil {
 			leaked += run.err.Error()
-		}
-		if name == "stdout" {
-			leaked = strings.Replace(leaked, leakedSecret+"\n", "", 1)
 		}
 		if strings.Contains(leaked, leakedSecret) {
 			t.Errorf("%s: the plaintext appears outside the sink: %q", name, leaked)
@@ -250,7 +215,7 @@ func TestTokensCreateMapsServerRefusalsToExitCodes(t *testing.T) {
 		{422, `{"error":"invalid_scope","message":"bad scope"}`, 5},
 		{401, `{"error":"unauthorized","message":"no"}`, 4},
 	} {
-		run := runCreate(t, &mintStub{status: c.status, body: c.body}, false, createOptions{name: "ci", toStdout: true})
+		run := runCreate(t, &mintStub{status: c.status, body: c.body}, false, createOptions{name: "ci", output: sinkPath(t)})
 		if exitOf(run.err) != c.exit || run.stdout != "" {
 			t.Errorf("%d %s: exit %d stdout %q, want %d and empty stdout", c.status, c.body, exitOf(run.err), run.stdout, c.exit)
 		}
@@ -270,15 +235,14 @@ func TestTokensCreateRunsEndToEndThroughTheBinary(t *testing.T) {
 	assertRefusal(t, refused, 5, "usage_error")
 }
 
-func TestHelpListsTokensCreateAsAWriteWithASecretFlag(t *testing.T) {
+func TestHelpListsTokensCreateAsAWrite(t *testing.T) {
 	_, stdout, _ := execute("help", "--json")
 	var doc struct {
 		Help struct {
 			Commands []struct {
-				Path        string   `json:"path"`
-				ExitCodes   []int    `json:"exit_codes"`
-				Mutates     bool     `json:"mutates"`
-				SecretFlags []string `json:"secret_flags"`
+				Path      string `json:"path"`
+				ExitCodes []int  `json:"exit_codes"`
+				Mutates   bool   `json:"mutates"`
 			} `json:"commands"`
 		} `json:"help"`
 	}
@@ -288,10 +252,10 @@ func TestHelpListsTokensCreateAsAWriteWithASecretFlag(t *testing.T) {
 	listed := false
 	for _, c := range doc.Help.Commands {
 		if c.Path == "tokens create" {
-			listed = len(c.ExitCodes) > 0 && c.Mutates && reflect.DeepEqual(c.SecretFlags, []string{"stdout"})
+			listed = len(c.ExitCodes) > 0 && c.Mutates
 		}
 	}
 	if !listed {
-		t.Error("help --json lacks tokens create with exit_codes, mutates and secret_flags")
+		t.Error("help --json lacks tokens create with exit_codes and mutates")
 	}
 }
