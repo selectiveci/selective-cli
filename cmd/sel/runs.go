@@ -98,15 +98,16 @@ Exit codes:
   1  real test failures
   2  passed, but a test failed before passing on retry (safe to proceed)
   3  no build found for this commit (--wait ran out), or not inside a git repository
-  4  authentication or network error
+  4  authentication or network error, or --wait ran out after a failed lookup
   5  usage error
+  6  the token can't read this build (forbidden or insufficient scope)
   8  --timeout expired`,
 		Example: `  sel tail
   sel tail --wait --timeout 30m
   sel tail --wait=5s --json`,
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
-			"exit_codes":   "0,1,2,3,4,5,8",
+			"exit_codes":   "0,1,2,3,4,5,6,8",
 			"events":       "build_start,selection,progress,test_fail,summary,replay_truncated,waiting,heartbeat",
 			"wait_default": defaultTailWait,
 		},
@@ -131,7 +132,7 @@ Exit codes:
 				return err
 			}
 			if code != contract.ExitOK {
-				os.Exit(code)
+				return exitCode(code)
 			}
 			return nil
 		},

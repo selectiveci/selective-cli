@@ -21,7 +21,7 @@ const (
 	maxRetryAfter = 10 * time.Second
 )
 
-func transient(err error) bool {
+func Transient(err error) bool {
 	var apiErr *Error
 	if !errors.As(err, &apiErr) {
 		return false

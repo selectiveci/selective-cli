@@ -86,7 +86,7 @@ func TestTailClassifiesAHandshakeRefusalByItsStatus(t *testing.T) {
 		code   string
 	}{
 		{http.StatusUnauthorized, 4, "unauthorized"},
-		{http.StatusForbidden, 4, "unauthorized"},
+		{http.StatusForbidden, 6, "forbidden"},
 		{http.StatusNotFound, 3, "not_found"},
 		{http.StatusBadGateway, 4, "server_error"},
 	}
