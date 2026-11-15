@@ -368,6 +368,22 @@ func TestTokensRevokeWithoutYesIsAUsageErrorAndSendsNothing(t *testing.T) {
 	}
 }
 
+func TestTokensRevokeRejectsAnyIDThatIsNotAUUIDBeforeSendingAnything(t *testing.T) {
+	for _, id := range []string{"current", "../x", "", "not-a-uuid", revokeID + "/extra"} {
+		for _, flag := range []string{"--yes", "--dry-run"} {
+			stub := &revokeStub{status: 204}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", id, flag, "--json")
+
+			assertRefusal(t, res, 5, "usage_error")
+			if len(stub.requests) != 0 || (id == "current" && !strings.Contains(res.stdout, "sel auth logout")) {
+				t.Errorf("revoke %q %s: requests %v stdout %q, want none and a pointer to sel auth logout", id, flag, stub.requests, res.stdout)
+			}
+		}
+	}
+}
+
 func TestTokensRevokeDryRunNeedsNoYesAndSendsDryRunTrue(t *testing.T) {
 	stub := &revokeStub{status: 200, body: `{"token":{"id":"` + revokeID + `","name":"ci","prefix":"sel_ab12"},"result":"deleted","dry_run":true}`}
 	srv := stub.start(t)
