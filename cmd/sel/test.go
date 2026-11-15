@@ -78,7 +78,7 @@ summary.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := runTest(cmd, args, f)
 			if err == nil && code != 0 {
-				os.Exit(code)
+				return exitCode(code)
 			}
 			return err
 		},
