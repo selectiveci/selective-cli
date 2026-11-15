@@ -128,7 +128,7 @@ func secretFlagGiven(root *cobra.Command, args []string) bool {
 }
 
 func secretFlagGivenFor(root, resolved *cobra.Command, args []string) bool {
-	if resolved != nil && resolved.Runnable() {
+	if resolved != nil && resolved.Runnable() && resolved.Name() != "help" {
 		return anyFlagGiven(args, ownSecretFlags(resolved))
 	}
 	return secretFlagGiven(root, args)
