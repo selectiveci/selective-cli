@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -68,4 +69,87 @@ func TestSeatBuildEnvFillsTheNineVariablesWithoutARealCredential(t *testing.T) {
 	if got["api_key"] != "sel-local" || !strings.HasPrefix(got["host"].(string), "ws://") || len(got) != 17 {
 		t.Errorf("api_key %v host %v with %d keys, want sel-local, a ws:// host and the 17 transport keys", got["api_key"], got["host"], len(got))
 	}
+}
+
+func gitIn(t *testing.T, dir, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestSeatSnapshotMatchesGitOnWorkingTreeEdgeCases(t *testing.T) {
+	cases := []struct {
+		script string
+		check  func(t *testing.T, repo string, code int, out map[string]any, errw string)
+	}{
+		{"symlink.sh", func(t *testing.T, repo string, code int, out map[string]any, _ string) {
+			files := out["files"].(map[string]any)
+			if want := gitIn(t, repo, "b.txt", "hash-object", "--stdin"); files["link"] != want {
+				t.Errorf("link = %v, want the hash of its link text %s", files["link"], want)
+			}
+			if !slices.Contains(toStrings(out["dirty"]), "link") {
+				t.Errorf("dirty = %v, want link", out["dirty"])
+			}
+		}},
+		{"newline.sh", func(t *testing.T, repo string, code int, out map[string]any, _ string) {
+			files := out["files"].(map[string]any)
+			want := gitIn(t, repo, "changed\n", "hash-object", "--stdin")
+			for _, path := range []string{"ok.txt", "a\nb.txt"} {
+				if files[path] != want {
+					t.Errorf("%q = %v, want %s", path, files[path], want)
+				}
+			}
+		}},
+		{"dir-replaces-file.sh", func(t *testing.T, repo string, code int, out map[string]any, _ string) {
+			files := out["files"].(map[string]any)
+			if _, present := files["d"]; present {
+				t.Errorf("files still lists d, which is a directory now: %v", files)
+			}
+			if dirty := toStrings(out["dirty"]); !slices.Equal(dirty, []string{"d"}) {
+				t.Errorf("dirty = %v, want [d]", dirty)
+			}
+		}},
+		{"status-failure.sh", func(t *testing.T, repo string, code int, out map[string]any, errw string) {
+			if code != 1 || out != nil || !strings.Contains(errw, "git status") {
+				t.Errorf("exit %d stdout %v stderr %q, want exit 1, no snapshot and a git status message", code, out, errw)
+			}
+		}},
+		{"trailing-space-root.sh", func(t *testing.T, repo string, code int, out map[string]any, errw string) {
+			if want := gitIn(t, repo, "", "rev-parse", "HEAD"); code != 0 || out["sha"] != want {
+				t.Errorf("exit %d sha %v stderr %q, want exit 0 and %s", code, out["sha"], errw, want)
+			}
+			if dirty, isList := out["dirty"].([]any); !isList || len(dirty) != 0 {
+				t.Errorf("dirty = %#v on a clean tree, want an empty list as transport prints", out["dirty"])
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.script, func(t *testing.T) {
+			made, err := exec.Command("sh", filepath.Join("testdata", "snapshot-cases", c.script), t.TempDir()).Output()
+			if err != nil {
+				t.Fatalf("case script: %v", err)
+			}
+			repo := string(made)
+			var out, errw bytes.Buffer
+			code := RunSeat([]string{"--snapshot", repo}, strings.NewReader(""), &out, &errw)
+			var doc map[string]any
+			if out.Len() > 0 {
+				doc = decodeJSON(t, out.Bytes())
+			}
+			c.check(t, repo, code, doc, errw.String())
+		})
+	}
+}
+
+func toStrings(v any) []string {
+	var out []string
+	for _, item := range v.([]any) {
+		out = append(out, item.(string))
+	}
+	return out
 }
