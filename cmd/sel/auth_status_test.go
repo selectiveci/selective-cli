@@ -187,18 +187,19 @@ func TestAuthStatusWhenTheTokenObjectCannotBeReadAfterAGoodMe(t *testing.T) {
 		return srv.URL
 	}
 	cases := []struct {
-		name string
-		host string
-		exit int
-		code string
+		name    string
+		host    string
+		exit    int
+		code    string
+		message string
 	}{
-		{"401 maps like me's 401", statusServer(t, 200, meBody, 401, `{"error":"unauthorized","message":"revoked"}`).URL, 4, "unauthorized"},
-		{"404 propagates", statusServer(t, 200, meBody, 404, `{"error":"not_found","message":"no"}`).URL, 3, "not_found"},
-		{"403 propagates", statusServer(t, 200, meBody, 403, `{"error":"forbidden","message":"no"}`).URL, 6, "forbidden"},
-		{"500 propagates", statusServer(t, 200, meBody, 500, `{"error":"server_error","message":"boom"}`).URL, 4, "server_error"},
-		{"200 without a token object", statusServer(t, 200, meBody, 200, `{}`).URL, 4, "server_error"},
-		{"200 with a null token", statusServer(t, 200, meBody, 200, `{"token":null}`).URL, 4, "server_error"},
-		{"connection drops", closedAfterMe(), 4, "network_error"},
+		{"401 maps like me's 401", statusServer(t, 200, meBody, 401, `{"error":"unauthorized","message":"revoked"}`).URL, 4, "unauthorized", "the stored token was rejected by"},
+		{"404 propagates", statusServer(t, 200, meBody, 404, `{"error":"not_found","message":"no"}`).URL, 3, "not_found", "no"},
+		{"403 propagates", statusServer(t, 200, meBody, 403, `{"error":"forbidden","message":"no"}`).URL, 6, "forbidden", "no"},
+		{"500 propagates", statusServer(t, 200, meBody, 500, `{"error":"server_error","message":"boom"}`).URL, 4, "server_error", "boom"},
+		{"200 without a token object", statusServer(t, 200, meBody, 200, `{}`).URL, 4, "server_error", "no token object"},
+		{"200 with a null token", statusServer(t, 200, meBody, 200, `{"token":null}`).URL, 4, "server_error", "no token object"},
+		{"connection drops", closedAfterMe(), 4, "network_error", "could not reach"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -206,8 +207,9 @@ func TestAuthStatusWhenTheTokenObjectCannotBeReadAfterAGoodMe(t *testing.T) {
 
 			var doc map[string]any
 			err := json.Unmarshal([]byte(res.stdout), &doc)
-			if err != nil || strings.Count(res.stdout, "\n") != 1 || res.exit != tc.exit || doc["error"] != tc.code || doc["auth"] != nil {
-				t.Errorf("exit %d stdout %q (%v), want exit %d and one %s error object with no auth", res.exit, res.stdout, err, tc.exit, tc.code)
+			message, _ := doc["message"].(string)
+			if err != nil || strings.Count(res.stdout, "\n") != 1 || res.exit != tc.exit || doc["error"] != tc.code || doc["auth"] != nil || !strings.Contains(message, tc.message) {
+				t.Errorf("exit %d stdout %q (%v), want exit %d and one %s error object with no auth, message containing %q", res.exit, res.stdout, err, tc.exit, tc.code, tc.message)
 			}
 		})
 	}
