@@ -19,11 +19,14 @@ const runningBuild = `{"id":"b-2","title":"Fix login","status":"running","suite_
 
 const finishedBuild = `{"id":"b-1","branch":"main","status":"success","suite_count":2,"total":40,"failed":0,"started_at":"2026-11-13T09:00:00Z","completed_at":"2026-11-13T09:05:00Z","duration_ms":300000,"archived":false}`
 
+const buildDetail = `{"id":"b-2","status":"running","suite_count":1,"total":10,"failed":1,"completed_at":null,"duration_ms":null,"archived":false,"runs":[{"id":"r-1","suite":{"id":"s-1","name":"web"},"status":"running","total":10,"failed":1}]}`
+
 type buildsStub struct {
 	mu      sync.Mutex
 	paths   []string
 	queries []url.Values
 	pages   map[string]string
+	detail  string
 }
 
 func (s *buildsStub) env(t *testing.T) (*setup.Env, *bytes.Buffer) {
@@ -37,6 +40,8 @@ func (s *buildsStub) env(t *testing.T) (*setup.Env, *bytes.Buffer) {
 		switch r.URL.Path {
 		case "/api/v1/orgs/acme/builds":
 			_, _ = w.Write([]byte(s.pages[r.URL.Query().Get("cursor")]))
+		case "/api/v1/builds/b-2":
+			_, _ = w.Write([]byte(`{"build":` + s.detail + `}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -214,6 +219,35 @@ func TestBuildsWithoutAllNeverAddsTheStoppedEarlyNotice(t *testing.T) {
 
 	if next == nil || len(notices) != 0 || requests != 1 {
 		t.Errorf("next_cursor %v notices %v requests %d", next, notices, requests)
+	}
+}
+
+func TestBuildPrintsTheDetailAsTheServerSentIt(t *testing.T) {
+	s := &buildsStub{detail: buildDetail}
+	env, out := s.env(t)
+
+	if err := Build(env, BuildOptions{ID: "b-2", Org: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if out.String() != golden(t, "build.json") {
+		t.Errorf("stdout:\n%s\nwant:\n%s", out, golden(t, "build.json"))
+	}
+	if len(s.queries) != 1 || s.queries[0].Get("org") != "acme" {
+		t.Errorf("queries = %v", s.queries)
+	}
+}
+
+func TestBuildSendsNoOrgWhenNoneWasGiven(t *testing.T) {
+	s := &buildsStub{detail: buildDetail}
+	env, _ := s.env(t)
+
+	if err := Build(env, BuildOptions{ID: "b-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(s.queries) != 1 || len(s.queries[0]) != 0 {
+		t.Errorf("queries = %v", s.queries)
 	}
 }
 
