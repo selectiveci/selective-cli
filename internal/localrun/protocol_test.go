@@ -88,6 +88,15 @@ func (c *fakeClient) next(want string) map[string]any {
 	}
 }
 
+func (c *fakeClient) readCommands(r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		var cmd map[string]any
+		_ = json.Unmarshal(scanner.Bytes(), &cmd)
+		c.commands <- cmd
+	}
+}
+
 func (c *fakeClient) send(frameType string, data map[string]any) {
 	line, _ := json.Marshal(map[string]any{"type": frameType, "data": data})
 	_, _ = c.frames.Write(append(line, '\n'))
@@ -180,14 +189,7 @@ func exerciseWriting(t *testing.T, opts Options, wrap func(io.Writer) io.Writer,
 	toClientR, toClientW := io.Pipe()
 	fromClientR, fromClientW := io.Pipe()
 	client := &fakeClient{t: t, commands: make(chan map[string]any, 64), frames: fromClientW}
-	go func() {
-		scanner := bufio.NewScanner(toClientR)
-		for scanner.Scan() {
-			var cmd map[string]any
-			_ = json.Unmarshal(scanner.Bytes(), &cmd)
-			client.commands <- cmd
-		}
-	}()
+	go client.readCommands(toClientR)
 	scripted := make(chan struct{})
 	go func() {
 		defer close(scripted)
@@ -469,6 +471,27 @@ func TestRunClosesWithoutRunningWhenNothingIsSelected(t *testing.T) {
 	}
 	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "summary"}) {
 		t.Errorf("events = %v", got)
+	}
+}
+
+func TestRunListNamesTheSelectedIdsAndSendsNoRunCommand(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "c"), List: true}, func(c *fakeClient) {
+		c.handshake("a", "b", "c")
+		c.finish()
+	})
+	if out.err != nil {
+		t.Fatalf("err=%v", out.err)
+	}
+	if got := out.names(); !reflect.DeepEqual(got, []string{"build_start", "selection", "summary"}) {
+		t.Errorf("events = %v", got)
+	}
+	if ids := out.named("selection")[0]["ids"]; !reflect.DeepEqual(ids, []any{"a", "c"}) {
+		t.Errorf("selection ids = %v, want [a c]", ids)
+	}
+	for _, command := range out.commands {
+		if command["command"] == "run_test_cases" {
+			t.Errorf("--list sent %v", command)
+		}
 	}
 }
 
@@ -780,5 +803,30 @@ func runWithBlockedWrite(t *testing.T, command string) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run is stuck in a blocked command write past its timeout")
+	}
+}
+
+func TestUnderAnyMatchesWholePathSegmentsOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		file  string
+		paths []string
+		want  bool
+	}{
+		{"no paths means every test", "spec/a_spec.rb", nil, true},
+		{"the file itself", "spec/a_spec.rb", []string{"spec/a_spec.rb"}, true},
+		{"a directory above it", "spec/models/a_spec.rb", []string{"spec"}, true},
+		{"a leading ./ on the test's path", "./spec/a_spec.rb", []string{"spec"}, true},
+		{"the current directory", "spec/a_spec.rb", []string{"."}, true},
+		{"a sibling directory", "spec/a_spec.rb", []string{"lib"}, false},
+		{"a name prefix is not a directory", "tests/test_calc.py", []string{"tests/test"}, false},
+		{"any one of several paths", "lib/b_spec.rb", []string{"spec", "lib"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := underAny(tc.file, tc.paths); got != tc.want {
+				t.Errorf("underAny(%q, %v) = %v, want %v", tc.file, tc.paths, got, tc.want)
+			}
+		})
 	}
 }

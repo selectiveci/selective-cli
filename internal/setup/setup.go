@@ -39,7 +39,7 @@ type Env struct {
 func Connect(hostname string, forceJSON bool) (*Env, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return nil, fmt.Errorf("could not load config: %w", err)
+		return nil, contract.Errorf(contract.UsageError, "could not load config: %v", err)
 	}
 	host, err := cfg.ResolveHost(hostname)
 	if err != nil {
@@ -310,7 +310,7 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 		return fmt.Errorf("could not set the GitHub secret: %w", err)
 	}
 	if e.JSON {
-		return e.json(map[string]any{"secret": opts.GithubSecret, "repo": repo, "suite": s.Name})
+		return e.json(map[string]any{"secret": opts.GithubSecret, "repo": repo, "suite": s.Name, "result": "updated", "dry_run": false})
 	}
 	fmt.Fprintf(e.Stdout, "✓ Set GitHub Actions secret %s on %s to suite %q's API key\n", opts.GithubSecret, repo, s.Name)
 	return nil
