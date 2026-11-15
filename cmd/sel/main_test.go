@@ -249,6 +249,7 @@ var commandsWithoutExitCodes = map[string]bool{
 	"suites configure": true,
 	"suites create":    true,
 	"suites key":       true,
+	"__transport":      true,
 }
 
 func TestEveryLeafCommandDeclaresExitCodes(t *testing.T) {
