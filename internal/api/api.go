@@ -61,6 +61,19 @@ func (c *Client) RevokeCurrent() error {
 	return c.do("DELETE", "/api/v1/tokens/current", nil, http.StatusNoContent, nil)
 }
 
+func (c *Client) CurrentTokenRaw() (json.RawMessage, error) {
+	var body struct {
+		Token json.RawMessage `json:"token"`
+	}
+	if err := c.do("GET", "/api/v1/tokens/current", nil, http.StatusOK, &body); err != nil {
+		return nil, err
+	}
+	if len(body.Token) == 0 || body.Token[0] != '{' {
+		return nil, &Error{Code: contract.ServerError, Message: "unexpected response from /api/v1/tokens/current: no token object"}
+	}
+	return body.Token, nil
+}
+
 func (c *Client) requestContext() context.Context {
 	if c.ctx == nil {
 		return context.Background()
