@@ -44,37 +44,33 @@ func Failures(env *setup.Env, opts FailuresOptions) error {
 }
 
 func fetchFailures(client *api.Client, opts FailuresOptions) (*api.FailuresPage, error) {
-	query := api.FailuresQuery{Org: opts.Org, Outcome: opts.Outcome, Limit: opts.Limit, Cursor: opts.Cursor}
-	single := opts.Limit > 0
-	if !single {
+	query := api.FailuresQuery{Org: opts.Org, Outcome: opts.Outcome, Limit: opts.Limit}
+	all := opts.Limit == 0
+	if all {
 		query.Limit = pageSize
 	}
-	var merged *api.FailuresPage
-	for requests := 0; requests < maxRequests; requests++ {
+	var last *api.FailuresPage
+	failures, next, stoppedEarly, err := walk(opts.Cursor, all, func(cursor string) ([]api.Failure, *string, error) {
+		query.Cursor = cursor
 		page, err := client.Failures(opts.Build, query)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		page.Failures = filterSuite(page.Failures, opts.Suite)
-		if merged != nil {
-			page.Failures = append(merged.Failures, page.Failures...)
-		}
-		merged = page
-		if single || page.NextCursor == nil {
-			break
-		}
-		if len(merged.Failures) >= maxFailures {
-			break
-		}
-		query.Cursor = *page.NextCursor
+		last = page
+		return filterSuite(page.Failures, opts.Suite), page.NextCursor, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if merged.Failures == nil {
-		merged.Failures = []api.Failure{}
+	last.Failures = failures
+	if last.Failures == nil {
+		last.Failures = []api.Failure{}
 	}
-	if !single && merged.NextCursor != nil {
-		merged.Notices = append(merged.Notices, paginationStoppedEarly)
+	last.NextCursor = next
+	if stoppedEarly {
+		last.Notices = append(last.Notices, paginationStoppedEarly)
 	}
-	return merged, nil
+	return last, nil
 }
 
 func filterSuite(failures []api.Failure, suite string) []api.Failure {

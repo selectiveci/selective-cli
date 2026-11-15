@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -82,6 +83,48 @@ func (c *Client) LookupBuild(repo, sha string) (*BuildLookup, error) {
 	params := url.Values{"repo": {repo}, "sha": {sha}}
 	var out BuildLookup
 	if err := c.do("GET", "/api/v1/builds/lookup?"+params.Encode(), nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+type BuildsPage struct {
+	Builds     []json.RawMessage `json:"builds"`
+	NextCursor *string           `json:"next_cursor"`
+	Notices    []string          `json:"notices,omitempty"`
+}
+
+type BuildsQuery struct {
+	Status string
+	Flaky  *bool
+	Branch string
+	Limit  int
+	Cursor string
+}
+
+func (c *Client) Builds(org string, q BuildsQuery) (*BuildsPage, error) {
+	params := url.Values{}
+	if q.Status != "" {
+		params.Set("status", q.Status)
+	}
+	if q.Flaky != nil {
+		params.Set("flaky", strconv.FormatBool(*q.Flaky))
+	}
+	if q.Branch != "" {
+		params.Set("branch", q.Branch)
+	}
+	if q.Limit > 0 {
+		params.Set("limit", strconv.Itoa(q.Limit))
+	}
+	if q.Cursor != "" {
+		params.Set("cursor", q.Cursor)
+	}
+	path := "/api/v1/orgs/" + url.PathEscape(org) + "/builds"
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+	var out BuildsPage
+	if err := c.do("GET", path, nil, http.StatusOK, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
