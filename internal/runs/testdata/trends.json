@@ -1,0 +1,1 @@
+{"v":1,"range":"week","suite_id":null,"summary":{"tests_count":0,"pass_rate":null,"failures_count":0,"flaky_count":0,"median_build_s":null,"previous":{"pass_rate":null,"failures_count":3,"median_build_s":41.5}},"top_failing":[],"window":{"from":"2026-11-06T00:00:00Z","to":"2026-11-13T00:00:00Z","bucket":"day"}}
