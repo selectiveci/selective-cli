@@ -61,8 +61,12 @@ type exitCode int
 func (e exitCode) Error() string { return fmt.Sprintf("exit %d", int(e)) }
 
 func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
+	secretOnCommandLine := secretFlagGiven(root, args)
 	root.SetArgs(args)
 	root.SetOut(stdout)
+	if secretOnCommandLine && (flagGiven(args, "help") || slices.Contains(args, "-h")) {
+		root.SetOut(stderr)
+	}
 	root.SetErr(stderr)
 	entered := false
 	markEntered(root, &entered)
@@ -85,7 +89,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := stdout
-		if secretFlagGiven(cmd, args) {
+		if secretOnCommandLine {
 			sink = stderr
 		}
 		_ = format.Error(sink, coded)
@@ -104,13 +108,26 @@ func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bo
 	return format.JSONMode(cmd.Flags(), stdout)
 }
 
-func secretFlagGiven(cmd *cobra.Command, args []string) bool {
-	for _, name := range strings.Split(cmd.Annotations["secret_flags"], ",") {
-		if name = strings.TrimSpace(name); name != "" && flagGiven(args, name) {
+func secretFlagGiven(root *cobra.Command, args []string) bool {
+	for _, name := range secretFlagNames(root) {
+		if flagGiven(args, name) {
 			return true
 		}
 	}
 	return false
+}
+
+func secretFlagNames(c *cobra.Command) []string {
+	var names []string
+	for _, name := range strings.Split(c.Annotations["secret_flags"], ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	for _, sub := range c.Commands() {
+		names = append(names, secretFlagNames(sub)...)
+	}
+	return names
 }
 
 func flagGiven(args []string, name string) bool {

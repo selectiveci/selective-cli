@@ -304,6 +304,34 @@ func TestTokensCreateStdoutLeavesStdoutEmptyWhenAnythingFailsBeforeTheRequest(t 
 	}
 }
 
+func TestTokensCreateStdoutPropertyHoldsWhenTheCommandIsNotResolved(t *testing.T) {
+	cases := map[string]struct {
+		args []string
+		exit int
+	}{
+		"subcommand typo":          {[]string{"tokens", "creat", "--name", "x", "--stdout"}, 5},
+		"flag before the command":  {[]string{"--stdout", "tokens", "create", "--name", "x"}, 5},
+		"help flag":                {[]string{"tokens", "create", "--name", "x", "--stdout", "--help"}, 0},
+		"short help flag":          {[]string{"tokens", "create", "--name", "x", "--stdout", "-h"}, 0},
+		"help flag before stdout":  {[]string{"tokens", "create", "--help", "--stdout"}, 0},
+		"typo in an unrelated cmd": {[]string{"nosuchcommand", "--stdout"}, 5},
+	}
+	for name, c := range cases {
+		stub := created()
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, c.args...)
+
+		if res.exit != c.exit || res.stdout != "" || res.stderr == "" || len(stub.requests) != 0 {
+			t.Errorf("%s: exit %d stdout %q stderr %q requests %v, want exit %d with empty stdout and the text on stderr", name, res.exit, res.stdout, res.stderr, stub.requests, c.exit)
+		}
+	}
+	plain := runBinary(t, t.TempDir(), "http://unused", "tokens", "create", "--help")
+	if plain.exit != 0 || !strings.Contains(plain.stdout, "Create an API token") {
+		t.Errorf("help without a secret flag: exit %d stdout %q, want it on stdout as before", plain.exit, plain.stdout)
+	}
+}
+
 func TestTokensCreateRunsEndToEndThroughTheBinary(t *testing.T) {
 	srv := created().start(t)
 	path := filepath.Join(t.TempDir(), "ci.token")
