@@ -1,0 +1,1 @@
+{"v":1,"prompt":{"flake_id":"f-1","text":"Fix the flaky test \"checkout flow\".\n\nRecent failures:\n- ada on main at abcdef0\n"}}

@@ -68,7 +68,7 @@ func TestAccessorsReturnCopies(t *testing.T) {
 func TestEventsAreExactlyTheContractEventTable(t *testing.T) {
 	want := []string{
 		"build_start", "selection", "progress", "summary", "test_fail", "replay_truncated",
-		"waiting", "heartbeat", "rerun_started", "done", "test_pass",
+		"waiting", "heartbeat", "rerun_started", "done", "test_pass", "authorize", "logged_in",
 	}
 	got := map[string]bool{}
 	for _, e := range Events() {
