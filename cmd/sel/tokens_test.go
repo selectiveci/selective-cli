@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -174,9 +175,17 @@ func TestTokensTextShowsApprovalInListAndShow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if !strings.HasSuffix(lines[0], "APPROVAL") || !strings.HasSuffix(lines[1], "required") || !strings.HasSuffix(lines[2], "not required") || strings.HasSuffix(lines[3], "required") {
-		t.Errorf("list text:\n%s", out.String())
+	gap := regexp.MustCompile(` {2,}`)
+	var approvalCells [][]string
+	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		approvalCells = append(approvalCells, gap.Split(strings.TrimRight(line, " "), -1))
+	}
+	last := func(cells []string) string { return cells[len(cells)-1] }
+	if len(approvalCells) != 4 || last(approvalCells[0]) != "APPROVAL" || len(approvalCells[0]) != 8 ||
+		len(approvalCells[1]) != 8 || last(approvalCells[1]) != "required" ||
+		len(approvalCells[2]) != 8 || last(approvalCells[2]) != "not required" ||
+		len(approvalCells[3]) != 7 || last(approvalCells[3]) != "never" {
+		t.Errorf("list text, split into cells: %q\n%s", approvalCells, out.String())
 	}
 	if !strings.Contains(showOut.String(), "Approval:  not required\n") {
 		t.Errorf("show text:\n%s", showOut.String())
