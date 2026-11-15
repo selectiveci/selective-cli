@@ -98,7 +98,7 @@ func approvalsShow(env *setup.Env, id string, opts showOptions) error {
 	ctx := context.Background()
 	if opts.timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeoutCause(ctx, opts.timeout, contract.Errorf(contract.Timeout, "--timeout %s expired", opts.timeout))
+		ctx, cancel = context.WithDeadlineCause(ctx, opts.started.Add(opts.timeout), contract.Errorf(contract.Timeout, "--timeout %s expired", opts.timeout))
 		defer cancel()
 	}
 	approval, err := fetchApproval(ctx, env, id, opts)

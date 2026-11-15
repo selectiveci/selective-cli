@@ -370,3 +370,21 @@ func TestApprovalsShowWaitInTextModeKeepsWaitingLinesOffStdoutAndPrintsTheCard(t
 		})
 	}
 }
+
+func TestApprovalsShowTimeoutCountsTimeSpentBeforeTheFirstRequest(t *testing.T) {
+	for name, wait := range map[string]time.Duration{"plain read": 0, "waiting": time.Minute} {
+		t.Run(name, func(t *testing.T) {
+			var requests atomic.Int32
+			srv := replyServer(t, []reply{pendingReply}, &requests)
+			useClock(t, &stepClock{now: time.Now()})
+			env := &setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, JSON: true}
+
+			err := approvalsShow(env, approvalUUID, showOptions{wait: wait, timeout: time.Second, started: time.Now().Add(-time.Hour)})
+
+			var coded contract.Coded
+			if !errors.As(err, &coded) || coded.ErrorCode() != contract.Timeout || coded.ExitCode() != 8 || requests.Load() != 0 {
+				t.Errorf("err = %v after %d requests, want timeout (exit 8) with no request", err, requests.Load())
+			}
+		})
+	}
+}
