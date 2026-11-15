@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -58,7 +60,7 @@ func TestWithTokenStatusLogout(t *testing.T) {
 		t.Fatalf("login output: %s", stderr.String())
 	}
 
-	if err := Status("", &stdout); err != nil {
+	if err := Status("", false, &stdout); err != nil {
 		t.Fatalf("status: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Logged in as ben@example.com") || strings.Contains(stdout.String(), "sk_live_good") {
@@ -66,7 +68,7 @@ func TestWithTokenStatusLogout(t *testing.T) {
 	}
 
 	stderr.Reset()
-	if err := Logout("", &stderr); err != nil {
+	if err := Logout(LogoutOptions{Stderr: &stderr}); err != nil {
 		t.Fatal(err)
 	}
 	if !*revoked {
@@ -78,7 +80,7 @@ func TestWithTokenStatusLogout(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := Status(srv.URL, &stdout); err == nil || !IsSilent(err) {
+	if err := Status(srv.URL, false, &stdout); err == nil || !IsSilent(err) {
 		t.Fatalf("status after logout should fail quietly, got %v", err)
 	}
 }
@@ -100,7 +102,7 @@ func TestStatusWhenTheTokenWasRevokedElsewhere(t *testing.T) {
 	_ = Login(LoginOptions{Hostname: srv.URL, WithToken: true, Stdin: strings.NewReader("sk_live_good\n"), Stderr: &bytes.Buffer{}})
 	*revoked = true
 	var stdout bytes.Buffer
-	if err := Status("", &stdout); err == nil || !strings.Contains(stdout.String(), "rejected") {
+	if err := Status("", false, &stdout); err == nil || !strings.Contains(stdout.String(), "rejected") {
 		t.Fatalf("status = %v, %s", err, stdout.String())
 	}
 }
@@ -108,7 +110,7 @@ func TestStatusWhenTheTokenWasRevokedElsewhere(t *testing.T) {
 func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 	setup(t)
 	t.Setenv("SELECTIVE_TOKEN", "sk_live_env")
-	if err := Logout("", &bytes.Buffer{}); err == nil {
+	if err := Logout(LogoutOptions{Stderr: &bytes.Buffer{}}); err == nil {
 		t.Fatal("logout should refuse to act on SELECTIVE_TOKEN")
 	}
 }
@@ -234,7 +236,7 @@ func TestLoginAndLogoutRefusalsCarryTheirContractCode(t *testing.T) {
 		{"no token on stdin", login(""), contract.UsageError},
 		{"stdin is not a token", login("not-a-token\n"), contract.UsageError},
 		{"server rejects the token", login("sk_live_wrong\n"), contract.Unauthorized},
-		{"logout with an env token", Logout("", &bytes.Buffer{}), contract.UsageError},
+		{"logout with an env token", Logout(LogoutOptions{Stderr: &bytes.Buffer{}}), contract.UsageError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -242,5 +244,61 @@ func TestLoginAndLogoutRefusalsCarryTheirContractCode(t *testing.T) {
 				t.Errorf("code = %q, want %q (err: %v)", got, tc.want, tc.err)
 			}
 		})
+	}
+}
+
+func TestLoggedInEventNamesTheHostAndUserAndNeverCarriesTheToken(t *testing.T) {
+	setup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/device/code":
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device?code=ABCD-EFGH","expires_in":600,"interval":1}`))
+		case "/api/v1/device/token":
+			_, _ = w.Write([]byte(`{"access_token":"sk_live_secret_value","user":{"email":"ben@example.com"}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := &bytes.Buffer{}
+	if err := Login(LoginOptions{Hostname: srv.URL, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	loggedIn := strings.Split(strings.TrimSpace(out.String()), "\n")[1]
+	if !strings.Contains(loggedIn, `"host":"`+srv.URL+`"`) || !strings.Contains(loggedIn, `"email":"ben@example.com"`) {
+		t.Errorf("logged_in = %q, want the host and email", loggedIn)
+	}
+	if strings.Contains(out.String(), "sk_live_secret_value") {
+		t.Errorf("stdout carries the token: %q", out.String())
+	}
+}
+
+func TestStatusAndLogoutWithAnUnreadableConfigAreUsageErrors(t *testing.T) {
+	setup(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("SELECTIVE_CONFIG_DIR"), "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]error{
+		"status": Status("", true, &bytes.Buffer{}),
+		"logout": Logout(LogoutOptions{Stderr: &bytes.Buffer{}}),
+	}
+	for name, err := range cases {
+		if got := codeOf(err); got != contract.UsageError {
+			t.Errorf("%s: code = %q, want %q (err: %v)", name, got, contract.UsageError, err)
+		}
+	}
+}
+
+func TestLoginWithAnUnreadableConfigIsAUsageError(t *testing.T) {
+	setup(t)
+	if err := os.WriteFile(filepath.Join(os.Getenv("SELECTIVE_CONFIG_DIR"), "config.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Login(LoginOptions{WithToken: true, Stdin: strings.NewReader("sk_live_good\n"), Stderr: &bytes.Buffer{}})
+
+	if got := codeOf(err); got != contract.UsageError {
+		t.Errorf("code = %q, want %q (err: %v)", got, contract.UsageError, err)
 	}
 }
