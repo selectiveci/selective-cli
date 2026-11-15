@@ -84,7 +84,11 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
-		_ = format.Error(stdout, coded)
+		sink := stdout
+		if secretFlagGiven(cmd, args) {
+			sink = stderr
+		}
+		_ = format.Error(sink, coded)
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()
@@ -100,18 +104,31 @@ func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bo
 	return format.JSONMode(cmd.Flags(), stdout)
 }
 
-func jsonFlagGiven(args []string) bool {
-	return slices.ContainsFunc(args, func(arg string) bool {
-		if arg == "--json" {
+func secretFlagGiven(cmd *cobra.Command, args []string) bool {
+	for _, name := range strings.Split(cmd.Annotations["secret_flags"], ",") {
+		if name = strings.TrimSpace(name); name != "" && flagGiven(args, name) {
 			return true
 		}
-		value, ok := strings.CutPrefix(arg, "--json=")
+	}
+	return false
+}
+
+func flagGiven(args []string, name string) bool {
+	return slices.ContainsFunc(args, func(arg string) bool {
+		if arg == "--"+name {
+			return true
+		}
+		value, ok := strings.CutPrefix(arg, "--"+name+"=")
 		if !ok {
 			return false
 		}
 		asked, err := strconv.ParseBool(value)
 		return err == nil && asked
 	})
+}
+
+func jsonFlagGiven(args []string) bool {
+	return flagGiven(args, "json")
 }
 
 func isNetworkError(err error) bool {

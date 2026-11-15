@@ -133,6 +133,9 @@ func TestTokensCreateRefusesBadInputBeforeAnyRequest(t *testing.T) {
 		"output already exists":     {o: createOptions{name: "ci", output: existing}},
 		"github secret no repo":     {o: createOptions{name: "ci", githubSecret: "S", repos: []string{"a/b"}}},
 		"stdout with json":          {o: createOptions{name: "ci", toStdout: true, json: true}},
+		"secret repo with output":   {o: createOptions{name: "ci", output: filepath.Join(t.TempDir(), "o"), secretRepo: "a/b"}},
+		"secret repo with stdout":   {o: createOptions{name: "ci", toStdout: true, secretRepo: "a/b"}},
+		"secret repo on a dry run":  {o: createOptions{name: "ci", dryRun: true, secretRepo: "a/b"}},
 		"two sinks on a dry run":    {o: createOptions{name: "ci", dryRun: true, toStdout: true, output: "x"}},
 		"no name":                   {o: createOptions{toStdout: true}},
 		"expires zero":              {o: createOptions{name: "ci", toStdout: true, expiresIn: "0d"}},
@@ -253,6 +256,50 @@ func TestTokensCreateMapsServerRefusalsToExitCodes(t *testing.T) {
 		run := runCreate(t, &mintStub{status: c.status, body: c.body}, false, createOptions{name: "ci", toStdout: true})
 		if exitOf(run.err) != c.exit || run.stdout != "" {
 			t.Errorf("%d %s: exit %d stdout %q, want %d and empty stdout", c.status, c.body, exitOf(run.err), run.stdout, c.exit)
+		}
+	}
+}
+
+func TestTokensCreateStdoutKeepsErrorDocumentsOffStdoutAndExitsByCode(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		body   string
+		exit   int
+		code   string
+	}{
+		{403, forbiddenBody, 6, "forbidden"},
+		{409, `{"error":"name_taken","message":"in use"}`, 5, "name_taken"},
+	} {
+		stub := &mintStub{status: c.status, body: c.body}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "tokens", "create", "--name", "ci", "--stdout")
+
+		if res.exit != c.exit || res.stdout != "" || !strings.Contains(res.stderr, `"error":"`+c.code+`"`) {
+			t.Errorf("%d: exit %d stdout %q stderr %q, want exit %d, empty stdout and the code on stderr", c.status, res.exit, res.stdout, res.stderr, c.exit)
+		}
+	}
+}
+
+func TestTokensCreateStdoutLeavesStdoutEmptyWhenAnythingFailsBeforeTheRequest(t *testing.T) {
+	cases := map[string][]string{
+		"no name":         {"--stdout"},
+		"bad expires":     {"--name", "ci", "--stdout", "--expires-in", "soon"},
+		"two sinks":       {"--name", "ci", "--stdout", "--output", "x"},
+		"json":            {"--name", "ci", "--stdout", "--json"},
+		"secret repo":     {"--name", "ci", "--stdout", "--secret-repo", "a/b"},
+		"unknown flag":    {"--bogus", "--name", "ci", "--stdout"},
+		"stdout equals":   {"--name", "ci", "--stdout=true", "--expires-in", "0d"},
+		"positional args": {"--name", "ci", "--stdout", "extra"},
+	}
+	for name, args := range cases {
+		stub := created()
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, append([]string{"tokens", "create"}, args...)...)
+
+		if res.exit != 5 || res.stdout != "" || !strings.Contains(res.stderr, `"error":"usage_error"`) || len(stub.requests) != 0 {
+			t.Errorf("%s: exit %d stdout %q stderr %q requests %v, want exit 5, empty stdout, the code on stderr, no request", name, res.exit, res.stdout, res.stderr, stub.requests)
 		}
 	}
 }

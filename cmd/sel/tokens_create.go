@@ -161,6 +161,8 @@ func (o createOptions) checkSink(stdoutIsTerminal bool) error {
 		return contract.Errorf(contract.UsageError, "--stdout prints the secret, so it can't be combined with --json")
 	case o.toStdout && stdoutIsTerminal:
 		return contract.Errorf(contract.UsageError, "refusing to print a token to a terminal; pipe --stdout into a secret store")
+	case o.secretRepo != "" && o.githubSecret == "":
+		return contract.Errorf(contract.UsageError, "--secret-repo only goes with --github-secret NAME")
 	case o.githubSecret != "" && o.secretRepo == "":
 		return contract.Errorf(contract.UsageError, "--github-secret needs --secret-repo owner/name (--repo limits the token, not where the secret goes)")
 	}
