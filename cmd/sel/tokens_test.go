@@ -298,3 +298,170 @@ func TestHelpListsTokensListAndShowAsReads(t *testing.T) {
 		t.Errorf("help --json tokens commands = %v, want both with exit_codes and no mutates", listed)
 	}
 }
+
+const (
+	revokeID      = "7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f"
+	revokeOKBody  = `{"token":{"id":"` + revokeID + `","name":"ci","prefix":"sel_ab12"},"result":"deleted","dry_run":false}`
+	notFoundBody  = `{"error":"not_found","message":"No such token."}`
+	notFoundStdio = `{"v":1,"error":"not_found","message":"No such token."}` + "\n"
+)
+
+type revokeStub struct {
+	mu       sync.Mutex
+	requests []string
+	status   int
+	body     string
+}
+
+func (s *revokeStub) start(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		s.requests = append(s.requests, r.Method+" "+r.URL.RequestURI())
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(s.status)
+		fmt.Fprint(w, s.body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestTokensRevokeDeletesTheTokenAndPrintsAWriteObject(t *testing.T) {
+	stub := &revokeStub{status: 200, body: revokeOKBody}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", revokeID, "--yes", "--json")
+
+	want := `{"v":1,"token":{"id":"` + revokeID + `","name":"ci","prefix":"sel_ab12"},"result":"deleted","dry_run":false}` + "\n"
+	if res.exit != 0 || res.stdout != want {
+		t.Errorf("exit %d stdout %q want %q stderr %q", res.exit, res.stdout, want, res.stderr)
+	}
+	if got := strings.Join(stub.requests, "|"); got != "DELETE /api/v1/tokens/"+revokeID {
+		t.Errorf("requests = %q, want one plain DELETE", got)
+	}
+}
+
+func TestTokensRevokeWithoutYesIsAUsageErrorAndSendsNothing(t *testing.T) {
+	stub := &revokeStub{status: 200, body: revokeOKBody}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", revokeID, "--json")
+
+	assertRefusal(t, res, 5, "usage_error")
+	if len(stub.requests) != 0 {
+		t.Errorf("requests = %v, want none", stub.requests)
+	}
+}
+
+func TestTokensRevokeDryRunNeedsNoYesAndSendsDryRunTrue(t *testing.T) {
+	stub := &revokeStub{status: 200, body: `{"token":{"id":"` + revokeID + `","name":"ci","prefix":"sel_ab12"},"result":"deleted","dry_run":true}`}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", revokeID, "--dry-run", "--json")
+
+	if res.exit != 0 || !strings.HasSuffix(strings.TrimSpace(res.stdout), `"result":"deleted","dry_run":true}`) {
+		t.Errorf("exit %d stdout %q", res.exit, res.stdout)
+	}
+	if got := strings.Join(stub.requests, "|"); got != "DELETE /api/v1/tokens/"+revokeID+"?dry_run=true" {
+		t.Errorf("requests = %q, want one DELETE with dry_run=true", got)
+	}
+}
+
+func TestTokensRevokeOfAMissingTokenExitsThreeUnlessIfExists(t *testing.T) {
+	stub := &revokeStub{status: 404, body: notFoundBody}
+	srv := stub.start(t)
+
+	missing := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", revokeID, "--yes", "--json")
+	tolerated := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", revokeID, "--yes", "--if-exists", "--json")
+
+	if missing.exit != 3 || missing.stdout != notFoundStdio {
+		t.Errorf("without --if-exists: exit %d stdout %q", missing.exit, missing.stdout)
+	}
+	want := `{"v":1,"token":{"id":"` + revokeID + `"},"result":"unchanged","dry_run":false}` + "\n"
+	if tolerated.exit != 0 || tolerated.stdout != want {
+		t.Errorf("with --if-exists: exit %d stdout %q want %q", tolerated.exit, tolerated.stdout, want)
+	}
+}
+
+func TestTokensRevokeIfExistsStillFailsOnOtherRefusals(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		exit   int
+		stdout string
+	}{
+		{"forbidden", 403, forbiddenBody, 6, forbiddenStdio},
+		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid token."}`, 4, `{"v":1,"error":"unauthorized","message":"Invalid token."}` + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := (&revokeStub{status: tc.status, body: tc.body}).start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", revokeID, "--yes", "--if-exists", "--json")
+
+			if res.exit != tc.exit || res.stdout != tc.stdout {
+				t.Errorf("exit %d stdout %q, want exit %d stdout %q", res.exit, res.stdout, tc.exit, tc.stdout)
+			}
+		})
+	}
+}
+
+func TestTokensRevokeTakesExactlyOneID(t *testing.T) {
+	stub := &revokeStub{status: 200, body: revokeOKBody}
+	srv := stub.start(t)
+
+	none := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", "--yes", "--json")
+	two := runBinary(t, t.TempDir(), srv.URL, "tokens", "revoke", "a", "b", "--yes", "--json")
+
+	assertRefusal(t, none, 5, "usage_error")
+	assertRefusal(t, two, 5, "usage_error")
+	if len(stub.requests) != 0 {
+		t.Errorf("requests = %v, want none", stub.requests)
+	}
+}
+
+func TestTokensRevokeTextReportsOnStderrAndKeepsStdoutEmpty(t *testing.T) {
+	srv := (&revokeStub{status: 200, body: revokeOKBody}).start(t)
+	gone := (&revokeStub{status: 404, body: notFoundBody}).start(t)
+	var out, errOut bytes.Buffer
+
+	if err := tokensRevoke(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut}, revokeID, revokeOptions{yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokensRevoke(&setup.Env{Client: api.New(gone.URL, "tok"), Stdout: &out, Stderr: &errOut}, revokeID, revokeOptions{yes: true, ifExists: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "Revoked token ci (sel_ab12).\nToken " + revokeID + " is already gone.\n"
+	if out.Len() != 0 || errOut.String() != want {
+		t.Errorf("stdout %q stderr %q, want empty and %q", out.String(), errOut.String(), want)
+	}
+}
+
+func TestHelpListsTokensRevokeAsADestructiveWrite(t *testing.T) {
+	_, stdout, _ := execute("help", "--json")
+	var doc struct {
+		Help struct {
+			Commands []struct {
+				Path        string `json:"path"`
+				ExitCodes   []int  `json:"exit_codes"`
+				Mutates     bool   `json:"mutates"`
+				Destructive bool   `json:"destructive"`
+			} `json:"commands"`
+		} `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, c := range doc.Help.Commands {
+		if c.Path == "tokens revoke" {
+			listed = len(c.ExitCodes) > 0 && c.Mutates && c.Destructive
+		}
+	}
+	if !listed {
+		t.Error("help --json lacks tokens revoke with exit_codes, mutates and destructive")
+	}
+}
