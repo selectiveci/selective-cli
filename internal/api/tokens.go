@@ -86,3 +86,37 @@ func (c *Client) CurrentToken() (*Token, error) {
 	}
 	return &out.Token, nil
 }
+
+type MintRequest struct {
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+	Organization string   `json:"organization,omitempty"`
+	Repos        []string `json:"repos,omitempty"`
+	ExpiresInS   int64    `json:"expires_in_s,omitempty"`
+}
+
+type MintedToken struct {
+	Token     map[string]any
+	Plaintext string
+	Result    string
+	DryRun    bool
+}
+
+func (c *Client) MintToken(req MintRequest, dryRun bool) (*MintedToken, error) {
+	params := url.Values{}
+	if dryRun {
+		params.Set("dry_run", "true")
+	}
+	var wire struct {
+		Token  map[string]any `json:"token"`
+		Result string         `json:"result"`
+		DryRun bool           `json:"dry_run"`
+	}
+	if err := c.do("POST", withQuery("/api/v1/tokens", params), req, http.StatusOK, &wire); err != nil {
+		return nil, err
+	}
+	plaintext, _ := wire.Token["token"].(string)
+	delete(wire.Token, "token")
+	return &MintedToken{Token: wire.Token, Plaintext: plaintext, Result: wire.Result, DryRun: wire.DryRun}, nil
+}

@@ -21,15 +21,16 @@ var tokenReadAnnotations = map[string]string{"exit_codes": "0,3,4,5,6"}
 func tokensCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tokens",
-		Short: "List your API tokens and inspect the one in use",
-		Long: `Read API tokens.
+		Short: "List, inspect, create and revoke API tokens",
+		Long: `Manage API tokens.
 
   sel tokens list    Your tokens, with the scope of each
   sel tokens show    The token this command line is using
+  sel tokens create  Create a token; its secret goes to a sink you name
   sel tokens revoke  Revoke one of your tokens`,
 		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(tokensListCmd(), tokensShowCmd(), tokensRevokeCmd())
+	cmd.AddCommand(tokensListCmd(), tokensShowCmd(), tokensCreateCmd(), tokensRevokeCmd())
 	return cmd
 }
 
