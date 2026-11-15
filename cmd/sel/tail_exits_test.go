@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,4 +68,25 @@ func TestTailWithAMalformedHostIsAUsageError(t *testing.T) {
 
 func TestTailWithAnUnresolvableHostStaysANetworkError(t *testing.T) {
 	assertRefusal(t, runBinary(t, gitRepo(t), "https://nope.invalid", "tail", "--json"), 4, "network_error")
+}
+
+func TestTailLookupRefusedForScopeOrPermissionExitsSix(t *testing.T) {
+	for _, code := range []string{"insufficient_scope", "forbidden"} {
+		t.Run(code, func(t *testing.T) {
+			srv := tailServer{lookupStatus: http.StatusForbidden, lookupBody: `{"error":"` + code + `","message":"no"}`}.start(t)
+
+			res := runBinary(t, gitRepo(t), srv.URL, "tail", "--json")
+
+			assertRefusal(t, res, 6, code)
+		})
+	}
+}
+
+func TestTailDeclaresExitSixInTheSchemaAndTheHelpText(t *testing.T) {
+	_, schema, _ := execute("help", "tail", "--json")
+	_, help, _ := execute("tail", "--help")
+
+	if !strings.Contains(schema, `"exit_codes":[0,1,2,3,4,5,6,8]`) || !strings.Contains(help, "\n  6  ") {
+		t.Errorf("schema %s\nhelp %s", schema, help)
+	}
 }
