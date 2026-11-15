@@ -272,14 +272,6 @@ func TestSelTestOutcomes(t *testing.T) {
 	}
 }
 
-func TestSelTestRefusesAnArgumentThatIsNotAfterTheDash(t *testing.T) {
-	res := selTest(t, pytestProject(t), newFakeAPI(t, selected), "tests/")
-
-	if events := stdoutEvents(t, res.stdout); res.exit != 5 || events[len(events)-1]["error"] != "usage_error" {
-		t.Errorf("exit %d stdout %s, want exit 5 with a usage_error", res.exit, res.stdout)
-	}
-}
-
 func TestSelTestErrorsExitByCodeAndEndTheStreamWithAnErrorObject(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -468,5 +460,136 @@ func TestSelTestListPrintsTheSelectionWithIdsAndRunsNothing(t *testing.T) {
 	}
 	if got := ranIDs(t, ran); len(got) != 0 {
 		t.Errorf("--list ran %v", got)
+	}
+}
+
+func TestSelTestListUnderAFullOutcomeCarriesTheIDsUnderThePathsAndEndsInASummary(t *testing.T) {
+	api := newFakeAPI(t, everything)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+
+	res := selTest(t, dir, api, "--list", "tests")
+
+	events := stdoutEvents(t, res.stdout)
+	sel := firstNamed(events, "selection")
+	want := []string{"tests/test_calc.py::test_add", "tests/test_calc.py::test_sub"}
+	last := events[len(events)-1]
+	if res.exit != 0 || !slices.Equal(anyStrings(sel["ids"]), want) || last["event"] != "summary" || last["selected"] != 2.0 {
+		t.Errorf("exit %d selection %v last %v, want ids %v and a closing summary", res.exit, sel, last, want)
+	}
+	if got := ranIDs(t, ran); len(got) != 0 {
+		t.Errorf("--list ran %v", got)
+	}
+}
+
+func pathsProject(t *testing.T) string {
+	t.Helper()
+	dir := pytestProject(t)
+	if err := os.MkdirAll(filepath.Join(dir, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_IDS", "tests/test_calc.py::test_add,tests/test_calc.py::test_sub,other/test_o.py::test_x")
+	return dir
+}
+
+func TestSelTestPathsFilterTheCandidatesAndTheDiffStillDrivesSelection(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+
+	res := selTest(t, dir, api, "tests")
+
+	body := api.firstSelection(t)
+	candidates := []string{}
+	for _, c := range body["test_cases"].([]any) {
+		candidates = append(candidates, fmt.Sprint(c.(map[string]any)["id"]))
+	}
+	if res.exit != 0 || !slices.Equal(candidates, []string{"tests/test_calc.py::test_add", "tests/test_calc.py::test_sub"}) {
+		t.Errorf("exit %d candidates %v, want only the tests under tests/", res.exit, candidates)
+	}
+	if got := anyStrings(body["changed"]); !slices.Equal(got, []string{"src/calc.py"}) {
+		t.Errorf("changed = %v, want the git diff and not the paths", got)
+	}
+	if got := ranIDs(t, ran); !slices.Equal(got, []string{"tests/test_calc.py::test_sub"}) {
+		t.Errorf("ran %v, want the server's pick among the candidates", got)
+	}
+}
+
+func TestSelTestAFullOutcomeRunsEverythingUnderThePathsOnly(t *testing.T) {
+	api := newFakeAPI(t, everything)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+
+	res := selTest(t, dir, api, "tests", "--against", "main")
+
+	sel := firstNamed(stdoutEvents(t, res.stdout), "selection")
+	if got := ranIDs(t, ran); res.exit != 0 || len(got) != 2 || sel["total"] != 2.0 || sel["selected"] != 2.0 {
+		t.Errorf("exit %d ran %v selection %v, want the two tests under tests/", res.exit, got, sel)
+	}
+}
+
+func TestSelTestAPathThatDoesNotExistIsAUsageErrorBeforeAnyRequest(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	runnerEnv(t)
+
+	res := selTest(t, pathsProject(t), api, "tests", "nope/")
+
+	events := stdoutEvents(t, res.stdout)
+	if last := events[len(events)-1]; res.exit != 5 || last["error"] != "usage_error" || !strings.Contains(fmt.Sprint(last["message"]), "nope") {
+		t.Errorf("exit %d last line %v, want exit 5 naming the missing path", res.exit, last)
+	}
+	if len(api.selections) != 0 {
+		t.Errorf("the server got %d selection requests, want none", len(api.selections))
+	}
+}
+
+func TestSelTestAPathWithNoTestsSelectsNothingAndExitsZero(t *testing.T) {
+	api := newFakeAPI(t, everything)
+	ran := runnerEnv(t)
+	dir := pathsProject(t)
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	res := selTest(t, dir, api, "docs")
+
+	events := stdoutEvents(t, res.stdout)
+	last := events[len(events)-1]
+	if got := ranIDs(t, ran); res.exit != 0 || len(got) != 0 || last["event"] != "summary" || last["selected"] != 0.0 {
+		t.Errorf("exit %d ran %v last %v, want zero selected and exit 0", res.exit, got, last)
+	}
+}
+
+func TestHelpJSONShowsTestWithItsAnnotationsAndNoTransport(t *testing.T) {
+	code, stdout, _ := execute("help", "--json")
+
+	var doc struct {
+		Help struct {
+			Commands []map[string]any `json:"commands"`
+		} `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || code != 0 {
+		t.Fatalf("help --json exit %d: %v", code, err)
+	}
+	var found map[string]any
+	for _, c := range doc.Help.Commands {
+		if c["path"] == "__transport" {
+			t.Error("help --json lists __transport")
+		}
+		if c["path"] == "test" {
+			found = c
+		}
+	}
+	if found == nil {
+		t.Fatal("help --json has no test command")
+	}
+	if codes := fmt.Sprint(found["exit_codes"]); codes != "[0 1 3 4 5 6 8 130]" {
+		t.Errorf("exit_codes = %s", codes)
+	}
+	if events := fmt.Sprint(found["events"]); events != "[build_start selection test_fail progress heartbeat summary]" {
+		t.Errorf("events = %s", events)
+	}
+	if found["sends_paths"] != true || found["mutates"] != nil {
+		t.Errorf("sends_paths = %v mutates = %v, want true and absent", found["sends_paths"], found["mutates"])
 	}
 }

@@ -805,3 +805,28 @@ func runWithBlockedWrite(t *testing.T, command string) {
 		t.Fatal("Run is stuck in a blocked command write past its timeout")
 	}
 }
+
+func TestUnderAnyMatchesWholePathSegmentsOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		file  string
+		paths []string
+		want  bool
+	}{
+		{"no paths means every test", "spec/a_spec.rb", nil, true},
+		{"the file itself", "spec/a_spec.rb", []string{"spec/a_spec.rb"}, true},
+		{"a directory above it", "spec/models/a_spec.rb", []string{"spec"}, true},
+		{"a leading ./ on the test's path", "./spec/a_spec.rb", []string{"spec"}, true},
+		{"the current directory", "spec/a_spec.rb", []string{"."}, true},
+		{"a sibling directory", "spec/a_spec.rb", []string{"lib"}, false},
+		{"a name prefix is not a directory", "tests/test_calc.py", []string{"tests/test"}, false},
+		{"any one of several paths", "lib/b_spec.rb", []string{"spec", "lib"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := underAny(tc.file, tc.paths); got != tc.want {
+				t.Errorf("underAny(%q, %v) = %v, want %v", tc.file, tc.paths, got, tc.want)
+			}
+		})
+	}
+}
