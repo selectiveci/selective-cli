@@ -85,7 +85,7 @@ func (c *Client) doWith(header http.Header, method, path string, body any, want 
 	clk := currentClock()
 	for attempt := 1; ; attempt++ {
 		err := c.attempt(header, method, path, data, want, out)
-		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !transient(err) || c.declinesRetry(err) {
+		if err == nil || !retryable || attempt == maxAttempts || ctx.Err() != nil || !Transient(err) || c.declinesRetry(err) {
 			return withAttempts(err, attempt)
 		}
 		pause := backoff(attempt, err)

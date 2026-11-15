@@ -122,18 +122,28 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 	}
 
 	var buildID string
+	var lastTransient error
 	polling := client.WithoutRateLimitRetry()
 	err := wait.Poll(ctx, opts, func(checkCtx context.Context) (bool, time.Duration, error) {
 		var err error
 		buildID, err = lookupOnce(checkCtx, polling, repo, sha)
+		lastTransient = nil
 		var apiErr *api.Error
 		if errors.As(err, &apiErr) && (apiErr.Status == http.StatusTooManyRequests || apiErr.Code == contract.RateLimited) {
+			lastTransient = err
 			return false, wait.RetryAfter(err), nil
+		}
+		if api.Transient(err) && ctx.Err() == nil {
+			lastTransient = err
+			return false, 0, nil
 		}
 		return buildID != "", 0, err
 	})
 	var expired *wait.ExpiredError
 	if errors.As(err, &expired) {
+		if lastTransient != nil {
+			return "", lastTransient
+		}
 		missing.Message += fmt.Sprintf(" within %s", expired.Limit)
 		return "", missing
 	}
@@ -141,10 +151,20 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 }
 
 func deadlineCause(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		return context.Cause(ctx)
+	if ctx.Err() == nil {
+		return err
 	}
-	return err
+	cause := context.Cause(ctx)
+	var timedOut *contract.Error
+	var fielded contract.Fielded
+	if !errors.As(cause, &timedOut) || !errors.As(err, &fielded) {
+		return cause
+	}
+	attempts, ok := fielded.ErrorFields()["attempts"]
+	if !ok {
+		return cause
+	}
+	return &contract.Error{Code: timedOut.Code, Message: timedOut.Message, Fields: map[string]any{"attempts": attempts}}
 }
 
 var (

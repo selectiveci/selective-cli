@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -108,7 +110,21 @@ func TestFindBuildTreatsAnyTooManyRequestsStatusAsARateLimit(t *testing.T) {
 	}
 }
 
-func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *testing.T) {
+func assertRefused(t *testing.T, err error, code contract.Code, exit int) map[string]any {
+	t.Helper()
+	got, _ := refuse(err)
+	var coded contract.Coded
+	if !errors.As(err, &coded) || coded.ErrorCode() != code || got != exit {
+		t.Fatalf("err = %v exit %d, want %s exit %d", err, got, code, exit)
+	}
+	var fielded contract.Fielded
+	if errors.As(err, &fielded) {
+		return fielded.ErrorFields()
+	}
+	return nil
+}
+
+func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuildWhenTheWaitExpires(t *testing.T) {
 	t.Cleanup(api.SetClock(&fakeClock{}))
 	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
@@ -116,12 +132,107 @@ func TestFindBuildReportsAStalledLookupAsANetworkFailureNotAMissingBuild(t *test
 	t.Cleanup(stalled.Close)
 	client := api.New(stalled.URL, "tok")
 	client.HTTP.Timeout = 100 * time.Millisecond
-	began := time.Now()
 
-	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour})
+	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: 250 * time.Millisecond})
 
-	var coded contract.Coded
-	if !errors.As(err, &coded) || coded.ErrorCode() != contract.NetworkError || time.Since(began) > 5*time.Second {
-		t.Errorf("err = %v after %s, want network_error, not no_build", err, time.Since(began))
+	fields := assertRefused(t, err, contract.NetworkError, contract.ExitRetryable)
+	if attempts, _ := fields["attempts"].(int); attempts < 2 {
+		t.Errorf("fields = %v, want attempts of at least 2", fields)
+	}
+}
+
+func TestFindBuildRidesOutAServerErrorBurstLongerThanTheClientsAttempts(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
+	unavailable := func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
+	client, calls := lookupServer(t, unavailable, unavailable, unavailable, unavailable, unavailable, found)
+	clock := &fakeClock{}
+
+	id, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Hour, Clock: clock})
+
+	if err != nil || id != "b9" || calls.Load() != 6 || !slices.Equal(clock.sleeps, []time.Duration{2 * time.Second}) {
+		t.Errorf("id=%q err=%v lookups=%d sleeps=%v, want b9 after 6 lookups and one 2s wait", id, err, calls.Load(), clock.sleeps)
+	}
+}
+
+func TestFindBuildExpiresAsTheTransientErrorWhenTheLastLookupFailedTransiently(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
+	unavailable := func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
+	client, calls := lookupServer(t, unavailable)
+
+	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: 10 * time.Minute, Clock: &fakeClock{}})
+
+	fields := assertRefused(t, err, contract.ServerError, contract.ExitRetryable)
+	if fields["attempts"] != 3 || calls.Load() <= 3 {
+		t.Errorf("fields = %v after %d lookups, want attempts 3 and polling past the first poll", fields, calls.Load())
+	}
+}
+
+func TestFindBuildExpiresAsNoBuildWhenTheLastLookupWasAMissingBuild(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
+	unavailable := func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
+	missing := func(w http.ResponseWriter) { w.WriteHeader(http.StatusNotFound) }
+	client, _ := lookupServer(t, unavailable, unavailable, unavailable, missing)
+
+	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: time.Minute, Clock: &fakeClock{}})
+
+	assertRefused(t, err, contract.NoBuild, contract.ExitNotFound)
+}
+
+func TestFindBuildExpiresAsRateLimitedWhenTheLastLookupWasRateLimited(t *testing.T) {
+	client, _ := lookupServer(t, rateLimited)
+
+	_, err := findBuild(context.Background(), client, "acme/widget", "abc1234", wait.Options{Limit: 20 * time.Second, Clock: &fakeClock{}})
+
+	fields := assertRefused(t, err, contract.RateLimited, contract.ExitRetryable)
+	if fields["retry_after_s"] != 7 {
+		t.Errorf("fields = %v, want retry_after_s 7", fields)
+	}
+}
+
+func inGitRepoWithOrigin(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	env := append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"remote", "add", "origin", "https://github.com/acme/widget.git"},
+		{"commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = dir, env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+}
+
+func TestRunTimeoutAfterARetriedLookupExitsEightWithTheAttempts(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
+	inGitRepoWithOrigin(t)
+	var lookups atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if lookups.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	code, err := Run(api.New(srv.URL, "tok"), Options{Commit: "abc1234", Format: "ndjson", Timeout: 200 * time.Millisecond})
+
+	fields := assertRefused(t, err, contract.Timeout, contract.ExitTimeout)
+	if code != contract.ExitTimeout || fields["attempts"] != 2 || lookups.Load() != 2 {
+		t.Errorf("exit %d fields %v after %d lookups, want exit 8 with attempts 2 after 2 lookups", code, fields, lookups.Load())
 	}
 }
