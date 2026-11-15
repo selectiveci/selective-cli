@@ -10,7 +10,10 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
-const pendingBody = `{"result":"pending_approval","dry_run":false,"approval":{"id":"a1","url":"https://selective.test/acme/approvals/a1","status":"pending","expires_at":"2026-11-16T00:00:00Z"}}`
+const (
+	approvalBytes = `{"id":"a1","url":"https://selective.test/acme/approvals/a1","status":"pending","expires_at":"2026-11-16T00:00:00Z"}`
+	pendingBody   = `{"result":"pending_approval","dry_run":false,"approval":` + approvalBytes + `}`
+)
 
 func replying(t *testing.T, status int, body string, hits *atomic.Int32) *Client {
 	t.Helper()
@@ -43,8 +46,8 @@ func TestAPendingResultIsReturnedAsPendingApprovalWhateverTheStatus(t *testing.T
 		if !errors.As(err, &pending) || pending.DryRun != c.dryRun || (pending.Approval != nil) != c.approval {
 			t.Fatalf("%d: err = %#v, want PendingApproval{DryRun:%v, approval:%v}", c.status, err, c.dryRun, c.approval)
 		}
-		if c.approval && (pending.Approval["id"] != "a1" || pending.Approval["url"] == "") {
-			t.Errorf("approval = %v, want id and url kept", pending.Approval)
+		if c.approval && string(pending.Approval) != approvalBytes {
+			t.Errorf("approval = %s, want the server's bytes %s", pending.Approval, approvalBytes)
 		}
 		if pending.ExitCode() != contract.ExitPending || pending.ErrorCode() != contract.PendingApproval {
 			t.Errorf("code %q exit %d, want pending_approval and 7", pending.ErrorCode(), pending.ExitCode())
@@ -59,6 +62,25 @@ func TestA202WithoutAPendingResultIsAServerError(t *testing.T) {
 
 	if codeOf(t, err) != contract.ServerError {
 		t.Errorf("err = %v, want server_error", err)
+	}
+}
+
+func TestATruncatedSuccessBodyIsAnErrorEvenWhenTheCallerDecodesNothing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		_, _ = buf.WriteString("HTTP/1.1 202 Accepted\r\nContent-Length: 100\r\n\r\n0123456789")
+		_ = buf.Flush()
+		_ = conn.Close()
+	}))
+	t.Cleanup(srv.Close)
+
+	err := New(srv.URL, "tok").RevokeCurrent()
+
+	if err == nil {
+		t.Error("a 202 cut off after 10 of 100 bytes returned nil, want the read error")
 	}
 }
 

@@ -139,7 +139,7 @@ func (c *Client) attempt(header http.Header, method, path string, data []byte, w
 			return err
 		}
 	}
-	if out != nil {
+	if out != nil || readErr != nil {
 		err := readErr
 		if err == nil {
 			err = json.NewDecoder(bytes.NewReader(payload)).Decode(out)

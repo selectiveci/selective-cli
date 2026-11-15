@@ -112,7 +112,7 @@ and prints the id-only object with result "unchanged".
 Agent tokens cannot revoke tokens: the server answers 403 (exit 6).`,
 		Example:     "  sel tokens revoke 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f --yes\n  sel tokens revoke ID --dry-run",
 		Args:        cobra.ExactArgs(1),
-		Annotations: map[string]string{"exit_codes": "0,3,4,5,6", "mutates": "true", "destructive": "true"},
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true", "destructive": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !tokenID.MatchString(args[0]) {
 				return contract.Errorf(contract.UsageError, "%q is not a token id (a UUID, shown by sel tokens list); to revoke the token this command line uses, run: sel auth logout", args[0])

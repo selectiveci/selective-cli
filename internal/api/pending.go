@@ -12,7 +12,7 @@ const pendingApprovalResult = "pending_approval"
 
 type PendingApproval struct {
 	DryRun   bool
-	Approval map[string]any
+	Approval json.RawMessage
 }
 
 func (p *PendingApproval) Error() string {
@@ -24,11 +24,14 @@ func (p *PendingApproval) ExitCode() int            { return contract.ExitPendin
 
 func pendingResponse(status int, body []byte, path string) error {
 	var probe struct {
-		Result   string         `json:"result"`
-		DryRun   bool           `json:"dry_run"`
-		Approval map[string]any `json:"approval"`
+		Result   string          `json:"result"`
+		DryRun   bool            `json:"dry_run"`
+		Approval json.RawMessage `json:"approval"`
 	}
 	if json.Unmarshal(body, &probe) == nil && probe.Result == pendingApprovalResult {
+		if string(probe.Approval) == "null" {
+			probe.Approval = nil
+		}
 		return &PendingApproval{DryRun: probe.DryRun, Approval: probe.Approval}
 	}
 	if status == http.StatusAccepted {

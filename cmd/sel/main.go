@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -87,7 +88,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	var pending *api.PendingApproval
 	if errors.As(err, &pending) {
-		reportPending(root, cmd, args, stdout, stderr, pending)
+		reportPending(errorObjectOnStdout(cmd, args, stdout), secretFlagGivenFor(root, cmd, args), stdout, stderr, pending)
 		return cmd, pending.ExitCode()
 	}
 	coded := classify(err, entered)
@@ -106,27 +107,31 @@ func pendingSentence(p *api.PendingApproval) string {
 	if p.DryRun {
 		return "Dry run: this needs a person's approval; nothing was requested."
 	}
-	url, _ := p.Approval["url"].(string)
-	expires, _ := p.Approval["expires_at"].(string)
+	var approval struct {
+		URL       string `json:"url"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	_ = json.Unmarshal(p.Approval, &approval)
+	url, expires := approval.URL, approval.ExpiresAt
 	if url == "" {
 		return "Approval needed. Run the same command again once it is approved."
 	}
 	return fmt.Sprintf("Approval needed: %s (expires %s UTC). Run the same command again once it is approved.", url, utcMinute(expires))
 }
 
-func reportPending(root, cmd *cobra.Command, args []string, stdout, stderr io.Writer, p *api.PendingApproval) {
-	if !errorObjectOnStdout(cmd, args, stdout) {
+func reportPending(asJSON, secretOnStderr bool, stdout, stderr io.Writer, p *api.PendingApproval) {
+	if !asJSON {
 		fmt.Fprintln(stderr, pendingSentence(p))
 		return
 	}
 	sink := stdout
-	if secretFlagGivenFor(root, cmd, args) {
+	if secretOnStderr {
 		sink = stderr
 	}
 	_ = format.Document(sink, struct {
-		Result   string         `json:"result"`
-		DryRun   bool           `json:"dry_run"`
-		Approval map[string]any `json:"approval,omitempty"`
+		Result   string          `json:"result"`
+		DryRun   bool            `json:"dry_run"`
+		Approval json.RawMessage `json:"approval,omitempty"`
 	}{"pending_approval", p.DryRun, p.Approval})
 }
 
