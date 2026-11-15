@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -85,6 +86,11 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 		fmt.Fprintf(stderr, "Error: %s\n", err)
 		return cmd, contract.ExitInterrupted
 	}
+	var pending *api.PendingApproval
+	if errors.As(err, &pending) {
+		reportPending(errorObjectOnStdout(cmd, args, stdout), secretFlagGivenFor(root, cmd, args), stdout, stderr, pending)
+		return cmd, pending.ExitCode()
+	}
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := stdout
@@ -95,6 +101,38 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()
+}
+
+func pendingSentence(p *api.PendingApproval) string {
+	if p.DryRun {
+		return "Dry run: this needs a person's approval; nothing was requested."
+	}
+	var approval struct {
+		URL       string `json:"url"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	_ = json.Unmarshal(p.Approval, &approval)
+	url, expires := approval.URL, approval.ExpiresAt
+	if url == "" {
+		return "Approval needed. Run the same command again once it is approved."
+	}
+	return fmt.Sprintf("Approval needed: %s (expires %s UTC). Run the same command again once it is approved.", url, utcMinute(expires))
+}
+
+func reportPending(asJSON, secretOnStderr bool, stdout, stderr io.Writer, p *api.PendingApproval) {
+	if !asJSON {
+		fmt.Fprintln(stderr, pendingSentence(p))
+		return
+	}
+	sink := stdout
+	if secretOnStderr {
+		sink = stderr
+	}
+	_ = format.Document(sink, struct {
+		Result   string          `json:"result"`
+		DryRun   bool            `json:"dry_run"`
+		Approval json.RawMessage `json:"approval,omitempty"`
+	}{"pending_approval", p.DryRun, p.Approval})
 }
 
 func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bool {

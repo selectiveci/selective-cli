@@ -143,7 +143,7 @@ func authLogoutCmd() *cobra.Command {
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:         "logout",
-		Annotations: map[string]string{"exit_codes": "0,5,9", "mutates": "true"},
+		Annotations: map[string]string{"exit_codes": "0,5,7,9", "mutates": "true"},
 		Short:       "Revoke this machine's token and forget it",
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

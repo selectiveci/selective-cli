@@ -308,6 +308,10 @@ func Logout(opts LogoutOptions) error {
 	}
 
 	revokeErr := api.New(host, cred.Token).RevokeCurrent()
+	var pending *api.PendingApproval
+	if errors.As(revokeErr, &pending) {
+		return revokeErr
+	}
 	if err := credentials.Forget(cfg, host); err != nil {
 		return err
 	}
