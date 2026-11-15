@@ -1,8 +1,11 @@
 package localrun
 
 import (
+	"context"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -123,10 +126,22 @@ func TestClientCommandRefusesRubyCoreBelowZeroDotThree(t *testing.T) {
 	}
 }
 
+func TestClientCommandRefusesPrereleasesOfTheMinimumRubyCore(t *testing.T) {
+	for _, version := range []string{"0.3.0.pre1", "0.3.0.rc.1", "0.3.0pre1"} {
+		t.Run(version, func(t *testing.T) {
+			_, err := ClientCommand(project(t, map[string]string{"Gemfile.lock": lockWithCore(version)}), RSpec, nil)
+			if codeOf(err) != contract.RunnerMissing {
+				t.Fatalf("code %q (%v), want runner_missing", codeOf(err), err)
+			}
+		})
+	}
+}
+
 func TestClientCommandAcceptsRubyCoreFromZeroDotThree(t *testing.T) {
 	for name, lock := range map[string]string{
 		"0.3.0": lockWithCore("0.3.0"), "0.10.0 is newer than 0.3.0": lockWithCore("0.10.0"),
 		"1.0.0": lockWithCore("1.0.0"), "a platform gem": platformLock,
+		"a prerelease of a later version": lockWithCore("0.3.1.pre1"), "a fourth numeric segment": lockWithCore("0.3.0.1"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := ClientCommand(project(t, map[string]string{"Gemfile.lock": lock}), RSpec, nil)
@@ -187,5 +202,31 @@ func TestClientCommandFindsTheProjectVenvDirectory(t *testing.T) {
 	got, err := ClientCommand(root, Pytest, nil)
 	if want := []string{filepath.Join(root, "venv", "bin", "selective"), "pytest"}; err != nil || !slices.Equal(got, want) {
 		t.Errorf("got %v, %v; want %v", got, err, want)
+	}
+}
+
+func TestClientCommandSkipsAPytestClientThatIsNotExecutableAndKeepsSearching(t *testing.T) {
+	root := project(t, map[string]string{"venv/bin/selective": pytestScript, "later/selective": pytestScript})
+	if err := os.Chmod(filepath.Join(root, "venv", "bin", "selective"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"VIRTUAL_ENV=" + filepath.Join(root, "venv"), "PATH=" + filepath.Join(root, "later")}
+	got, err := ClientCommand(project(t, nil), Pytest, env)
+	if want := []string{filepath.Join(root, "later", "selective"), "pytest"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("got %v, %v; want %v", got, err, want)
+	}
+}
+
+func TestEveryEntryPointRefusesWindowsBeforeLookingAtTheProject(t *testing.T) {
+	goos = "windows"
+	t.Cleanup(func() { goos = runtime.GOOS })
+	empty := project(t, nil)
+	_, detectErr := DetectFramework(empty, "")
+	_, commandErr := ClientCommand(empty, RSpec, nil)
+	_, runErr := Launch{Root: empty, Framework: RSpec}.Run(context.Background(), io.Discard, Options{})
+	for name, err := range map[string]error{"DetectFramework": detectErr, "ClientCommand": commandErr, "Run": runErr} {
+		if codeOf(err) != contract.UsageError || !strings.Contains(err.Error(), "Windows") {
+			t.Errorf("%s: code %q (%v), want usage_error naming Windows", name, codeOf(err), err)
+		}
 	}
 }

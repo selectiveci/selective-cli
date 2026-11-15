@@ -197,6 +197,44 @@ func TestLaunchEscalatesToKillWhenTheClientIgnoresInterruptAndTerminate(t *testi
 	}
 }
 
+func TestLaunchStopsAClientThatStaysAliveAfterReportingItsFinishAndCallsItARunnerError(t *testing.T) {
+	frames := `{"type":"test_manifest","data":{"test_cases":[{"id":"a","file_path":"f"}]}}\n{"type":"test_case_result","data":{"id":"a","status":"passed"}}\n{"type":"report_at_finish","data":{}}\n`
+	l := scriptedClient(t, "echo $$ > \"$PIDF\"\n{ printf '"+frames+"'; sleep 30; } | \"$SELECTIVE_TRANSPORT\" --stdio >/dev/null\n")
+	pidf := filepath.Join(l.dir, "pid")
+	t.Setenv("PIDF", pidf)
+	done := make(chan error, 1)
+	go func() { _, err := l.run(context.Background()); done <- err }()
+	pid, _ := strconv.Atoi(awaitFile(t, pidf))
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	select {
+	case err := <-done:
+		if codeOf(err) != contract.RunnerError {
+			t.Errorf("err %v, want runner_error for a client that outlives its own report", err)
+		}
+	case <-time.After(l.launch.Grace + 2*time.Second):
+		t.Fatal("Launch kept waiting for a client that reported its finish and stayed alive")
+	}
+	if !gone(pid) {
+		t.Error("the client survived the escalation")
+	}
+}
+
+func TestLaunchDoesNotCallARunnerErrorWhenTheRunnerExitsCleanlyButADescendantHoldsItsOutputOpen(t *testing.T) {
+	frames := `{"type":"test_manifest","data":{"test_cases":[{"id":"a","file_path":"f"}]}}\n{"type":"test_case_result","data":{"id":"a","status":"passed"}}\n{"type":"report_at_finish","data":{}}\n`
+	l := scriptedClient(t, "sleep 30 &\necho $! > \"$CHILDF\"\n{ printf '"+frames+"'; sleep 30; } | \"$SELECTIVE_TRANSPORT\" --stdio >/dev/null &\nsleep 0.3\nexit 0\n")
+	l.launch.Grace = 500 * time.Millisecond
+	childf := filepath.Join(l.dir, "child")
+	t.Setenv("CHILDF", childf)
+	_, err := l.run(context.Background())
+	if err != nil {
+		t.Errorf("err %v, want a clean result for a runner that exited 0 inside the grace", err)
+	}
+	child, _ := strconv.Atoi(awaitFile(t, childf))
+	if !gone(child) {
+		t.Error("the descendant outlived the launch")
+	}
+}
+
 func TestLaunchSweepsGrandchildrenAndDoesNotHangOnTheirOpenPipes(t *testing.T) {
 	l := scriptedClient(t, "sleep 60 &\necho $! > \"$CHILDF\"\nexit 0\n")
 	childf := filepath.Join(l.dir, "child")
