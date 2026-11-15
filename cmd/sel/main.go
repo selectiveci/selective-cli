@@ -64,6 +64,9 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
+	if secretFlagGiven(root, args) {
+		helpToStderr(root, args, stderr)
+	}
 	entered := false
 	markEntered(root, &entered)
 
@@ -84,7 +87,11 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
-		_ = format.Error(stdout, coded)
+		sink := stdout
+		if secretFlagGivenFor(root, cmd, args) {
+			sink = stderr
+		}
+		_ = format.Error(sink, coded)
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()
@@ -100,18 +107,74 @@ func errorObjectOnStdout(cmd *cobra.Command, args []string, stdout io.Writer) bo
 	return format.JSONMode(cmd.Flags(), stdout)
 }
 
-func jsonFlagGiven(args []string) bool {
+func helpToStderr(root *cobra.Command, args []string, stderr io.Writer) {
+	help, usage := root.HelpFunc(), root.UsageFunc()
+	root.SetHelpFunc(func(c *cobra.Command, helpArgs []string) {
+		if secretFlagGivenFor(root, c, args) {
+			c.SetOut(stderr)
+		}
+		help(c, helpArgs)
+	})
+	root.SetUsageFunc(func(c *cobra.Command) error {
+		if secretFlagGivenFor(root, c, args) {
+			c.SetOut(stderr)
+		}
+		return usage(c)
+	})
+}
+
+func secretFlagGiven(root *cobra.Command, args []string) bool {
+	return anyFlagGiven(args, treeSecretFlags(root))
+}
+
+func secretFlagGivenFor(root, resolved *cobra.Command, args []string) bool {
+	if resolved != nil && resolved.Runnable() && resolved.Name() != "help" {
+		return anyFlagGiven(args, ownSecretFlags(resolved))
+	}
+	return secretFlagGiven(root, args)
+}
+
+func anyFlagGiven(args, names []string) bool {
+	if end := slices.Index(args, "--"); end >= 0 {
+		args = args[:end]
+	}
+	return slices.ContainsFunc(names, func(name string) bool { return flagGiven(args, name) })
+}
+
+func ownSecretFlags(c *cobra.Command) []string {
+	var names []string
+	for _, name := range strings.Split(c.Annotations["secret_flags"], ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func treeSecretFlags(c *cobra.Command) []string {
+	names := ownSecretFlags(c)
+	for _, sub := range c.Commands() {
+		names = append(names, treeSecretFlags(sub)...)
+	}
+	return names
+}
+
+func flagGiven(args []string, name string) bool {
 	return slices.ContainsFunc(args, func(arg string) bool {
-		if arg == "--json" {
+		if arg == "--"+name {
 			return true
 		}
-		value, ok := strings.CutPrefix(arg, "--json=")
+		value, ok := strings.CutPrefix(arg, "--"+name+"=")
 		if !ok {
 			return false
 		}
 		asked, err := strconv.ParseBool(value)
 		return err == nil && asked
 	})
+}
+
+func jsonFlagGiven(args []string) bool {
+	return flagGiven(args, "json")
 }
 
 func isNetworkError(err error) bool {
