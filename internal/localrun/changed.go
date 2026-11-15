@@ -10,7 +10,7 @@ var defaultBaseCandidates = []string{"refs/remotes/origin/main", "refs/remotes/o
 
 func ChangedFiles(dir, against string) ([]string, error) {
 	if _, ok := gitOutput(dir, "rev-parse", "--show-toplevel"); !ok {
-		return nil, contract.Errorf(contract.UsageError, "sel test needs a git checkout to find what changed in %s", dir)
+		return nil, contract.Errorf(contract.GitRepoNotFound, "sel test needs a git checkout to find what changed in %s", dir)
 	}
 	if against == "" {
 		var found bool
