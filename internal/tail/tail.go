@@ -140,10 +140,11 @@ func findBuild(ctx context.Context, client *api.Client, repo, sha string, opts w
 		return buildID != "", 0, err
 	})
 	var expired *wait.ExpiredError
-	if errors.As(err, &expired) {
-		if lastTransient != nil {
-			return "", lastTransient
-		}
+	waitEnded := errors.As(err, &expired) || (err != nil && ctx.Err() != nil)
+	if waitEnded && lastTransient != nil {
+		return "", lastTransient
+	}
+	if expired != nil {
 		missing.Message += fmt.Sprintf(" within %s", expired.Limit)
 		return "", missing
 	}
@@ -208,8 +209,10 @@ func dialError(resp *http.Response, err error) error {
 		status = resp.StatusCode
 	}
 	switch {
-	case status == http.StatusUnauthorized, status == http.StatusForbidden:
-		return contract.Errorf(contract.Unauthorized, "Selective refused the connection (HTTP %d): the token is invalid, expired or can't see this build; run: sel auth login", status)
+	case status == http.StatusUnauthorized:
+		return contract.Errorf(contract.Unauthorized, "Selective refused the connection (HTTP %d): the token is invalid or expired; run: sel auth login", status)
+	case status == http.StatusForbidden:
+		return contract.Errorf(contract.Forbidden, "Selective refused the connection (HTTP %d): the token can't see this build", status)
 	case status == http.StatusNotFound:
 		return contract.Errorf(contract.NotFound, "Selective has no tail for this build (HTTP 404)")
 	case status >= 500:

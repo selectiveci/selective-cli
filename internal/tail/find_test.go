@@ -236,3 +236,17 @@ func TestRunTimeoutAfterARetriedLookupExitsEightWithTheAttempts(t *testing.T) {
 		t.Errorf("exit %d fields %v after %d lookups, want exit 8 with attempts 2 after 2 lookups", code, fields, lookups.Load())
 	}
 }
+
+func TestRunTimeoutDuringThePollSleepAfterATransientLookupKeepsTheAttempts(t *testing.T) {
+	t.Cleanup(api.SetClock(&fakeClock{}))
+	inGitRepoWithOrigin(t)
+	unavailable := func(w http.ResponseWriter) { w.WriteHeader(http.StatusServiceUnavailable) }
+	client, _ := lookupServer(t, unavailable)
+
+	code, err := Run(client, Options{Commit: "abc1234", Format: "ndjson", Wait: time.Hour, Timeout: 200 * time.Millisecond})
+
+	fields := assertRefused(t, err, contract.Timeout, contract.ExitTimeout)
+	if code != contract.ExitTimeout || fields["attempts"] != 3 {
+		t.Errorf("exit %d fields %v, want exit 8 with attempts 3", code, fields)
+	}
+}
