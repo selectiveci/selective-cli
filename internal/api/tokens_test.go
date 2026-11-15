@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -48,5 +50,51 @@ func TestCurrentTokenKeepsNullScopeFieldsNull(t *testing.T) {
 	}
 	if token.Organization != nil || token.Repos != nil || token.ExpiresAt != nil {
 		t.Errorf("token = %+v, want null organization, repos and expires_at", token)
+	}
+}
+
+func TestTokensFollowsNextCursorUntilNull(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		switch r.URL.Query().Get("cursor") {
+		case "":
+			fmt.Fprint(w, `{"tokens":[`+userTokenJSON+`],"next_cursor":"after-1"}`)
+		case "after-1":
+			fmt.Fprint(w, `{"tokens":[`+agentTokenJSON+`],"next_cursor":null}`)
+		default:
+			http.Error(w, "unexpected cursor", http.StatusTeapot)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	page, err := New(srv.URL, "tok").Tokens()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Tokens) != 2 || page.Tokens[0].Name != "laptop" || page.Tokens[1].Name != "ci" || page.NextCursor != nil || page.Notices != nil {
+		t.Errorf("page = %+v", page)
+	}
+	if want := []string{"limit=200", "cursor=after-1&limit=200"}; len(queries) != 2 || queries[0] != want[0] || queries[1] != want[1] {
+		t.Errorf("queries = %v, want %v", queries, want)
+	}
+}
+
+func TestTokensStopsAtTheRequestCeilingAndKeepsTheCursor(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requests.Add(1)
+		fmt.Fprint(w, `{"tokens":[`+userTokenJSON+`],"next_cursor":"`+strconv.Itoa(int(n))+`"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	page, err := New(srv.URL, "tok").Tokens()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != maxTokenRequests || page.NextCursor == nil || len(page.Notices) != 1 || page.Notices[0] != PaginationStoppedEarly {
+		t.Errorf("requests %d, next_cursor %v, notices %v", requests.Load(), page.NextCursor, page.Notices)
 	}
 }
