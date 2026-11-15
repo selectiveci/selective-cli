@@ -160,3 +160,23 @@ func TestAwaitEndsWithTheOutcomeAndCarriesTheApprovalInEveryError(t *testing.T) 
 		})
 	}
 }
+
+func TestAwaitAnnouncesEachPollAsWaitingForApproval(t *testing.T) {
+	var out bytes.Buffer
+
+	_, err := Await(context.Background(), serve(t, ok("pending"), ok("approved")), "a1", wait.Options{Limit: time.Hour, Out: &out, Clock: &fakeClock{}})
+
+	if want := `{"v":1,"event":"waiting","elapsed_s":0,"for":"approval"}` + "\n"; err != nil || out.String() != want {
+		t.Errorf("err = %v, output %q, want %q", err, out.String(), want)
+	}
+}
+
+func TestAwaitForgetsATransientErrorOnceALaterPollAnswers(t *testing.T) {
+	replies := []reply{unavailable, unavailable, unavailable, ok("pending")}
+
+	_, err := Await(context.Background(), serve(t, replies...), "a1", wait.Options{Limit: 5 * time.Second, Clock: &fakeClock{}})
+
+	if exitOf(t, err) != contract.ExitPending || err.Error() != "still pending after 5s; a person must decide it at https://selective.example/a1" {
+		t.Errorf("err = %v, want pending_approval (exit 7), not the stale 503", err)
+	}
+}
