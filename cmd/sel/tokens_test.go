@@ -119,6 +119,30 @@ func TestTokensListTextShowsEachTokensScope(t *testing.T) {
 	}
 }
 
+func TestTokensListTextShowsServerNoticesOnStderrAndLeavesStdoutAlone(t *testing.T) {
+	notices := map[string]string{
+		"":       `{"tokens":[` + userToken + `],"next_cursor":"page-2","notices":["first_notice"]}`,
+		"page-2": `{"tokens":[` + agentToken + `],"next_cursor":null,"notices":["second_notice"]}`,
+	}
+	var out, errOut, plainOut bytes.Buffer
+	srv := (&tokensStub{pages: notices}).start(t)
+	plain := (&tokensStub{pages: twoPages()}).start(t)
+
+	if err := tokensList(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tokensList(&setup.Env{Client: api.New(plain.URL, "tok"), Stdout: &plainOut, Stderr: &bytes.Buffer{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if want := "Notice: first_notice\nNotice: second_notice\n"; errOut.String() != want {
+		t.Errorf("stderr = %q, want %q", errOut.String(), want)
+	}
+	if out.String() != plainOut.String() {
+		t.Errorf("stdout changed by notices:\n%s\nvs\n%s", out.String(), plainOut.String())
+	}
+}
+
 func TestTokensListNeverEchoesAPlaintextSecret(t *testing.T) {
 	leaky := strings.Replace(userToken, `"source"`, `"token":"`+leakedSecret+`","source"`, 1)
 	srv := (&tokensStub{pages: map[string]string{"": `{"tokens":[` + leaky + `],"next_cursor":null,"token":"` + leakedSecret + `"}`}}).start(t)

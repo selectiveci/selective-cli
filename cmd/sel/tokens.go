@@ -153,6 +153,7 @@ func tokensList(env *setup.Env) error {
 	}
 	if len(page.Tokens) == 0 {
 		fmt.Fprintln(env.Stderr, "No tokens.")
+		printNotices(env, page)
 		return nil
 	}
 	w := tabwriter.NewWriter(env.Stdout, 0, 2, 2, ' ', 0)
@@ -163,9 +164,7 @@ func tokensList(env *setup.Env) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	if page.NextCursor != nil {
-		fmt.Fprintf(env.Stderr, "Notice: stopped early after %d tokens; more exist on the server\n", len(page.Tokens))
-	}
+	printNotices(env, page)
 	return nil
 }
 
@@ -197,6 +196,15 @@ func revokeSentence(r *api.Revocation) string {
 		return fmt.Sprintf("Dry run: would revoke token %s.", label)
 	}
 	return fmt.Sprintf("Revoked token %s.", label)
+}
+
+func printNotices(env *setup.Env, page *api.TokensPage) {
+	for _, notice := range page.Notices {
+		if notice == api.PaginationStoppedEarly {
+			notice = fmt.Sprintf("stopped early after %d tokens; more exist on the server", len(page.Tokens))
+		}
+		fmt.Fprintf(env.Stderr, "Notice: %s\n", notice)
+	}
 }
 
 func tokensShow(env *setup.Env) error {
