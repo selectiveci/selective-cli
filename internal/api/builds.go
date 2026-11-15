@@ -72,6 +72,22 @@ func (c *Client) Failures(build string, q FailuresQuery) (*FailuresPage, error) 
 	return &out, nil
 }
 
+type BuildLookup struct {
+	BuildID    string `json:"build_id"`
+	Status     string `json:"status"`
+	RunCount   int    `json:"run_count"`
+	SuiteCount int    `json:"suite_count"`
+}
+
+func (c *Client) LookupBuild(repo, sha string) (*BuildLookup, error) {
+	params := url.Values{"repo": {repo}, "sha": {sha}}
+	var out BuildLookup
+	if err := c.do("GET", "/api/v1/builds/lookup?"+params.Encode(), nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 type BuildsPage struct {
 	Builds     []json.RawMessage `json:"builds"`
 	NextCursor *string           `json:"next_cursor"`
