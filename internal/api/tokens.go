@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 )
 
@@ -41,6 +42,7 @@ func (c *Client) Tokens() (*TokensPage, error) {
 			return nil, err
 		}
 		merged.Tokens = append(merged.Tokens, page.Tokens...)
+		merged.Notices = appendMissing(merged.Notices, page.Notices...)
 		merged.NextCursor = page.NextCursor
 		if page.NextCursor == nil || len(merged.Tokens) >= maxTokens {
 			break
@@ -48,9 +50,18 @@ func (c *Client) Tokens() (*TokensPage, error) {
 		params.Set("cursor", *page.NextCursor)
 	}
 	if merged.NextCursor != nil {
-		merged.Notices = []string{paginationStoppedEarly}
+		merged.Notices = appendMissing(merged.Notices, paginationStoppedEarly)
 	}
 	return merged, nil
+}
+
+func appendMissing(notices []string, add ...string) []string {
+	for _, n := range add {
+		if !slices.Contains(notices, n) {
+			notices = append(notices, n)
+		}
+	}
+	return notices
 }
 
 func (c *Client) CurrentToken() (*Token, error) {

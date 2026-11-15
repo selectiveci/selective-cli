@@ -77,6 +77,20 @@ func TestTokensListWalksEveryPageAndPrintsOneDocument(t *testing.T) {
 	}
 }
 
+func TestTokensListKeepsTheNoticesEveryPageCarries(t *testing.T) {
+	stub := &tokensStub{pages: map[string]string{
+		"":       `{"tokens":[` + userToken + `],"next_cursor":"page-2","notices":["first_notice"]}`,
+		"page-2": `{"tokens":[` + agentToken + `],"next_cursor":null,"notices":["second_notice","first_notice"]}`,
+	}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "tokens", "list", "--json")
+
+	if !strings.HasSuffix(res.stdout, `"next_cursor":null,"notices":["first_notice","second_notice"]}`+"\n") {
+		t.Errorf("stdout %q, want both pages' notices once each", res.stdout)
+	}
+}
+
 func TestTokensListWithNoTokensPrintsAnEmptyList(t *testing.T) {
 	srv := (&tokensStub{pages: map[string]string{"": `{"tokens":[],"next_cursor":null}`}}).start(t)
 
