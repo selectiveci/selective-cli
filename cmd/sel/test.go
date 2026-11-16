@@ -38,7 +38,7 @@ func transportCmd() *cobra.Command {
 
 type testFlags struct {
 	against, framework, suite, org string
-	list                           bool
+	list, passes                   bool
 	timeout                        time.Duration
 }
 
@@ -72,7 +72,7 @@ summary.`,
 		Args: cobra.ArbitraryArgs,
 		Annotations: map[string]string{
 			"exit_codes":  "0,1,3,4,5,6,8,130",
-			"events":      "build_start,selection,test_fail,progress,heartbeat,summary",
+			"events":      "build_start,selection,test_pass,test_fail,progress,heartbeat,summary",
 			"sends_paths": "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -88,6 +88,7 @@ summary.`,
 	cmd.Flags().StringVar(&f.suite, "suite", "", "Suite ID (default: the suite for this checkout's origin)")
 	cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
 	cmd.Flags().BoolVar(&f.list, "list", false, "Print what would run and run nothing")
+	cmd.Flags().BoolVar(&f.passes, "passes", false, "Also emit a test_pass event for each passing test")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Stop the run after this long")
 	return cmd
 }
@@ -154,7 +155,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	ctx, cancel := context.WithTimeout(signalled, f.timeout)
 	defer cancel()
 	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, List: f.list, Paths: plan.paths, Timeout: f.timeout})
+	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, Passes: f.passes, List: f.list, Paths: plan.paths, Timeout: f.timeout})
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
