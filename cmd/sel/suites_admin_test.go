@@ -26,6 +26,7 @@ type archiveStub struct {
 	requests []string
 	status   int
 	body     string
+	twin     string
 }
 
 func (s *archiveStub) start(t *testing.T) *httptest.Server {
@@ -37,7 +38,7 @@ func (s *archiveStub) start(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites" && r.URL.Query().Get("state") == "all":
-			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `,` + archivedSuite + `]}`))
+			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `,` + archivedSuite + s.twin + `]}`))
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
 			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/archive"):
@@ -70,6 +71,42 @@ func TestSuitesArchiveByNameLooksUpAllSuitesAndPutsTheArchiveRoute(t *testing.T)
 	wantRequests := []string{"GET /api/v1/orgs/acme/suites?state=all", "PUT /api/v1/orgs/acme/suites/" + activeSuiteID + "/archive"}
 	if res.exit != 0 || res.stdout != want || !slices.Equal(stub.requests, wantRequests) {
 		t.Errorf("exit %d stdout %q requests %v, want exit 0, %q and %v", res.exit, res.stdout, stub.requests, want, wantRequests)
+	}
+}
+
+func TestSuitesRestoreByNameFindsAnArchivedSuiteAndDeletesTheArchiveRoute(t *testing.T) {
+	restored := strings.Replace(archivedSuite, `"archived_at":"2026-11-10T09:00:00Z"`, `"archived_at":null`, 1)
+	stub := &archiveStub{status: 200, body: archiveOK(restored, "updated", false)}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "restore", "old-minitest", "--org", "acme", "--json")
+
+	want := `{"v":1,"suite":` + restored + `,"result":"updated","dry_run":false}` + "\n"
+	wantRequests := []string{"GET /api/v1/orgs/acme/suites?state=all", "DELETE /api/v1/orgs/acme/suites/" + archivedSuiteID + "/archive"}
+	if res.exit != 0 || res.stdout != want || !slices.Equal(stub.requests, wantRequests) {
+		t.Errorf("exit %d stdout %q requests %v, want exit 0, %q and %v", res.exit, res.stdout, stub.requests, want, wantRequests)
+	}
+}
+
+func TestSuitesArchiveAndRestoreByNameTargetTheSameNamedSuiteTheVerbWouldChange(t *testing.T) {
+	twinID := "33333333-3333-4333-8333-333333333333"
+	twin := `,{"id":"` + twinID + `","name":"web-rspec","type":"rspec","repo":"acme/web","archived_at":"2026-11-01T09:00:00Z","last_run_at":null}`
+	cases := []struct{ verb, method, id string }{
+		{"archive", "PUT", activeSuiteID},
+		{"restore", "DELETE", twinID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.verb, func(t *testing.T) {
+			stub := &archiveStub{status: 200, body: archiveOK(activeSuite, "updated", false), twin: twin}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "suites", tc.verb, "web-rspec", "--org", "acme", "--json")
+
+			want := tc.method + " /api/v1/orgs/acme/suites/" + tc.id + "/archive"
+			if res.exit != 0 || stub.requests[len(stub.requests)-1] != want {
+				t.Errorf("exit %d requests %v, want the last to be %q", res.exit, stub.requests, want)
+			}
+		})
 	}
 }
 
@@ -139,30 +176,33 @@ func TestSuitesArchiveUnknownNameIsSuiteNotFoundAndSendsNoWrite(t *testing.T) {
 	}
 }
 
-func TestSuitesArchiveTextModeIsOneLinePerOutcome(t *testing.T) {
+func TestSuitesArchiveAndRestoreTextModeIsOneLinePerOutcome(t *testing.T) {
 	cases := []struct {
-		dryRun bool
-		result string
-		want   string
+		archive, dryRun bool
+		result          string
+		want            string
 	}{
-		{false, "updated", "Archived suite \"web-rspec\".\n"},
-		{true, "updated", "Dry run: would archive suite \"web-rspec\".\n"},
-		{false, "unchanged", "Suite \"web-rspec\" is already archived.\n"},
+		{true, false, "updated", "Archived suite \"web-rspec\".\n"},
+		{false, false, "updated", "Restored suite \"web-rspec\".\n"},
+		{true, true, "updated", "Dry run: would archive suite \"web-rspec\".\n"},
+		{false, true, "updated", "Dry run: would restore suite \"web-rspec\".\n"},
+		{true, false, "unchanged", "Suite \"web-rspec\" is already archived.\n"},
+		{false, false, "unchanged", "Suite \"web-rspec\" is already active.\n"},
 	}
 	for _, tc := range cases {
 		stub := &archiveStub{status: 200, body: archiveOK(activeSuite, tc.result, tc.dryRun)}
 		srv := stub.start(t)
 		var out, errOut bytes.Buffer
 
-		err := suitesArchive(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut}, "acme", activeSuiteID, tc.dryRun)
+		err := suitesSetArchived(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out, Stderr: &errOut}, "acme", activeSuiteID, tc.archive, tc.dryRun)
 
 		if err != nil || out.String() != tc.want || errOut.Len() != 0 {
-			t.Errorf("dryRun=%v %s: err %v stdout %q stderr %q, want %q", tc.dryRun, tc.result, err, out.String(), errOut.String(), tc.want)
+			t.Errorf("archive=%v dryRun=%v %s: err %v stdout %q stderr %q, want %q", tc.archive, tc.dryRun, tc.result, err, out.String(), errOut.String(), tc.want)
 		}
 	}
 }
 
-func TestHelpDeclaresSuitesArchiveAsAWrite(t *testing.T) {
+func TestHelpDeclaresSuitesArchiveAndRestoreAsWrites(t *testing.T) {
 	_, stdout, _ := execute("help", "--json")
 	var doc struct {
 		Help struct {
@@ -176,13 +216,13 @@ func TestHelpDeclaresSuitesArchiveAsAWrite(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatal(err)
 	}
-	declared := false
+	declared := map[string]bool{}
 	for _, c := range doc.Help.Commands {
-		if c.Path == "suites archive" {
-			declared = c.Mutates && slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6})
-		}
+		declared[c.Path] = c.Mutates && slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6})
 	}
-	if !declared {
-		t.Error("help --json lacks suites archive with mutates and exit codes 0,3,4,5,6")
+	for _, path := range []string{"suites archive", "suites restore"} {
+		if !declared[path] {
+			t.Errorf("help --json lacks %s with mutates and exit codes 0,3,4,5,6", path)
+		}
 	}
 }

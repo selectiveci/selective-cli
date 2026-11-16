@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 type SuiteChange struct {
@@ -13,16 +14,26 @@ type SuiteChange struct {
 	DryRun bool
 }
 
-func (c *Client) SuitesIn(org, state string) ([]Suite, error) {
+type ListedSuite struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	ArchivedAt *time.Time `json:"archived_at"`
+}
+
+func (c *Client) SuitesIn(org, state string) ([]ListedSuite, error) {
 	var out struct {
-		Suites []Suite `json:"suites"`
+		Suites []ListedSuite `json:"suites"`
 	}
 	path := withQuery("/api/v1/orgs/"+url.PathEscape(org)+"/suites", url.Values{"state": {state}})
 	err := c.do("GET", path, nil, http.StatusOK, &out)
 	return out.Suites, err
 }
 
-func (c *Client) ArchiveSuite(org, id string, dryRun bool) (*SuiteChange, error) {
+func (c *Client) SetSuiteArchived(org, id string, archived, dryRun bool) (*SuiteChange, error) {
+	method := http.MethodDelete
+	if archived {
+		method = http.MethodPut
+	}
 	params := url.Values{}
 	if dryRun {
 		params.Set("dry_run", "true")
@@ -33,7 +44,7 @@ func (c *Client) ArchiveSuite(org, id string, dryRun bool) (*SuiteChange, error)
 		DryRun bool            `json:"dry_run"`
 	}
 	path := withQuery("/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(id)+"/archive", params)
-	if err := c.do(http.MethodPut, path, nil, http.StatusOK, &wire); err != nil {
+	if err := c.do(method, path, nil, http.StatusOK, &wire); err != nil {
 		return nil, err
 	}
 	var named struct {
