@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os/exec"
 	"time"
 )
@@ -37,9 +38,9 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	cmd.Cancel = func() error { return killTree(cmd) }
 	cmd.WaitDelay = pipeDrainWindow
 	isolate(cmd)
-	_ = cmd.Run()
+	runErr := cmd.Run()
 	if cmd.ProcessState == nil {
-		return Result{}, errors.New("could not start " + argv[0])
+		return Result{}, fmt.Errorf("run %s: %w", argv[0], runErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err

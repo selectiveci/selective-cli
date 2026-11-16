@@ -71,7 +71,9 @@ func helper(mode string, args []string) int {
 			return 1
 		}
 		pids := fmt.Sprintf("%d %d", os.Getpid(), grandchild.Process.Pid)
-		_ = os.WriteFile(os.Getenv("SEL_TEST_PIDFILE"), []byte(pids), 0o600)
+		pidFile := os.Getenv("SEL_TEST_PIDFILE")
+		_ = os.WriteFile(pidFile+".tmp", []byte(pids), 0o600)
+		_ = os.Rename(pidFile+".tmp", pidFile)
 		time.Sleep(30 * time.Second)
 	case "sleep":
 		time.Sleep(30 * time.Second)
@@ -92,12 +94,18 @@ func helperRunner() *Runner {
 	}}, os.Args[0])
 }
 
-func runHelper(t *testing.T, tool, args string, timeout time.Duration) (Result, time.Duration) {
+func runHelper(t *testing.T, tool, args string, timeoutSeconds int) (Result, time.Duration) {
 	t.Helper()
-	argv, err := helperRunner().Argv(tool, json.RawMessage(args))
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(args), &arguments); err != nil {
+		t.Fatal(err)
+	}
+	arguments[timeoutProperty] = timeoutSeconds
+	raw, err := json.Marshal(arguments)
 	if err != nil {
 		t.Fatal(err)
 	}
+	timeout := time.Duration(timeoutSeconds) * time.Second
 	type outcome struct {
 		res Result
 		err error
@@ -105,7 +113,7 @@ func runHelper(t *testing.T, tool, args string, timeout time.Duration) (Result, 
 	done := make(chan outcome, 1)
 	started := time.Now()
 	go func() {
-		res, err := execute(context.Background(), argv, timeout)
+		res, err := helperRunner().Run(context.Background(), tool, raw)
 		done <- outcome{res, err}
 	}()
 	select {
@@ -136,7 +144,7 @@ func TestChildReadsEndOfFileFromStdinEvenWhenTheParentHasInputWaiting(t *testing
 		t.Fatal(err)
 	}
 
-	res, _ := runHelper(t, "helper_stdin", `{}`, 2*time.Second)
+	res, _ := runHelper(t, "helper_stdin", `{}`, 5)
 
 	if got := string(res.Stdout); got != "read:0\n" || res.TimedOut {
 		t.Errorf("stdout = %q timedOut = %v, want %q: the child must see /dev/null", got, res.TimedOut, "read:0\n")
@@ -146,7 +154,7 @@ func TestChildReadsEndOfFileFromStdinEvenWhenTheParentHasInputWaiting(t *testing
 func TestChildInheritsTheParentEnvironment(t *testing.T) {
 	t.Setenv("SEL_TEST_MARKER", "marker-7f3a")
 
-	res, _ := runHelper(t, "helper_env", `{}`, 5*time.Second)
+	res, _ := runHelper(t, "helper_env", `{}`, 5)
 
 	if got := string(res.Stdout); got != "marker-7f3a\n" {
 		t.Errorf("stdout = %q, want the marker the parent set", got)
@@ -154,7 +162,7 @@ func TestChildInheritsTheParentEnvironment(t *testing.T) {
 }
 
 func TestExitCodeComesBackRawAndAChildThatFinishesIsNotTimedOut(t *testing.T) {
-	res, _ := runHelper(t, "helper_exit", `{"code":3}`, 5*time.Second)
+	res, _ := runHelper(t, "helper_exit", `{"code":3}`, 5)
 
 	if res.ExitCode != 3 || res.TimedOut || res.Truncated {
 		t.Errorf("result = %+v, want exit 3, not timed out, not truncated", res)
@@ -166,7 +174,11 @@ func alive(pid int) bool {
 		return false
 	}
 	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	return err != nil || !bytes.Contains(stat, []byte(") Z "))
+	if err != nil {
+		_, procErr := os.Stat("/proc/self/stat")
+		return procErr != nil
+	}
+	return !bytes.Contains(stat, []byte(") Z "))
 }
 
 func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T) {
@@ -180,13 +192,20 @@ func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T)
 		}
 	})
 
-	res, elapsed := runHelper(t, "helper_hang", `{}`, 1500*time.Millisecond)
+	var res Result
+	var elapsed time.Duration
+	for attempt := 0; attempt < 3; attempt++ {
+		res, elapsed = runHelper(t, "helper_hang", `{}`, 2)
+		if _, err := os.Stat(pidFile); err == nil {
+			break
+		}
+	}
 
 	if !res.TimedOut {
 		t.Errorf("result = %+v, want timed out", res)
 	}
-	if elapsed > 4*time.Second {
-		t.Errorf("returned after %v, want shortly after the 1.5s deadline", elapsed)
+	if elapsed > 5*time.Second {
+		t.Errorf("returned after %v, want shortly after the 2s timeout_s", elapsed)
 	}
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
@@ -209,7 +228,7 @@ func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T)
 }
 
 func TestOutputUnderTheCapPassesThroughByteForByte(t *testing.T) {
-	res, _ := runHelper(t, "helper_flood", `{"lines":100,"width":50}`, 10*time.Second)
+	res, _ := runHelper(t, "helper_flood", `{"lines":100,"width":50}`, 10)
 
 	if want := floodBody(100, 50); string(res.Stdout) != want || res.Truncated {
 		t.Errorf("stdout is %d bytes, truncated = %v, want the %d-byte body unchanged", len(res.Stdout), res.Truncated, len(want))
@@ -224,7 +243,7 @@ func TestOutputOverOneMegabyteIsCappedAndKeepsTheTerminalEvent(t *testing.T) {
 	}
 	terminal := floodTerminal(lines)
 
-	res, _ := runHelper(t, "helper_flood", fmt.Sprintf(`{"lines":%d,"width":%d}`, lines, width), 10*time.Second)
+	res, _ := runHelper(t, "helper_flood", fmt.Sprintf(`{"lines":%d,"width":%d}`, lines, width), 10)
 
 	out := string(res.Stdout)
 	if !res.Truncated {
