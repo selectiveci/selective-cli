@@ -128,3 +128,19 @@ func TestHelpJSONListsThePassesFlagAsABoolean(t *testing.T) {
 	}
 	t.Error("help --json lists no passes flag on test")
 }
+
+func TestHelpJSONDeclaresTestPassAmongTheEventsOfTest(t *testing.T) {
+	code, stdout, stderr := execute("help", "test", "--json")
+
+	var doc struct {
+		Command struct {
+			Events []string `json:"events"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || code != 0 {
+		t.Fatalf("help test --json exit %d: %v\nstderr: %s", code, err, stderr)
+	}
+	if !slices.Contains(doc.Command.Events, "test_pass") {
+		t.Errorf("events = %v, want test_pass among them", doc.Command.Events)
+	}
+}
