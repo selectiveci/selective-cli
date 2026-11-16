@@ -27,6 +27,7 @@ type archiveStub struct {
 	status   int
 	body     string
 	twin     string
+	listing  string
 }
 
 func (s *archiveStub) start(t *testing.T) *httptest.Server {
@@ -38,7 +39,11 @@ func (s *archiveStub) start(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites" && r.URL.Query().Get("state") == "all":
-			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `,` + archivedSuite + s.twin + `]}`))
+			listing := activeSuite + `,` + archivedSuite + s.twin
+			if s.listing != "" {
+				listing = s.listing
+			}
+			_, _ = w.Write([]byte(`{"suites":[` + listing + `]}`))
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
 			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `]}`))
 		case strings.HasSuffix(r.URL.Path, "/archive"):
@@ -107,6 +112,20 @@ func TestSuitesArchiveAndRestoreByNameTargetTheSameNamedSuiteTheVerbWouldChange(
 				t.Errorf("exit %d requests %v, want the last to be %q", res.exit, stub.requests, want)
 			}
 		})
+	}
+}
+
+func TestSuitesArchiveByNamePicksTheActiveTwinWhenTheArchivedOneIsListedFirst(t *testing.T) {
+	twinID := "33333333-3333-4333-8333-333333333333"
+	twin := `{"id":"` + twinID + `","name":"web-rspec","type":"rspec","repo":"acme/web","archived_at":"2026-11-01T09:00:00Z","last_run_at":null}`
+	stub := &archiveStub{status: 200, body: archiveOK(activeSuite, "updated", false), listing: twin + `,` + activeSuite + `,` + archivedSuite}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "archive", "web-rspec", "--org", "acme", "--json")
+
+	want := "PUT /api/v1/orgs/acme/suites/" + activeSuiteID + "/archive"
+	if res.exit != 0 || stub.requests[len(stub.requests)-1] != want {
+		t.Errorf("exit %d requests %v, want the last to be %q", res.exit, stub.requests, want)
 	}
 }
 
