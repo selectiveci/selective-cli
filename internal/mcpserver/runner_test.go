@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -23,6 +25,7 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 2 && os.Args[1] == "helper" {
 		os.Exit(helper(os.Args[2], os.Args[3:]))
 	}
+	terminateGrace = 300 * time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -75,6 +78,22 @@ func helper(mode string, args []string) int {
 		_ = os.WriteFile(pidFile+".tmp", []byte(pids), 0o600)
 		_ = os.Rename(pidFile+".tmp", pidFile)
 		time.Sleep(30 * time.Second)
+	case "hangpg":
+		grandchild := exec.Command(os.Args[0], "helper", "sleep")
+		grandchild.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := grandchild.Start(); err != nil {
+			return 1
+		}
+		terminated := make(chan os.Signal, 1)
+		signal.Notify(terminated, syscall.SIGTERM)
+		pidFile := os.Getenv("SEL_TEST_PIDFILE")
+		pids := fmt.Sprintf("%d %d", os.Getpid(), grandchild.Process.Pid)
+		_ = os.WriteFile(pidFile+".tmp", []byte(pids), 0o600)
+		_ = os.Rename(pidFile+".tmp", pidFile)
+		<-terminated
+		_ = syscall.Kill(-grandchild.Process.Pid, syscall.SIGKILL)
+	case "touch":
+		_ = os.WriteFile(os.Getenv("SEL_TEST_TOUCH"), nil, 0o600)
 	case "sleep":
 		time.Sleep(30 * time.Second)
 	}
@@ -89,6 +108,8 @@ func helperRunner() *Runner {
 		command("stdin"),
 		command("env"),
 		command("hang"),
+		command("hangpg"),
+		command("touch"),
 		command("exit", schema.Flag{Name: "code", Type: "int"}),
 		command("flood", schema.Flag{Name: "lines", Type: "int"}, schema.Flag{Name: "width", Type: "int"}),
 	}}, os.Args[0])
@@ -181,7 +202,8 @@ func alive(pid int) bool {
 	return !bytes.Contains(stat, []byte(") Z "))
 }
 
-func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T) {
+func assertDeadlineLeavesNoSurvivors(t *testing.T, tool string) {
+	t.Helper()
 	pidFile := t.TempDir() + "/pids"
 	t.Setenv("SEL_TEST_PIDFILE", pidFile)
 	t.Cleanup(func() {
@@ -195,7 +217,7 @@ func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T)
 	var res Result
 	var elapsed time.Duration
 	for attempt := 0; attempt < 3; attempt++ {
-		res, elapsed = runHelper(t, "helper_hang", `{}`, 2)
+		res, elapsed = runHelper(t, tool, `{}`, 2)
 		if _, err := os.Stat(pidFile); err == nil {
 			break
 		}
@@ -224,6 +246,30 @@ func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T)
 		if alive(pid) {
 			t.Errorf("process %d is still running after the deadline", pid)
 		}
+	}
+}
+
+func TestChildThatNeverExitsIsKilledAtItsDeadlineWithItsGrandchild(t *testing.T) {
+	assertDeadlineLeavesNoSurvivors(t, "helper_hang")
+}
+
+func TestDeadlineReachesADescendantThatStartedItsOwnProcessGroup(t *testing.T) {
+	assertDeadlineLeavesNoSurvivors(t, "helper_hangpg")
+}
+
+func TestCancelledContextReturnsItsErrorAndStartsNoProcess(t *testing.T) {
+	touched := t.TempDir() + "/touched"
+	t.Setenv("SEL_TEST_TOUCH", touched)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := helperRunner().Run(ctx, "helper_touch", nil)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(touched); statErr == nil {
+		t.Error("the child ran")
 	}
 }
 

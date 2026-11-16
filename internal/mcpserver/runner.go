@@ -14,6 +14,8 @@ const (
 	pipeDrainWindow = time.Second
 )
 
+var terminateGrace = 7 * time.Second
+
 type Result struct {
 	Stdout    []byte
 	ExitCode  int
@@ -30,15 +32,32 @@ func (r *Runner) Run(ctx context.Context, name string, raw json.RawMessage) (Res
 }
 
 func execute(ctx context.Context, argv []string, timeout time.Duration) (Result, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	deadline, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(deadline, argv[0], argv[1:]...)
 	stdout := &capped{limit: stdoutCap}
 	cmd.Stdout = stdout
-	cmd.Cancel = func() error { return killTree(cmd) }
-	cmd.WaitDelay = pipeDrainWindow
+	finished := make(chan struct{})
+	cmd.Cancel = func() error {
+		go func() {
+			select {
+			case <-time.After(terminateGrace):
+				_ = killTree(cmd)
+			case <-finished:
+			}
+		}()
+		return terminate(cmd)
+	}
+	cmd.WaitDelay = terminateGrace + pipeDrainWindow
 	isolate(cmd)
 	runErr := cmd.Run()
+	close(finished)
+	if deadline.Err() != nil && cmd.Process != nil {
+		_ = killTree(cmd)
+	}
 	if cmd.ProcessState == nil {
 		return Result{}, fmt.Errorf("run %s: %w", argv[0], runErr)
 	}

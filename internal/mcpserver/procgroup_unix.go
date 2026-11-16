@@ -14,3 +14,7 @@ func isolate(cmd *exec.Cmd) {
 func killTree(cmd *exec.Cmd) error {
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
+
+func terminate(cmd *exec.Cmd) error {
+	return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+}
