@@ -15,12 +15,12 @@ orgs readOnly
 repos readOnly
 rerun confirm
 suites readOnly
-suites_archive confirm
+suites_archive idempotent
 suites_configure idempotent
 suites_create confirm
 suites_delete confirm
 suites_key confirm
-suites_restore confirm
+suites_restore idempotent
 suites_settings confirm
 suites_show readOnly
 tail readOnly

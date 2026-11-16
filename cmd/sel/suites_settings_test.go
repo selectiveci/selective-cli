@@ -143,6 +143,13 @@ func (s *settingsStub) start(t *testing.T) *httptest.Server {
 	return srv
 }
 
+func (s *settingsStub) requireRequests(t *testing.T, n int) {
+	t.Helper()
+	if len(s.requests) < n || len(s.bodies) < n || len(s.headers) < n {
+		t.Fatalf("recorded %d requests %v, want at least %d", len(s.requests), s.requests, n)
+	}
+}
+
 func (s *settingsStub) puts() int {
 	n := 0
 	for _, r := range s.requests {
@@ -181,6 +188,7 @@ func TestSuitesSettingsSetSendsOnlyTheNamedFieldsWithTheirJSONTypesAndNoIdempote
 
 			res := runBinary(t, t.TempDir(), srv.URL, append([]string{"suites", "settings", "web-rspec", "--org", "acme", "--json"}, tc.args...)...)
 
+			stub.requireRequests(t, 2)
 			want := `{"v":1,"suite":` + activeSuite + `,"settings":` + suiteSettings + `,"result":"updated","dry_run":false}` + "\n"
 			wantRequests := []string{"GET /api/v1/orgs/acme/suites?state=all", "PUT " + settingsRoute}
 			if res.exit != 0 || res.stdout != want || !slices.Equal(stub.requests, wantRequests) || stub.bodies[1] != tc.body {
@@ -208,6 +216,7 @@ func TestSuitesSettingsDryRunSendsTheQueryAndRepeatsPassUnchangedThrough(t *test
 
 		res := runBinary(t, t.TempDir(), srv.URL, append([]string{"suites", "settings", "web-rspec", "--org", "acme", "--json", "--set", "selection.mode=shadow"}, tc.args...)...)
 
+		stub.requireRequests(t, 2)
 		wantPut := "PUT " + settingsRoute
 		if tc.dryRun {
 			wantPut += "?dry_run=true"

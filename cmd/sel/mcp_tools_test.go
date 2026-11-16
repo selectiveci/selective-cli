@@ -154,6 +154,26 @@ func TestMCPToolsNeverSendDestructiveHintAndMarkReadOnlyOnlyReads(t *testing.T) 
 	}
 }
 
+func TestMCPSuitesArchiveAndRestoreSendIdempotentHintOnTheWire(t *testing.T) {
+	want := map[string]bool{"suites_archive": true, "suites_restore": true}
+	for _, tool := range listedTools(t, newRoot()) {
+		if !want[tool.Name] {
+			continue
+		}
+		raw, err := json.Marshal(tool.Annotations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"idempotentHint":true`) {
+			t.Errorf("%s wire annotations = %s, want idempotentHint true", tool.Name, raw)
+		}
+		delete(want, tool.Name)
+	}
+	for name := range want {
+		t.Errorf("%s is not in the tool list", name)
+	}
+}
+
 func goldenLine(tool *mcp.Tool) string {
 	switch a := tool.Annotations; {
 	case a == nil:
@@ -216,7 +236,7 @@ func TestOnlyStateSettingCommandsAreIdempotent(t *testing.T) {
 	}
 	slices.Sort(got)
 
-	if want := []string{"flakes mark-fixed", "flakes quarantine", "flakes unquarantine", "suites configure", "tokens revoke"}; !slices.Equal(got, want) {
+	if want := []string{"flakes mark-fixed", "flakes quarantine", "flakes unquarantine", "suites archive", "suites configure", "suites restore", "tokens revoke"}; !slices.Equal(got, want) {
 		t.Errorf("idempotent commands = %v, want %v", got, want)
 	}
 }
