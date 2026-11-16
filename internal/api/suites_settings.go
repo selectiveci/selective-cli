@@ -19,3 +19,18 @@ func (c *Client) ShowSuite(org, id string) (*SuiteDetail, error) {
 	}
 	return &detail, nil
 }
+
+type SuiteSettingsChange struct {
+	SuiteDetail
+	Result string `json:"result"`
+	DryRun bool   `json:"dry_run"`
+}
+
+func (c *Client) UpdateSuiteSettings(org, id string, body map[string]any, dryRun bool) (*SuiteSettingsChange, error) {
+	var change SuiteSettingsChange
+	path := withQuery("/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(id)+"/settings", dryRunQuery(dryRun))
+	if err := c.do(http.MethodPut, path, body, http.StatusOK, &change); err != nil {
+		return nil, err
+	}
+	return &change, nil
+}
