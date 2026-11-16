@@ -237,8 +237,18 @@ func suitesChangeSettings(env *setup.Env, org, want string, body map[string]any,
 	if env.JSON {
 		return format.Document(env.Stdout, change)
 	}
-	fmt.Fprintln(env.Stdout, settingsSentence(want, change))
+	fmt.Fprintln(env.Stdout, settingsSentence(suiteNameOr(change.Suite, want), change))
 	return nil
+}
+
+func suiteNameOr(suite json.RawMessage, fallback string) string {
+	var named struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(suite, &named) != nil || named.Name == "" {
+		return fallback
+	}
+	return named.Name
 }
 
 func settingsSentence(name string, change *api.SuiteSettingsChange) string {

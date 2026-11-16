@@ -50,6 +50,16 @@ func (c *Client) UpdateSuiteSettings(org, id string, body map[string]any, dryRun
 	return &change, nil
 }
 
+func (c SuiteSettingsChange) check(path string) error {
+	if err := c.SuiteDetail.check(path); err != nil {
+		return err
+	}
+	if c.Result != "updated" && c.Result != "unchanged" {
+		return &Error{Code: contract.ServerError, Message: "unexpected response from " + path + ": result must be updated or unchanged"}
+	}
+	return nil
+}
+
 func isJSONObject(raw json.RawMessage) bool {
 	return len(raw) > 0 && raw[0] == '{'
 }

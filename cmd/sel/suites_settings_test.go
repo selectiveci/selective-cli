@@ -269,6 +269,56 @@ func TestSuitesSettingsRefusesAPutResponseWithoutASuiteObjectAndASettingsObject(
 	}
 }
 
+func TestSuitesSettingsRefusesAPutResponseWithAMissingOrUnknownResult(t *testing.T) {
+	suiteAndSettings := `"suite":` + activeSuite + `,"settings":` + suiteSettings
+	for name, reply := range map[string]string{
+		"missing":        `{` + suiteAndSettings + `,"dry_run":false}`,
+		"empty":          `{` + suiteAndSettings + `,"result":"","dry_run":false}`,
+		"null":           `{` + suiteAndSettings + `,"result":null,"dry_run":false}`,
+		"unknown":        `{` + suiteAndSettings + `,"result":"deleted","dry_run":false}`,
+		"wrong type":     `{` + suiteAndSettings + `,"result":1,"dry_run":false}`,
+		"different case": `{` + suiteAndSettings + `,"result":"Updated","dry_run":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &settingsStub{status: 200, reply: reply}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "suites", "settings", "web-rspec", "--org", "acme", "--set", "selection.mode=live")
+
+			assertRefusal(t, res, 4, "server_error")
+			wantRequests := []string{"GET /api/v1/orgs/acme/suites?state=all", "PUT " + settingsRoute}
+			if strings.Contains(res.stdout, "Changed settings") || !slices.Equal(stub.requests, wantRequests) {
+				t.Errorf("stdout %q requests %v, want no success sentence and %v", res.stdout, stub.requests, wantRequests)
+			}
+		})
+	}
+}
+
+func TestSuitesSettingsTextModeNamesTheSuiteFromTheResponseAfterARename(t *testing.T) {
+	renamed := strings.Replace(activeSuite, `"name":"web-rspec"`, `"name":"renamed"`, 1)
+	cases := []struct {
+		name, suite, want string
+	}{
+		{"returned name wins", renamed, "Changed settings of suite \"renamed\".\n"},
+		{"argument when the suite has no name", strings.Replace(activeSuite, `"name":"web-rspec",`, "", 1), "Changed settings of suite \"web-rspec\".\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := `{"suite":` + tc.suite + `,"settings":` + suiteSettings + `,"result":"updated","dry_run":false}`
+			stub := &settingsStub{status: 200, reply: reply}
+			srv := stub.start(t)
+			var out bytes.Buffer
+
+			err := suitesChangeSettings(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out}, "acme", "web-rspec", map[string]any{"name": "renamed"}, false)
+
+			wantRequests := []string{"GET /api/v1/orgs/acme/suites?state=all", "PUT " + settingsRoute}
+			if err != nil || out.String() != tc.want || !slices.Equal(stub.requests, wantRequests) {
+				t.Errorf("err %v stdout %q requests %v, want nil, %q and %v", err, out.String(), stub.requests, tc.want, wantRequests)
+			}
+		})
+	}
+}
+
 func TestSuitesSettingsMapsServerRefusalsAndNeverRetriesTheKeylessPut(t *testing.T) {
 	cases := []struct {
 		name   string
