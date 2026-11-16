@@ -162,7 +162,7 @@ func NormalizeHost(raw string) (string, error) {
 		raw = scheme + "://" + raw
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || !hasHostname(u) {
 		return "", contract.Errorf(contract.UsageError, "invalid hostname %q", raw)
 	}
 	// The runner gems take SELECTIVE_HOST as a websocket URL.
@@ -176,4 +176,12 @@ func NormalizeHost(raw string) (string, error) {
 		return "", contract.Errorf(contract.UsageError, "hostname must be http or https, got %q", u.Scheme)
 	}
 	return u.Scheme + "://" + u.Host, nil
+}
+
+func hasHostname(u *url.URL) bool {
+	name := u.Hostname()
+	if name == "" {
+		return false
+	}
+	return strings.HasPrefix(u.Host, "[") || strings.Trim(name, ":") != ""
 }

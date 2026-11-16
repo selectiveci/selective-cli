@@ -32,6 +32,7 @@ func doctorCmd() *cobra.Command {
   auth     the login works; shows who, never the token
   org      the organization resolves and is one of yours
   suite    a suite exists for this checkout's origin remote
+  cli_version  this sel is current and meets the server's minimum (a warning, never a failure)
 
 A check that can't run because an earlier one failed is skipped. The exit
 code is the first failing check's. --json writes one document with every
