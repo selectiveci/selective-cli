@@ -188,7 +188,14 @@ func parseList(raw string) (any, error) {
 	if raw == "" {
 		return []string{}, nil
 	}
-	return strings.Split(raw, ","), nil
+	items := strings.Split(raw, ",")
+	for i, item := range items {
+		items[i] = strings.TrimSpace(item)
+		if items[i] == "" {
+			return nil, contract.Errorf(contract.UsageError, "%q has an empty element; separate patterns with single commas", raw)
+		}
+	}
+	return items, nil
 }
 
 func settingsBody(sets []string) (map[string]any, error) {

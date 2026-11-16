@@ -171,6 +171,7 @@ func TestSuitesSettingsSetSendsOnlyTheNamedFieldsWithTheirJSONTypesAndNoIdempote
 		}},
 		{"one field", `{"selection":{"mode":"live"}}`, []string{"--set", "selection.mode=live"}},
 		{"empty patterns clear the list", `{"selection":{"ignore_patterns":[]}}`, []string{"--set", "selection.ignore_patterns="}},
+		{"patterns are trimmed around each element", `{"selection":{"ignore_patterns":["a","b","c d"]}}`, []string{"--set", "selection.ignore_patterns= a, b ,c d"}},
 		{"a negative count still reaches the server", `{"retries":{"max_retries":-1}}`, []string{"--set", "retries.max_retries=-1"}},
 	}
 	for _, tc := range cases {
@@ -219,15 +220,18 @@ func TestSuitesSettingsDryRunSendsTheQueryAndRepeatsPassUnchangedThrough(t *test
 
 func TestSuitesSettingsRefusesBadInputBeforeSendingAnything(t *testing.T) {
 	cases := map[string][]string{
-		"unknown key":           {"--set", "nosuch.key=1"},
-		"unknown field":         {"--set", "retries.nosuch=1"},
-		"nested suite key":      {"--set", "suite.name=x"},
-		"no equals sign":        {"--set", "selection.mode"},
-		"bad flag value":        {"--set", "retries.auto_retry_enabled=yes"},
-		"bad count":             {"--set", "retries.max_retries=many"},
-		"unknown mode":          {"--set", "selection.mode=bogus"},
-		"one bad among good":    {"--set", "selection.mode=live", "--set", "detection.window_days=1.5"},
-		"dry run without --set": {"--dry-run"},
+		"unknown key":                  {"--set", "nosuch.key=1"},
+		"unknown field":                {"--set", "retries.nosuch=1"},
+		"nested suite key":             {"--set", "suite.name=x"},
+		"no equals sign":               {"--set", "selection.mode"},
+		"bad flag value":               {"--set", "retries.auto_retry_enabled=yes"},
+		"bad count":                    {"--set", "retries.max_retries=many"},
+		"unknown mode":                 {"--set", "selection.mode=bogus"},
+		"one bad among good":           {"--set", "selection.mode=live", "--set", "detection.window_days=1.5"},
+		"dry run without --set":        {"--dry-run"},
+		"empty pattern between commas": {"--set", "selection.ignore_patterns=a,,b"},
+		"blank pattern between commas": {"--set", "selection.ignore_patterns=a, ,b"},
+		"trailing comma":               {"--set", "selection.ignore_patterns=a,"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
