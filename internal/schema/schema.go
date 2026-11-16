@@ -35,6 +35,7 @@ type Command struct {
 	MCP         string   `json:"mcp,omitempty"`
 	SendsPaths  bool     `json:"sends_paths,omitempty"`
 	LocalExec   bool     `json:"local_exec,omitempty"`
+	Idempotent  bool     `json:"idempotent,omitempty"`
 }
 
 type Arg struct {
