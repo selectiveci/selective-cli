@@ -3,6 +3,9 @@ package localrun
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -184,5 +187,98 @@ func TestWatchRefusesADirectoryThatIsNotACheckout(t *testing.T) {
 
 	if err == nil || errors.Is(err, ErrInterrupted) {
 		t.Errorf("err = %v, want the snapshot failure", err)
+	}
+}
+
+func TestWatchRunsOnceForAModeOnlyChangeToATrackedFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a file system with an executable bit")
+	}
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main")
+	gitRun(t, dir, "config", "core.fileMode", "true")
+	write(t, dir, "run.sh", "echo hi\n")
+	gitRun(t, dir, "add", ".")
+	gitRun(t, dir, "commit", "-q", "-m", "base")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runs, step := 0, 0
+	sleep := func(ctx context.Context, _ time.Duration) error {
+		step++
+		switch step {
+		case 1:
+			if err := os.Chmod(filepath.Join(dir, "run.sh"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		case 8:
+			cancel()
+		}
+		return ctx.Err()
+	}
+
+	_, err := Watch{Dir: dir, Sleep: sleep}.Run(ctx, func(context.Context, int) (Summary, error) {
+		runs++
+		return Summary{}, nil
+	})
+
+	if !errors.Is(err, ErrInterrupted) || runs != 2 {
+		t.Errorf("runs %d, err %v; want the first run and exactly one more for a chmod +x with core.fileMode on", runs, err)
+	}
+}
+
+func TestWatchDoesNotStartAnIterationWhenCancelledBeforeOrDuringTheFirstFingerprint(t *testing.T) {
+	cases := map[string]func(cancel context.CancelFunc) func(string) (string, error){
+		"before": func(context.CancelFunc) func(string) (string, error) {
+			return func(string) (string, error) { return "v0", nil }
+		},
+		"during the fingerprint": func(cancel context.CancelFunc) func(string) (string, error) {
+			return func(string) (string, error) { cancel(); return "v0", nil }
+		},
+	}
+	for name, fingerprint := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if name == "before" {
+				cancel()
+			}
+			defer cancel()
+			started := false
+
+			sum, err := Watch{Dir: "unused", Fingerprint: fingerprint(cancel)}.Run(ctx, func(context.Context, int) (Summary, error) {
+				started = true
+				return Summary{}, nil
+			})
+
+			if started || !errors.Is(err, ErrInterrupted) || sum != (Summary{}) {
+				t.Errorf("started=%v summary %+v err %v, want no iteration and ErrInterrupted", started, sum, err)
+			}
+		})
+	}
+}
+
+func TestWatchDoesNotCountAFailedProbeAsTheTreeHavingSettled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	script := []string{"v0", "a", "", "b", "b", "b"}
+	calls, callsAtSecondRun := 0, 0
+	fingerprint := func(string) (string, error) {
+		value := script[min(calls, len(script)-1)]
+		calls++
+		if value == "" {
+			return "", errors.New("git: index.lock exists")
+		}
+		return value, nil
+	}
+
+	_, err := Watch{Dir: "unused", Fingerprint: fingerprint, Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }}.Run(ctx, func(_ context.Context, n int) (Summary, error) {
+		if n == 2 {
+			callsAtSecondRun = calls
+			cancel()
+		}
+		return Summary{}, nil
+	})
+
+	if !errors.Is(err, ErrInterrupted) || callsAtSecondRun != 5 {
+		t.Errorf("second run started after %d probes, err %v; want 5: the failed probe must not settle the debounce, and a successful pair must", callsAtSecondRun, err)
 	}
 }
