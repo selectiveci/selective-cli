@@ -320,6 +320,28 @@ func TestRunEmitsTestPassOnlyWhenAsked(t *testing.T) {
 	}
 }
 
+func TestRunEndsAnIterationWithIterationEndInsteadOfSummary(t *testing.T) {
+	out := exercise(t, Options{Selector: selecting("a", "b"), Iteration: 2}, func(c *fakeClient) {
+		c.handshake("a", "b")
+		c.next("run_test_cases")
+		c.result("a", "passed")
+		c.result("b", "failed")
+		c.finish()
+	})
+
+	names := out.names()
+	end := out.named("iteration_end")
+	if len(end) != 1 || names[len(names)-1] != "iteration_end" || len(out.named("summary")) != 0 {
+		t.Fatalf("events = %v, want iteration_end last and no summary", names)
+	}
+	if end[0]["iteration"] != float64(2) || end[0]["passed"] != float64(1) || end[0]["failed"] != float64(1) || end[0]["selected"] != float64(2) || end[0]["skipped"] != float64(0) || end[0]["ms"] == nil {
+		t.Errorf("iteration_end = %v, want iteration 2 and the summary's counts", end[0])
+	}
+	if out.summary.Reported {
+		t.Error("summary.Reported = true, want false: an iteration_end is not the terminal event")
+	}
+}
+
 func TestRunCountsAFailedResultInTheSummary(t *testing.T) {
 	out := exercise(t, Options{Selector: selecting("a", "b")}, func(c *fakeClient) {
 		c.handshake("a", "b")
