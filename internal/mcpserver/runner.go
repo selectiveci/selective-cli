@@ -3,18 +3,26 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"sync/atomic"
 	"time"
+
+	"github.com/selectiveci/selective-cli/internal/localrun"
 )
 
 const (
-	stdoutCap       = 256 * 1024
-	pipeDrainWindow = time.Second
+	stdoutCap                = 256 * 1024
+	terminateMargin          = time.Second
+	productionTerminateGrace = localrun.ShutdownBudget + terminateMargin
 )
 
-var terminateGrace = 7 * time.Second
+var (
+	terminateGrace  = productionTerminateGrace
+	pipeDrainWindow = time.Second
+)
 
 type Result struct {
 	Stdout    []byte
@@ -37,11 +45,24 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	}
 	deadline, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return Result{}, fmt.Errorf("run %s: %w", argv[0], err)
+	}
+	defer reader.Close()
 	cmd := exec.CommandContext(deadline, argv[0], argv[1:]...)
+	cmd.Stdout = writer
 	stdout := &capped{limit: stdoutCap}
-	cmd.Stdout = stdout
+	drained := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stdout, reader)
+		close(drained)
+	}()
+	var cancelled, timedOut atomic.Bool
 	finished := make(chan struct{})
 	cmd.Cancel = func() error {
+		cancelled.Store(true)
+		timedOut.Store(ctx.Err() == nil)
 		go func() {
 			select {
 			case <-time.After(terminateGrace):
@@ -53,22 +74,33 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	}
 	cmd.WaitDelay = terminateGrace + pipeDrainWindow
 	isolate(cmd)
-	runErr := cmd.Run()
+	startErr := cmd.Start()
+	_ = writer.Close()
+	if startErr != nil {
+		return Result{}, fmt.Errorf("run %s: %w", argv[0], startErr)
+	}
+	_ = cmd.Wait()
 	close(finished)
-	if deadline.Err() != nil && cmd.Process != nil {
+	if cancelled.Load() {
 		_ = killTree(cmd)
 	}
-	if cmd.ProcessState == nil {
-		return Result{}, fmt.Errorf("run %s: %w", argv[0], runErr)
+	held := false
+	select {
+	case <-drained:
+	case <-time.After(pipeDrainWindow):
+		held = true
+		_ = killTree(cmd)
+		_ = reader.Close()
+		<-drained
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	out, truncated := stdout.result()
+	out, truncated := stdout.result(held)
 	return Result{
 		Stdout:    out,
 		ExitCode:  cmd.ProcessState.ExitCode(),
 		Truncated: truncated,
-		TimedOut:  errors.Is(deadline.Err(), context.DeadlineExceeded),
+		TimedOut:  timedOut.Load(),
 	}, nil
 }

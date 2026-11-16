@@ -58,16 +58,18 @@ func (c *capped) endLine() {
 	c.line, c.inLine, c.overflow = nil, false, false
 }
 
-func (c *capped) result() ([]byte, bool) {
-	if c.inLine {
+func (c *capped) result(cut bool) ([]byte, bool) {
+	if c.inLine && !cut {
 		c.endLine()
 	}
-	if c.total <= c.limit {
+	if c.total <= c.limit && !cut {
 		return c.head, false
 	}
 	out := c.head
 	if i := bytes.LastIndexByte(out, '\n'); i >= 0 {
 		out = out[:i+1]
+	} else {
+		out = nil
 	}
 	if c.last != nil && c.lastStart >= len(out) {
 		out = append(out[:len(out):len(out)], c.last...)

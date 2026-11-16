@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/selectiveci/selective-cli/internal/localrun"
 	"github.com/selectiveci/selective-cli/internal/schema"
 )
 
@@ -25,7 +26,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 2 && os.Args[1] == "helper" {
 		os.Exit(helper(os.Args[2], os.Args[3:]))
 	}
+	_ = os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	terminateGrace = 300 * time.Millisecond
+	pipeDrainWindow = 2 * time.Second
 	os.Exit(m.Run())
 }
 
@@ -92,6 +95,27 @@ func helper(mode string, args []string) int {
 		_ = os.Rename(pidFile+".tmp", pidFile)
 		<-terminated
 		_ = syscall.Kill(-grandchild.Process.Pid, syscall.SIGKILL)
+	case "holdout":
+		grandchild := exec.Command(os.Args[0], "helper", "lateline", "--ms="+strconv.Itoa(helperFlag(args, "ms")))
+		grandchild.Stdout = os.Stdout
+		if err := grandchild.Start(); err != nil {
+			return 1
+		}
+		fmt.Println("early")
+	case "lateline":
+		time.Sleep(time.Duration(helperFlag(args, "ms")) * time.Millisecond)
+		fmt.Println("late")
+	case "holdpipe":
+		grandchild := exec.Command(os.Args[0], "helper", "sleep")
+		grandchild.Stdout = os.Stdout
+		if err := grandchild.Start(); err != nil {
+			return 1
+		}
+		pidFile := os.Getenv("SEL_TEST_PIDFILE")
+		_ = os.WriteFile(pidFile+".tmp", []byte(strconv.Itoa(grandchild.Process.Pid)), 0o600)
+		_ = os.Rename(pidFile+".tmp", pidFile)
+		fmt.Println("early")
+		return helperFlag(args, "code")
 	case "touch":
 		_ = os.WriteFile(os.Getenv("SEL_TEST_TOUCH"), nil, 0o600)
 	case "sleep":
@@ -109,6 +133,7 @@ func helperRunner() *Runner {
 		command("env"),
 		command("hang"),
 		command("hangpg"),
+		command("holdpipe", schema.Flag{Name: "code", Type: "int"}),
 		command("touch"),
 		command("exit", schema.Flag{Name: "code", Type: "int"}),
 		command("flood", schema.Flag{Name: "lines", Type: "int"}, schema.Flag{Name: "width", Type: "int"}),
@@ -307,14 +332,14 @@ func TestOutputOverOneMegabyteIsCappedAndKeepsTheTerminalEvent(t *testing.T) {
 	}
 }
 
-func capture(limit, chunk int, input string) (string, bool) {
+func capture(limit, chunk int, cut bool, input string) (string, bool) {
 	c := &capped{limit: limit}
 	for rest := []byte(input); len(rest) > 0; {
 		n := min(chunk, len(rest))
 		_, _ = c.Write(rest[:n])
 		rest = rest[n:]
 	}
-	out, truncated := c.result()
+	out, truncated := c.result(cut)
 	return string(out), truncated
 }
 
@@ -331,14 +356,101 @@ func TestCappedKeepsWholeLinesThenTheLastLineHoweverTheBytesArrive(t *testing.T)
 		"the last line has no newline":                 {"aaaa\nbbbb\ncccc\nterm", "aaaa\nbbbb\nterm", true},
 		"blank lines after the last are ignored":       {"aaaa\nbbbb\ncccc\nterm\n\n\n", "aaaa\nbbbb\nterm\n", true},
 		"an oversized last line is dropped":            {"aaaa\nbbbb\ncccc\nterm" + strings.Repeat("x", 30) + "\n", "aaaa\nbbbb\n", true},
-		"a single oversized line keeps a raw prefix":   {strings.Repeat("x", 30) + "\n", strings.Repeat("x", 10), true},
+		"a single oversized line is dropped whole":     {strings.Repeat("x", 30) + "\n", "", true},
+		"an oversized first line, then a small last":   {strings.Repeat("x", 30) + "\nterm\n", "term\n", true},
+		"every line oversized":                         {strings.Repeat("x", 30) + "\n" + strings.Repeat("y", 30) + "\n", "", true},
 	}
 	for name, c := range cases {
 		for _, chunk := range []int{1, 3, 7, 1000} {
-			got, truncated := capture(10, chunk, c.input)
+			got, truncated := capture(10, chunk, false, c.input)
 			if got != c.want || truncated != c.truncated {
 				t.Errorf("%s (chunks of %d): got %q truncated=%v, want %q truncated=%v", name, chunk, got, truncated, c.want, c.truncated)
 			}
 		}
+	}
+}
+
+func TestCappedCutKeepsOnlyWholeLinesAndIsAlwaysFlagged(t *testing.T) {
+	cases := map[string]struct {
+		limit int
+		input string
+		want  string
+	}{
+		"a half line at the end is dropped":                 {100, "aaaa\nbb", "aaaa\n"},
+		"complete lines stay, still flagged":                {100, "aaaa\nbbbb\n", "aaaa\nbbbb\n"},
+		"no complete line at all":                           {100, "aaaa", ""},
+		"over the cap, the half line after the last is out": {10, "aaaa\nbbbb\ncccc\nterm\nha", "aaaa\nbbbb\nterm\n"},
+	}
+	for name, c := range cases {
+		for _, chunk := range []int{1, 3, 1000} {
+			got, truncated := capture(c.limit, chunk, true, c.input)
+			if got != c.want || !truncated {
+				t.Errorf("%s (chunks of %d): got %q truncated=%v, want %q truncated=true", name, chunk, got, truncated, c.want)
+			}
+		}
+	}
+}
+
+func TestFirstEventOverTheCapLeavesTheTerminalEventOnItsOwnLine(t *testing.T) {
+	res, _ := runHelper(t, "helper_flood", fmt.Sprintf(`{"lines":1,"width":%d}`, stdoutCap+1000), 10)
+
+	if want := floodTerminal(1); string(res.Stdout) != want || !res.Truncated {
+		t.Errorf("stdout is %d bytes ending %q, truncated = %v, want exactly %q", len(res.Stdout), res.Stdout[max(0, len(res.Stdout)-60):], res.Truncated, want)
+	}
+}
+
+func TestTerminateGraceOutlastsTheNestedRunnersWorstCaseShutdownByASecond(t *testing.T) {
+	if productionTerminateGrace < localrun.ShutdownBudget+time.Second {
+		t.Errorf("grace = %v, want at least %v plus 1s", productionTerminateGrace, localrun.ShutdownBudget)
+	}
+}
+
+func TestChildThatExitedZeroIsNotTimedOutWhenADescendantHoldsStdoutAcrossTheDeadline(t *testing.T) {
+	argv := []string{os.Args[0], "helper", "holdout", "--ms=1600"}
+
+	res, err := execute(context.Background(), argv, time.Second)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 0 || res.TimedOut || res.Truncated || string(res.Stdout) != "early\nlate\n" {
+		t.Errorf("result = %+v stdout %q, want exit 0, not timed out, not truncated, both lines", res, res.Stdout)
+	}
+}
+
+func TestDescendantHoldingStdoutPastTheDrainWindowFlagsTruncationAndIsKilled(t *testing.T) {
+	for _, code := range []int{0, 1} {
+		t.Run(fmt.Sprintf("exit %d", code), func(t *testing.T) {
+			pidFile := t.TempDir() + "/pid"
+			t.Setenv("SEL_TEST_PIDFILE", pidFile)
+			t.Cleanup(func() {
+				raw, _ := os.ReadFile(pidFile)
+				pid, _ := strconv.Atoi(string(raw))
+				if pid > 0 {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			})
+
+			res, elapsed := runHelper(t, "helper_holdpipe", fmt.Sprintf(`{"code":%d}`, code), 10)
+
+			if res.ExitCode != code || !res.Truncated || res.TimedOut || string(res.Stdout) != "early\n" {
+				t.Errorf("result = %+v stdout %q, want exit %d, truncated, not timed out, the whole early line", res, res.Stdout, code)
+			}
+			if elapsed > pipeDrainWindow+time.Second {
+				t.Errorf("returned after %v, want within the %v drain window of the child's exit", elapsed, pipeDrainWindow)
+			}
+			raw, err := os.ReadFile(pidFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pid, _ := strconv.Atoi(string(raw))
+			settled := time.Now().Add(2 * time.Second)
+			for alive(pid) && time.Now().Before(settled) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if alive(pid) {
+				t.Errorf("the descendant holding stdout (pid %d) is still running", pid)
+			}
+		})
 	}
 }
