@@ -33,10 +33,11 @@ func TestMCPRunnerMapsRealCommandsToTheirArgv(t *testing.T) {
 		args string
 		want []string
 	}{
-		"nested command with a positional": {"suites_key", `{"suite":"s1"}`, []string{"/bin/sel", "suites", "key", "--json", "s1"}},
-		"int and string flags":             {"builds", `{"limit":5}`, []string{"/bin/sel", "builds", "--json", "--limit=5"}},
-		"list flags repeat":                {"tokens_create", `{"repo":["a","b"],"scope":["read"]}`, []string{"/bin/sel", "tokens", "create", "--json", "--repo=a", "--repo=b", "--scope=read"}},
-		"variadic positionals":             {"test", `{"path":["spec/a_spec.rb","spec/b_spec.rb"],"timeout":"5m"}`, []string{"/bin/sel", "test", "--json", "--timeout=5m", "spec/a_spec.rb", "spec/b_spec.rb"}},
+		"nested command with a positional":                        {"suites_key", `{"suite":"s1"}`, []string{"/bin/sel", "suites", "key", "--json", "s1"}},
+		"int and string flags":                                    {"builds", `{"limit":5}`, []string{"/bin/sel", "builds", "--json", "--limit=5"}},
+		"list flags repeat":                                       {"tokens_create", `{"name":"ci","repo":["a","b"],"scope":["read"]}`, []string{"/bin/sel", "tokens", "create", "--json", "--name=ci", "--repo=a", "--repo=b", "--scope=read"}},
+		"explicit false on a flag the command tests with Changed": {"builds", `{"flaky":false}`, []string{"/bin/sel", "builds", "--json", "--flaky=false"}},
+		"variadic positionals":                                    {"test", `{"path":["spec/a_spec.rb","spec/b_spec.rb"],"timeout":"5m"}`, []string{"/bin/sel", "test", "--json", "--timeout=5m", "spec/a_spec.rb", "spec/b_spec.rb"}},
 	}
 	for name, c := range cases {
 		got, err := runner.Argv(c.tool, json.RawMessage(c.args))
@@ -53,14 +54,21 @@ func TestMCPRunnerMapsRealCommandsToTheirArgv(t *testing.T) {
 func TestMCPRunnerRejectsEverySecretAndNeverExposedFlagOfTheRealTree(t *testing.T) {
 	runner, doc := realRunner(t)
 	checked := 0
+	var exposed []string
+	for _, tool := range listedTools(t, newRoot()) {
+		exposed = append(exposed, tool.Name)
+	}
 	for _, c := range doc.Commands {
 		tool := strings.ReplaceAll(c.Path, " ", "_")
+		if !slices.Contains(exposed, tool) {
+			continue
+		}
 		for _, flag := range append([]string{"json", "hostname"}, c.SecretFlags...) {
 			args := `{"` + strings.ReplaceAll(flag, "-", "_") + `":"x"}`
 			if flag == "json" {
 				args = `{"json":true}`
 			}
-			if _, err := runner.Argv(tool, json.RawMessage(args)); !isInvalidParams(err) {
+			if _, err := runner.Argv(tool, json.RawMessage(args)); !isInvalidParams(err) || !strings.Contains(err.Error(), "unknown properties") {
 				t.Errorf("%s: err = %v for --%s, want invalid params", tool, err, flag)
 			}
 			checked++
@@ -76,6 +84,23 @@ func TestMCPRunnerRejectsEverySecretAndNeverExposedFlagOfTheRealTree(t *testing.
 	}
 	if _, err := runner.Argv("tokens_create", json.RawMessage(`{"stdout":"/tmp/k"}`)); !isInvalidParams(err) {
 		t.Errorf("tokens_create accepted its secret flag --stdout: %v", err)
+	}
+}
+
+func TestMCPRunnerRejectsMissingRequiredInputsOfTheRealTree(t *testing.T) {
+	runner, _ := realRunner(t)
+	for tool, args := range map[string]string{"tokens_create": `{}`, "suites_key": `{}`} {
+		if argv, err := runner.Argv(tool, json.RawMessage(args)); !isInvalidParams(err) {
+			t.Errorf("%s: argv = %q err = %v, want invalid params", tool, argv, err)
+		}
+	}
+}
+
+func TestMCPToolsForbidAdditionalProperties(t *testing.T) {
+	for _, tool := range listedTools(t, newRoot()) {
+		if tool.InputSchema.(map[string]any)["additionalProperties"] != false {
+			t.Errorf("%s does not set additionalProperties false", tool.Name)
+		}
 	}
 }
 

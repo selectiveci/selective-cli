@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,10 +28,25 @@ func TestArgvOrdersCommandWordsJSONFlagsThenPositionals(t *testing.T) {
 			`{"id":"7","more":["a","b"],"name":"n","retries":3,"wait":"5s","fast":true,"dry_run":true,"tag":["x","y"],"env":["E=1"]}`,
 			[]string{"/bin/sel", "run", "--json", "--dry-run", "--env=E=1", "--fast", "--name=n", "--retries=3", "--tag=x", "--tag=y", "--wait=5s", "7", "a", "b"},
 		},
-		"false booleans and empty lists are left out": {
+		"an explicit false reaches the command, for either default": {
 			"run",
-			`{"id":"7","name":"n","fast":false,"dry_run":false,"tag":[]}`,
+			`{"id":"7","name":"n","fast":false,"color":false,"tag":[]}`,
+			[]string{"/bin/sel", "run", "--json", "--color=false", "--fast=false", "--name=n", "7"},
+		},
+		"booleans left out stay out": {
+			"run",
+			`{"id":"7","name":"n"}`,
 			[]string{"/bin/sel", "run", "--json", "--name=n", "7"},
+		},
+		"integral numbers in any encoding": {
+			"run",
+			`{"id":"7","name":"n","retries":6e1}`,
+			[]string{"/bin/sel", "run", "--json", "--name=n", "--retries=60", "7"},
+		},
+		"an integral number with a fraction part of zero": {
+			"run",
+			`{"id":"7","name":"n","retries":60.0}`,
+			[]string{"/bin/sel", "run", "--json", "--name=n", "--retries=60", "7"},
 		},
 		"a value that starts with a dash stays attached to its flag": {
 			"run",
@@ -82,6 +98,9 @@ func TestArgvRejectsWhatTheToolDoesNotExposeAsInvalidParams(t *testing.T) {
 		"an unknown tool":                      {"nope", `{}`},
 		"arguments that are not an object":     {"run", `["7"]`},
 		"arguments with trailing data":         {"run", `{"id":"7","name":"n"} {}`},
+		"a missing required flag":              {"run", `{"id":"7"}`},
+		"a missing required positional":        {"run", `{"name":"n"}`},
+		"an integer out of range":              {"run", `{"id":"7","name":"n","retries":1e30}`},
 		"a non-integral integer":               {"run", `{"id":"7","name":"n","retries":1.5}`},
 		"an integer given as a string":         {"run", `{"id":"7","name":"n","retries":"3"}`},
 		"a boolean given as a string":          {"run", `{"id":"7","name":"n","fast":"yes"}`},
@@ -101,7 +120,7 @@ func TestArgvRejectsWhatTheToolDoesNotExposeAsInvalidParams(t *testing.T) {
 
 func TestTimeoutDefaultsToSixtySecondsAndMustBeBetweenOneAndSixHundred(t *testing.T) {
 	runner := fixtureRunner(t)
-	valid := map[string]time.Duration{`{}`: 60 * time.Second, `{"timeout_s":1}`: time.Second, `{"timeout_s":600}`: 600 * time.Second, `{"timeout_s":5}`: 5 * time.Second}
+	valid := map[string]time.Duration{`{"timeout_s":60.0}`: time.Minute, `{"timeout_s":6e1}`: time.Minute, `{}`: 60 * time.Second, `{"timeout_s":1}`: time.Second, `{"timeout_s":600}`: 600 * time.Second, `{"timeout_s":5}`: 5 * time.Second}
 	for args, want := range valid {
 		_, got, err := runner.prepare("group_child", json.RawMessage(args))
 		if err != nil || got != want {
@@ -113,6 +132,22 @@ func TestTimeoutDefaultsToSixtySecondsAndMustBeBetweenOneAndSixHundred(t *testin
 		var wire *jsonrpc.Error
 		if !errors.As(err, &wire) || wire.Code != jsonrpc.CodeInvalidParams {
 			t.Errorf("%s: err = %v, want an invalid-params error", args, err)
+		}
+	}
+}
+
+func TestMissingRequiredInputsNameWhatIsMissing(t *testing.T) {
+	_, err := fixtureRunner(t).Argv("run", json.RawMessage(`{}`))
+
+	if err == nil || !strings.Contains(err.Error(), "id") || !strings.Contains(err.Error(), "name") {
+		t.Errorf("err = %v, want it to name id and name", err)
+	}
+}
+
+func TestEveryToolForbidsAdditionalProperties(t *testing.T) {
+	for name, tool := range listed(t) {
+		if schemaOf(tool)["additionalProperties"] != false {
+			t.Errorf("%s schema = %v, want additionalProperties false", name, schemaOf(tool))
 		}
 	}
 }

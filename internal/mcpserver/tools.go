@@ -74,7 +74,7 @@ func tool(c schema.Command) *mcp.Tool {
 	return &mcp.Tool{
 		Name:        toolName(c.Path),
 		Description: c.Short,
-		InputSchema: map[string]any{"type": "object", "properties": properties, "required": required},
+		InputSchema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false},
 		Annotations: hints(c),
 	}
 }
