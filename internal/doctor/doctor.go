@@ -18,10 +18,11 @@ import (
 	"github.com/selectiveci/selective-cli/internal/setup"
 )
 
+var httpTimeout = 10 * time.Second
+
 const (
-	httpTimeout = 10 * time.Second
-	loginFix    = "sel auth login --setup"
-	suiteFix    = "sel suites create --name <name> --framework <type>"
+	loginFix = "sel auth login --setup"
+	suiteFix = "sel suites create --name <name> --framework <type>"
 )
 
 var laterChecks = []string{"socket", "runner", "cli_version"}
