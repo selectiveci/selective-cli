@@ -38,7 +38,7 @@ func transportCmd() *cobra.Command {
 
 type testFlags struct {
 	against, framework, suite, org string
-	list, passes                   bool
+	list, passes, watch            bool
 	timeout                        time.Duration
 }
 
@@ -63,17 +63,25 @@ Changed file paths and test ids are sent to Selective; file contents are not.
 A map that cannot speak for the change runs every test, and the selection
 event says so. --list prints that selection, with the ids, and runs nothing. Arguments after -- go to the test framework's client. Its
 output goes to stderr; stdout carries NDJSON events only, ending with a
-summary.`,
+summary.
+
+--watch runs once, then again after each change to a tracked file (checked
+every 300 ms, debounced by 300 ms), until Ctrl-C. A change during a run queues
+one more run. Each run ends with an iteration_end event in place of the
+summary; Ctrl-C ends the stream with one summary carrying interrupted:true,
+and exits 130. --watch cannot be combined with --list.`,
 		Example: `  sel test
   sel test --against origin/main --json
   sel test --list
+  sel test --watch --json
   sel test app/models/user.rb
   sel test --suite 3f9c -- -k slow`,
 		Args: cobra.ArbitraryArgs,
 		Annotations: map[string]string{
-			"exit_codes":  "0,1,3,4,5,6,8,130",
-			"events":      "build_start,selection,test_pass,test_fail,progress,heartbeat,summary",
-			"sends_paths": "true",
+			"exit_codes":     "0,1,3,4,5,6,8,130",
+			"events":         "build_start,selection,test_pass,test_fail,progress,heartbeat,iteration_end,summary",
+			"sends_paths":    "true",
+			"mcp_skip_flags": "watch",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := runTest(cmd, args, f)
@@ -89,15 +97,17 @@ summary.`,
 	cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
 	cmd.Flags().BoolVar(&f.list, "list", false, "Print what would run and run nothing")
 	cmd.Flags().BoolVar(&f.passes, "passes", false, "Also emit a test_pass event for each passing test")
+	cmd.Flags().BoolVar(&f.watch, "watch", false, "Run again whenever a tracked file changes, until interrupted")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Stop the run after this long")
 	return cmd
 }
 
 type testPlan struct {
-	root      string
-	paths     []string
-	framework localrun.Framework
-	selector  localrun.Selector
+	root        string
+	paths       []string
+	framework   localrun.Framework
+	changed     []string
+	selectorFor func([]string) localrun.Selector
 }
 
 type plannedTest struct {
@@ -110,6 +120,9 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if dash := cmd.ArgsLenAtDash(); dash >= 0 {
 		paths, frameworkArgs = args[:dash], args[dash:]
 	}
+	if f.watch && f.list {
+		return 0, contract.Errorf(contract.UsageError, "--watch cannot be combined with --list: a watch never ends, and --list runs nothing")
+	}
 	if f.timeout <= 0 {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
@@ -120,7 +133,8 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
 	stdout := cmd.OutOrStdout()
 	events := stdout
-	if !format.JSONMode(cmd.Flags(), stdout) {
+	pretty := !format.JSONMode(cmd.Flags(), stdout)
+	if pretty {
 		events = prettyEvents{format.NewWriter(stdout, "pretty")}
 	}
 	interrupted := func(sum localrun.Summary) (int, error) {
@@ -152,13 +166,33 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if err != nil {
 		return 0, contract.Errorf(contract.InternalError, "%v", err)
 	}
-	ctx, cancel := context.WithTimeout(signalled, f.timeout)
-	defer cancel()
 	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
-	sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selector, Passes: f.passes, List: f.list, Paths: plan.paths, Timeout: f.timeout})
+	run := func(ctx context.Context, iteration int) (localrun.Summary, error) {
+		changed := plan.changed
+		if iteration > 1 {
+			var err error
+			if changed, err = localrun.ChangedFiles(plan.root, f.against); err != nil {
+				return localrun.Summary{}, err
+			}
+		}
+		ctx, cancel := context.WithTimeout(ctx, f.timeout)
+		defer cancel()
+		sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selectorFor(changed), Passes: f.passes, List: f.list, Paths: plan.paths, Timeout: f.timeout, Iteration: iteration})
+		if errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return sum, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
+		}
+		if err == nil && pretty && f.watch {
+			fmt.Fprintln(stdout, "  Watching for changes. Ctrl-C to stop.")
+		}
+		return sum, err
+	}
+	var sum localrun.Summary
+	if f.watch {
+		sum, err = localrun.Watch{Dir: plan.root}.Run(signalled, run)
+	} else {
+		sum, err = run(signalled, 0)
+	}
 	switch {
-	case errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded):
-		return 0, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)
 	case errors.Is(err, localrun.ErrInterrupted):
 		return interrupted(sum)
 	case err != nil:
@@ -198,7 +232,9 @@ func planTest(paths []string, f testFlags) (testPlan, error) {
 	if err != nil {
 		return testPlan{}, err
 	}
-	return testPlan{root: root, paths: candidates, framework: framework, selector: selectTests(env.Client, org, suite, framework, changed)}, nil
+	return testPlan{root: root, paths: candidates, framework: framework, changed: changed, selectorFor: func(changed []string) localrun.Selector {
+		return selectTests(env.Client, org, suite, framework, changed)
+	}}, nil
 }
 
 func resolveSuite(client *api.Client, org, flag string) (string, error) {

@@ -23,13 +23,14 @@ func fixture(use string, annotations map[string]string) *cobra.Command {
 
 func TestBuildDescribesPositionalsFlagsAndAnnotations(t *testing.T) {
 	root := fixture("put KEY [LABEL] FILES...", map[string]string{
-		"exit_codes":   "0,3,4",
-		"events":       "summary,heartbeat",
-		"mutates":      "true",
-		"destructive":  "true",
-		"wait_default": "10m",
-		"secret_flags": "stdout",
-		"mcp":          "skip",
+		"exit_codes":     "0,3,4",
+		"events":         "summary,heartbeat",
+		"mutates":        "true",
+		"destructive":    "true",
+		"wait_default":   "10m",
+		"secret_flags":   "stdout",
+		"mcp":            "skip",
+		"mcp_skip_flags": "stdout,name",
 	})
 	doc, err := Build(root, "1.2.3")
 	if err != nil {
@@ -57,7 +58,7 @@ func TestBuildDescribesPositionalsFlagsAndAnnotations(t *testing.T) {
 		t.Errorf("persistent flags wrong: %+v", names)
 	}
 	if !node.Mutates || !node.Destructive || node.WaitDefault != "10m" || node.MCP != "skip" ||
-		strings.Join(node.Events, ",") != "summary,heartbeat" || strings.Join(node.SecretFlags, ",") != "stdout" ||
+		strings.Join(node.Events, ",") != "summary,heartbeat" || strings.Join(node.SecretFlags, ",") != "stdout" || strings.Join(node.SkipInMCP, ",") != "stdout,name" ||
 		len(node.ExitCodes) != 3 || node.ExitCodes[2] != 4 {
 		t.Errorf("annotations not carried: %+v", node)
 	}
@@ -84,6 +85,7 @@ func TestBuildRejectsAnnotationsOutsideTheRegistry(t *testing.T) {
 		"wait not a duration":    {"wait_default": "soon"},
 		"secret flag not a flag": {"secret_flags": "nope"},
 		"mcp not skip":           {"mcp": "hide"},
+		"mcp skip flag not flag": {"mcp_skip_flags": "nope"},
 	}
 	for name, annotations := range cases {
 		if _, err := Build(fixture("put", annotations), "v"); err == nil {
