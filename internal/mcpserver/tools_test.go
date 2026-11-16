@@ -25,6 +25,7 @@ func fixtureDocument(t *testing.T) schema.Document {
 	run.Flags().StringSlice("tag", nil, "tags")
 	run.Flags().StringArray("env", nil, "env")
 	run.Flags().Bool("dry-run", false, "dry run")
+	run.Flags().Bool("color", true, "color")
 	run.Flags().String("hostname", "", "host")
 	run.Flags().String("stdout", "", "secret")
 	run.Flags().String("name", "", "name")

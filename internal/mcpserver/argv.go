@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ const (
 	minTimeoutSeconds     = 1
 	maxTimeoutSeconds     = 600
 	defaultTimeoutSeconds = 60
+	maxExactInteger       = 1 << 53
 )
 
 type Runner struct {
@@ -56,9 +58,16 @@ func (r *Runner) prepare(name string, raw json.RawMessage) ([]string, time.Durat
 	}
 	argv := append([]string{r.exe}, strings.Fields(c.Path)...)
 	argv = append(argv, "--json")
+	var missing []string
 	for _, f := range c.Flags {
+		if !exposedFlag(c, f) {
+			continue
+		}
 		value, ok := args[propertyName(f.Name)]
-		if !ok || !exposedFlag(c, f) {
+		if !ok {
+			if f.Required {
+				missing = append(missing, propertyName(f.Name))
+			}
 			continue
 		}
 		delete(args, propertyName(f.Name))
@@ -72,6 +81,9 @@ func (r *Runner) prepare(name string, raw json.RawMessage) ([]string, time.Durat
 		key := strings.ToLower(a.Name)
 		value, ok := args[key]
 		if !ok {
+			if a.Required {
+				missing = append(missing, key)
+			}
 			continue
 		}
 		delete(args, key)
@@ -83,6 +95,9 @@ func (r *Runner) prepare(name string, raw json.RawMessage) ([]string, time.Durat
 	}
 	if len(args) > 0 {
 		return nil, 0, invalidParams("unknown properties for %s: %s", name, strings.Join(sortedKeys(args), ", "))
+	}
+	if len(missing) > 0 {
+		return nil, 0, invalidParams("missing required properties for %s: %s", name, strings.Join(missing, ", "))
 	}
 	return argv, timeout, nil
 }
@@ -131,7 +146,7 @@ func flagArgv(f schema.Flag, value any) ([]string, error) {
 		if on {
 			return []string{flag}, nil
 		}
-		return nil, nil
+		return []string{flag + "=false"}, nil
 	case "int":
 		n, err := integer(key, value)
 		if err != nil {
@@ -184,11 +199,11 @@ func integer(key string, value any) (int64, error) {
 	if !ok {
 		return 0, invalidParams("%s must be an integer", key)
 	}
-	n, err := strconv.ParseInt(number.String(), 10, 64)
-	if err != nil {
+	f, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil || f != math.Trunc(f) || math.Abs(f) > maxExactInteger {
 		return 0, invalidParams("%s must be an integer", key)
 	}
-	return n, nil
+	return int64(f), nil
 }
 
 func stringList(key string, value any) ([]string, error) {
