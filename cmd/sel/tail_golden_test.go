@@ -91,13 +91,18 @@ type cliResult struct {
 
 func runBinary(t *testing.T, dir, host string, args ...string) cliResult {
 	t.Helper()
+	return runBinaryIn(t, dir, host, t.TempDir(), args...)
+}
+
+func runBinaryIn(t *testing.T, dir, host, configDir string, args ...string) cliResult {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"SELECTIVE_TEST_RUN_MAIN=1",
 		"SELECTIVE_HOST="+host,
 		"SELECTIVE_TOKEN=tok",
-		"SELECTIVE_CONFIG_DIR="+t.TempDir(),
+		"SELECTIVE_CONFIG_DIR="+configDir,
 	)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
