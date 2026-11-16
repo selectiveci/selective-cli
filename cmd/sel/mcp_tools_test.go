@@ -124,18 +124,26 @@ func TestMCPToolListHasEachRunnableCommandNotSkippedExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestMCPToolsAllCarryAHint(t *testing.T) {
-	tools := listedTools(t, newRoot())
-	idempotent := map[string]bool{}
+func TestMCPToolHintsComeFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
+	commands := map[string]schema.Command{}
 	for _, c := range helpCommands(t) {
-		idempotent[strings.ReplaceAll(c.Path, " ", "_")] = c.Mutates && len(c.ExitCodes) > 0
+		commands[strings.ReplaceAll(c.Path, " ", "_")] = c
 	}
 
-	for _, tool := range tools {
-		a := tool.Annotations
-		destructive := a != nil && a.DestructiveHint != nil && *a.DestructiveHint
-		if a == nil || a.ReadOnlyHint == destructive || a.IdempotentHint != idempotent[tool.Name] {
-			t.Errorf("%s annotations = %+v, want exactly one of readOnly and destructive, idempotent only when annotated as mutating", tool.Name, a)
+	for _, tool := range listedTools(t, newRoot()) {
+		c, a := commands[tool.Name], tool.Annotations
+		if a == nil {
+			t.Errorf("%s has no annotations", tool.Name)
+			continue
+		}
+		readOnly := !c.Mutates && !c.Destructive
+		switch {
+		case a.ReadOnlyHint != readOnly:
+			t.Errorf("%s readOnlyHint = %v, want %v", tool.Name, a.ReadOnlyHint, readOnly)
+		case !readOnly && (a.DestructiveHint == nil || *a.DestructiveHint != c.Destructive):
+			t.Errorf("%s destructiveHint = %v, want %v", tool.Name, a.DestructiveHint, c.Destructive)
+		case !readOnly && a.IdempotentHint != c.Mutates:
+			t.Errorf("%s idempotentHint = %v, want %v", tool.Name, a.IdempotentHint, c.Mutates)
 		}
 	}
 }
@@ -146,10 +154,10 @@ func goldenLine(tool *mcp.Tool) string {
 		return tool.Name + " none"
 	case a.ReadOnlyHint:
 		return tool.Name + " readOnly"
-	case a.IdempotentHint:
+	case a.DestructiveHint != nil && *a.DestructiveHint:
 		return tool.Name + " destructive idempotent"
 	}
-	return tool.Name + " destructive"
+	return tool.Name + " additive idempotent"
 }
 
 func TestMCPToolListMatchesTheGoldenAllowlist(t *testing.T) {

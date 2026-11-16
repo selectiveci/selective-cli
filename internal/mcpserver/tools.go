@@ -92,12 +92,9 @@ func positional(a schema.Arg) map[string]any {
 }
 
 func hints(c schema.Command) *mcp.ToolAnnotations {
-	destructive := true
-	switch {
-	case len(c.ExitCodes) == 0:
-		return &mcp.ToolAnnotations{DestructiveHint: &destructive}
-	case c.Mutates:
-		return &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: true}
+	if !c.Mutates && !c.Destructive {
+		return &mcp.ToolAnnotations{ReadOnlyHint: true}
 	}
-	return &mcp.ToolAnnotations{ReadOnlyHint: true}
+	destructive := c.Destructive
+	return &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: c.Mutates}
 }
