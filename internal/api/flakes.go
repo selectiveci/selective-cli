@@ -84,6 +84,36 @@ func (c *Client) FlakePrompt(id string) (*FlakePrompt, error) {
 	return &out.Prompt, nil
 }
 
+type FlakeWrite struct {
+	Flake  json.RawMessage `json:"flake"`
+	Result string          `json:"result"`
+	DryRun bool            `json:"dry_run"`
+}
+
+func (c *Client) QuarantineFlake(id string, dryRun bool) (*FlakeWrite, error) {
+	return c.flakeWrite("PUT", "/api/v1/flakes/"+url.PathEscape(id)+"/quarantine", dryRun)
+}
+
+func (c *Client) UnquarantineFlake(id string, dryRun bool) (*FlakeWrite, error) {
+	return c.flakeWrite("DELETE", "/api/v1/flakes/"+url.PathEscape(id)+"/quarantine", dryRun)
+}
+
+func (c *Client) MarkFlakeFixed(id string, dryRun bool) (*FlakeWrite, error) {
+	return c.flakeWrite("DELETE", "/api/v1/flakes/"+url.PathEscape(id), dryRun)
+}
+
+func (c *Client) flakeWrite(method, path string, dryRun bool) (*FlakeWrite, error) {
+	params := url.Values{}
+	if dryRun {
+		params.Set("dry_run", "true")
+	}
+	var out FlakeWrite
+	if err := c.do(method, withQuery(path, params), nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func withQuery(path string, params url.Values) string {
 	if len(params) == 0 {
 		return path

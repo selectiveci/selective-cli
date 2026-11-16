@@ -143,3 +143,27 @@ func (c *Client) Build(id, org string) (json.RawMessage, error) {
 	}
 	return out.Build, nil
 }
+
+type Rerun struct {
+	BuildID string          `json:"build_id"`
+	Rerun   json.RawMessage `json:"rerun"`
+	Result  string          `json:"result"`
+	DryRun  bool            `json:"dry_run"`
+}
+
+func (c *Client) RerunFailed(build, org, key string, dryRun bool) (*Rerun, error) {
+	params := url.Values{}
+	if org != "" {
+		params.Set("org", org)
+	}
+	if dryRun {
+		params.Set("dry_run", "true")
+	}
+	var out Rerun
+	header := http.Header{"Idempotency-Key": {key}}
+	path := withQuery("/api/v1/builds/"+url.PathEscape(build)+"/rerun", params)
+	if err := c.doWith(header, "POST", path, map[string]string{"mode": "failed"}, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
