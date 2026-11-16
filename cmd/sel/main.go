@@ -276,8 +276,9 @@ func suitesCreateCmd() *cobra.Command {
 	var f setupFlags
 	var name, repo, framework string
 	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a suite for a repository",
+		Use:         "create",
+		Annotations: map[string]string{"mutates": "true"},
+		Short:       "Create a suite for a repository",
 		Long: `Create a test suite for a repository, or find the one already there:
 running it again with the same name returns the same suite. Names are
 unique within an organization, so with several repositories include the
@@ -311,7 +312,7 @@ func suitesKeyCmd() *cobra.Command {
 	var opts setup.KeyOptions
 	cmd := &cobra.Command{
 		Use:         "key SUITE",
-		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9", "secret_flags": "stdout"},
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9", "mutates": "true", "secret_flags": "stdout"},
 		Short:       "Hand a suite's API key to a secret store without showing it",
 		Long: `Send a suite's API key (by name or ID) where CI can read it, without it
 appearing on screen.
@@ -345,8 +346,9 @@ func suitesConfigureCmd() *cobra.Command {
 	var settings api.SuiteSettings
 	var defaultBranch string
 	cmd := &cobra.Command{
-		Use:   "configure SUITE",
-		Short: "Change a suite's settings, such as test selection",
+		Use:         "configure SUITE",
+		Annotations: map[string]string{"mutates": "true"},
+		Short:       "Change a suite's settings, such as test selection",
 		Long: `Change a suite's settings (by name or ID). Needs a --setup login, as an
 owner or admin of the organization.
 
