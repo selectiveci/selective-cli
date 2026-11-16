@@ -62,18 +62,7 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	}()
 	var cancelled, timedOut atomic.Bool
 	finished := make(chan struct{})
-	cmd.Cancel = func() error {
-		cancelled.Store(true)
-		timedOut.Store(ctx.Err() == nil)
-		go func() {
-			select {
-			case <-time.After(terminateGrace):
-				_ = killTree(cmd)
-			case <-finished:
-			}
-		}()
-		return terminate(cmd)
-	}
+	cmd.Cancel = cancelGroup(cmd, ctx, &cancelled, &timedOut, finished)
 	cmd.WaitDelay = terminateGrace + pipeDrainWindow
 	isolate(cmd)
 	startErr := cmd.Start()
@@ -98,11 +87,30 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	out, truncated := stdout.result(held)
+	out, truncated := stdout.result(held, timedOut.Load())
 	return Result{
 		Stdout:    out,
 		ExitCode:  cmd.ProcessState.ExitCode(),
 		Truncated: truncated,
 		TimedOut:  timedOut.Load(),
 	}, nil
+}
+
+func cancelGroup(cmd *exec.Cmd, ctx context.Context, cancelled, timedOut *atomic.Bool, finished <-chan struct{}) func() error {
+	return func() error {
+		err := terminate(cmd)
+		if err != nil {
+			return err
+		}
+		cancelled.Store(true)
+		timedOut.Store(ctx.Err() == nil)
+		go func() {
+			select {
+			case <-time.After(terminateGrace):
+				_ = killTree(cmd)
+			case <-finished:
+			}
+		}()
+		return nil
+	}
 }

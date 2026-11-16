@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -121,6 +122,12 @@ func helper(mode string, args []string) int {
 		_ = os.Rename(pidFile+".tmp", pidFile)
 		fmt.Println("early")
 		return helperFlag(args, "code")
+	case "partial":
+		_, _ = io.WriteString(os.Stdout, "{\"a\":1}\n{\"par")
+		time.Sleep(30 * time.Second)
+	case "whole":
+		_, _ = io.WriteString(os.Stdout, "{\"a\":1}\n")
+		time.Sleep(30 * time.Second)
 	case "touch":
 		_ = os.WriteFile(os.Getenv("SEL_TEST_TOUCH"), nil, 0o600)
 	case "sleep":
@@ -141,6 +148,8 @@ func helperRunner() *Runner {
 		command("hangpg"),
 		command("holdpipe", schema.Flag{Name: "code", Type: "int"}),
 		command("touch"),
+		command("partial"),
+		command("whole"),
 		command("exit", schema.Flag{Name: "code", Type: "int"}),
 		command("flood", schema.Flag{Name: "lines", Type: "int"}, schema.Flag{Name: "width", Type: "int"}),
 	}}, os.Args[0])
@@ -351,14 +360,14 @@ func TestOutputOverOneMegabyteIsCappedAndKeepsTheTerminalEvent(t *testing.T) {
 	}
 }
 
-func capture(limit, chunk int, cut bool, input string) (string, bool) {
+func capture(limit, chunk int, cut, timedOut bool, input string) (string, bool) {
 	c := &capped{limit: limit}
 	for rest := []byte(input); len(rest) > 0; {
 		n := min(chunk, len(rest))
 		_, _ = c.Write(rest[:n])
 		rest = rest[n:]
 	}
-	out, truncated := c.result(cut)
+	out, truncated := c.result(cut, timedOut)
 	return string(out), truncated
 }
 
@@ -382,7 +391,7 @@ func TestCappedKeepsWholeLinesThenTheLastLineHoweverTheBytesArrive(t *testing.T)
 	}
 	for name, c := range cases {
 		for _, chunk := range []int{1, 3, 7, 1000} {
-			got, truncated := capture(10, chunk, false, c.input)
+			got, truncated := capture(10, chunk, false, false, c.input)
 			if got != c.want || truncated != c.truncated {
 				t.Errorf("%s (chunks of %d): got %q truncated=%v, want %q truncated=%v", name, chunk, got, truncated, c.want, c.truncated)
 			}
@@ -403,11 +412,61 @@ func TestCappedCutKeepsOnlyWholeLinesAndIsAlwaysFlagged(t *testing.T) {
 	}
 	for name, c := range cases {
 		for _, chunk := range []int{1, 3, 1000} {
-			got, truncated := capture(c.limit, chunk, true, c.input)
+			got, truncated := capture(c.limit, chunk, true, false, c.input)
 			if got != c.want || !truncated {
 				t.Errorf("%s (chunks of %d): got %q truncated=%v, want %q truncated=true", name, chunk, got, truncated, c.want)
 			}
 		}
+	}
+}
+
+func TestCappedTimedOutDropsAnUnterminatedFragmentAndFlagsOnlyWhatItDropped(t *testing.T) {
+	cases := map[string]struct {
+		input     string
+		want      string
+		truncated bool
+	}{
+		"a fragment under the cap is dropped":  {"a\nb\npar", "a\nb\n", true},
+		"only a fragment":                      {"par", "", true},
+		"whole lines under the cap are intact": {"a\nb\n", "a\nb\n", false},
+		"nothing written":                      {"", "", false},
+	}
+	for name, c := range cases {
+		for _, chunk := range []int{1, 3, 1000} {
+			got, truncated := capture(100, chunk, false, true, c.input)
+			if got != c.want || truncated != c.truncated {
+				t.Errorf("%s (chunks of %d): got %q truncated=%v, want %q truncated=%v", name, chunk, got, truncated, c.want, c.truncated)
+			}
+		}
+	}
+}
+
+func TestDeadlineDropsAnUnterminatedFragmentAndFlagsTruncatedOnlyWhenItDropsBytes(t *testing.T) {
+	partial, _ := runHelper(t, "helper_partial", `{}`, 1)
+	whole, _ := runHelper(t, "helper_whole", `{}`, 1)
+
+	if got := string(partial.Stdout); got != "{\"a\":1}\n" || !partial.TimedOut || !partial.Truncated {
+		t.Errorf("partial = %q timedOut=%v truncated=%v, want the whole line, timed out, truncated", got, partial.TimedOut, partial.Truncated)
+	}
+	if got := string(whole.Stdout); got != "{\"a\":1}\n" || !whole.TimedOut || whole.Truncated {
+		t.Errorf("whole = %q timedOut=%v truncated=%v, want the whole line, timed out, not truncated", got, whole.TimedOut, whole.Truncated)
+	}
+}
+
+func TestCancellingAnAlreadyReapedChildRecordsNothing(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "helper", "exit")
+	isolate(cmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	var cancelled, timedOut atomic.Bool
+	finished := make(chan struct{})
+	defer close(finished)
+
+	err := cancelGroup(cmd, context.Background(), &cancelled, &timedOut, finished)()
+
+	if err == nil || cancelled.Load() || timedOut.Load() {
+		t.Errorf("cancel of a reaped child: err = %v cancelled = %v timedOut = %v, want an error and nothing recorded", err, cancelled.Load(), timedOut.Load())
 	}
 }
 

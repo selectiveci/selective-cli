@@ -58,8 +58,8 @@ func (c *capped) endLine() {
 	c.line, c.inLine, c.overflow = nil, false, false
 }
 
-func (c *capped) result(cut bool) ([]byte, bool) {
-	if c.total <= c.limit && !cut {
+func (c *capped) result(cut, timedOut bool) ([]byte, bool) {
+	if c.total <= c.limit && !cut && !timedOut {
 		return c.head, false
 	}
 	out := c.head
@@ -71,5 +71,5 @@ func (c *capped) result(cut bool) ([]byte, bool) {
 	if c.last != nil && c.lastStart >= len(out) {
 		out = append(out[:len(out):len(out)], c.last...)
 	}
-	return out, true
+	return out, cut || c.total > c.limit || len(out) < c.total
 }
