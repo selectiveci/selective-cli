@@ -260,6 +260,7 @@ type deleteStub struct {
 	writes    []deleteCall
 	polls     []string
 	lookups   int
+	orgGets   int
 	replies   []deleteReply
 	approvals []string
 	listing   string
@@ -287,6 +288,7 @@ func (s *deleteStub) start(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs":
+			s.orgGets++
 			_, _ = w.Write([]byte(`{"organizations":[{"slug":"acme","name":"Acme","role":"owner","github_account":"acme"}]}`))
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
 			s.lookups++
@@ -555,5 +557,43 @@ func TestSuitesDeleteSendsAnUnlistedUuidAsTheIdAndLetsTheServerAnswer(t *testing
 	assertRefusal(t, res, 3, "suite_not_found")
 	if len(stub.writes) != 1 || stub.writes[0].path != "/api/v1/orgs/acme/suites/"+unlisted {
 		t.Errorf("writes = %+v, want one DELETE of %s", stub.writes, unlisted)
+	}
+}
+
+func TestSuitesDeleteWaitAsksForTheOrganizationOnceAcrossApprovalAndResend(t *testing.T) {
+	t.Setenv("SELECTIVE_ORG", "")
+	approved := approvalFixture{status: "approved", expiresAt: "2026-11-15T10:00:00.123456Z", decidedAt: "2026-11-14T10:05:00Z"}
+	stub := &deleteStub{replies: []deleteReply{deletePending, deleteDone}, approvals: []string{pendingApproval.json(), approved.json()}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--wait=2m", "--json")
+
+	if res.exit != 0 || stub.orgGets != 1 || len(stub.writes) != 2 {
+		t.Errorf("exit %d organization requests %d writes %d, want exit 0, 1 and 2", res.exit, stub.orgGets, len(stub.writes))
+	}
+}
+
+func TestSuitesDeleteWithAnOrgFlagNeverAsksTheServerForOrganizations(t *testing.T) {
+	t.Setenv("SELECTIVE_ORG", "")
+	stub := &deleteStub{replies: []deleteReply{deleteDone}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--org", "acme", "--json")
+
+	if res.exit != 0 || stub.orgGets != 0 {
+		t.Errorf("exit %d organization requests %d, want exit 0 and none", res.exit, stub.orgGets)
+	}
+}
+
+func TestSuitesDeleteAnExactIdWinsOverAnotherSuiteNamedLikeIt(t *testing.T) {
+	const decoyID = "77777777-7777-4777-8777-777777777777"
+	decoy := `{"id":"` + decoyID + `","name":"` + archivedSuiteID + `","type":"rspec","repo":"acme/web","archived_at":"2026-11-01T09:00:00Z","last_run_at":null}`
+	stub := &deleteStub{replies: []deleteReply{deleteDone}, listing: decoy + "," + archivedSuite}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--org", "acme", "--json")
+
+	if res.exit != 0 || len(stub.writes) != 1 || stub.writes[0].path != deleteRoute {
+		t.Errorf("exit %d writes %+v, want one DELETE of %s", res.exit, stub.writes, deleteRoute)
 	}
 }
