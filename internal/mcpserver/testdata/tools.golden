@@ -12,11 +12,11 @@ orgs readOnly
 repos readOnly
 suites readOnly
 suites_configure idempotent
-suites_create idempotent
-suites_key idempotent
+suites_create confirm
+suites_key confirm
 tail readOnly
 test confirm
-tokens_create idempotent
+tokens_create confirm
 tokens_list readOnly
 tokens_revoke idempotent
 tokens_show readOnly

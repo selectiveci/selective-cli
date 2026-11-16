@@ -147,8 +147,8 @@ func TestMCPToolsNeverSendDestructiveHintAndMarkReadOnlyOnlyReads(t *testing.T) 
 		if (wire["readOnlyHint"] == true) != readOnly {
 			t.Errorf("%s readOnlyHint on the wire = %v, want %v: %s", tool.Name, wire["readOnlyHint"] == true, readOnly, raw)
 		}
-		if (wire["idempotentHint"] == true) != (c.Mutates && !c.LocalExec) {
-			t.Errorf("%s idempotentHint on the wire = %v, want %v: %s", tool.Name, wire["idempotentHint"] == true, c.Mutates && !c.LocalExec, raw)
+		if (wire["idempotentHint"] == true) != c.Idempotent {
+			t.Errorf("%s idempotentHint on the wire = %v, want %v: %s", tool.Name, wire["idempotentHint"] == true, c.Idempotent, raw)
 		}
 	}
 }
@@ -203,5 +203,19 @@ func TestMCPTestToolHasNoReadOnlyHintAndTheDefaultDestructiveHint(t *testing.T) 
 	}
 	if strings.Contains(string(raw), "readOnlyHint") || strings.Contains(string(raw), `"destructiveHint":false`) {
 		t.Errorf("test annotations on the wire = %s, want no readOnlyHint and the default destructiveHint", raw)
+	}
+}
+
+func TestOnlyStateSettingCommandsAreIdempotent(t *testing.T) {
+	var got []string
+	for _, c := range helpCommands(t) {
+		if c.Idempotent {
+			got = append(got, c.Path)
+		}
+	}
+	slices.Sort(got)
+
+	if want := []string{"suites configure", "tokens revoke"}; !slices.Equal(got, want) {
+		t.Errorf("idempotent commands = %v, want %v", got, want)
 	}
 }

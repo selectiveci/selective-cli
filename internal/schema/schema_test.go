@@ -82,6 +82,8 @@ func TestBuildRejectsAnnotationsOutsideTheRegistry(t *testing.T) {
 		"mutates not true":       {"mutates": "yes"},
 		"destructive not true":   {"destructive": "1"},
 		"local_exec not true":    {"local_exec": "yes"},
+		"idempotent not true":    {"idempotent": "yes", "mutates": "true"},
+		"idempotent on a read":   {"idempotent": "true"},
 		"wait not a duration":    {"wait_default": "soon"},
 		"secret flag not a flag": {"secret_flags": "nope"},
 		"mcp not skip":           {"mcp": "hide"},
@@ -98,5 +100,20 @@ func TestBuildRejectsWaitDefaultWithoutAWaitFlag(t *testing.T) {
 	root.AddCommand(&cobra.Command{Use: "go", Annotations: map[string]string{"wait_default": "1m"}, Run: func(*cobra.Command, []string) {}})
 	if _, err := Build(root, "v"); err == nil {
 		t.Error("wait_default without --wait was accepted")
+	}
+}
+
+func TestBuildAcceptsIdempotentOnMutatingAndDestructiveCommands(t *testing.T) {
+	for _, annotations := range []map[string]string{
+		{"idempotent": "true", "mutates": "true"},
+		{"idempotent": "true", "destructive": "true"},
+	} {
+		doc, err := Build(fixture("put", annotations), "v")
+		if err != nil {
+			t.Fatalf("%v: %v", annotations, err)
+		}
+		if node, _ := Lookup(doc, []string{"put"}); !node.Idempotent {
+			t.Errorf("%v: idempotent not carried", annotations)
+		}
 	}
 }
