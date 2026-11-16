@@ -32,6 +32,10 @@ func exposed(c schema.Command) bool {
 	return c.Runnable && c.MCP != "skip" && c.Path != "help" && c.Path != "mcp"
 }
 
+func exposedFlag(c schema.Command, f schema.Flag) bool {
+	return !slices.Contains(neverExposed, f.Name) && !slices.Contains(c.SecretFlags, f.Name)
+}
+
 func toolName(path string) string {
 	return strings.ReplaceAll(path, " ", "_")
 }
@@ -44,7 +48,7 @@ func tool(c schema.Command) *mcp.Tool {
 	properties := map[string]map[string]any{}
 	required := []string{}
 	for _, f := range c.Flags {
-		if slices.Contains(neverExposed, f.Name) || slices.Contains(c.SecretFlags, f.Name) {
+		if !exposedFlag(c, f) {
 			continue
 		}
 		properties[propertyName(f.Name)] = property(f)
@@ -58,6 +62,13 @@ func tool(c schema.Command) *mcp.Tool {
 		if a.Required {
 			required = append(required, name)
 		}
+	}
+	properties[timeoutProperty] = map[string]any{
+		"type":        "integer",
+		"description": "Seconds before the command is killed",
+		"minimum":     minTimeoutSeconds,
+		"maximum":     maxTimeoutSeconds,
+		"default":     defaultTimeoutSeconds,
 	}
 	slices.Sort(required)
 	return &mcp.Tool{
