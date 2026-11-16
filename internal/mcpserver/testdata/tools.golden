@@ -15,7 +15,7 @@ suites_configure additive idempotent
 suites_create additive idempotent
 suites_key additive idempotent
 tail readOnly
-test readOnly
+test confirm
 tokens_create additive idempotent
 tokens_list readOnly
 tokens_revoke destructive idempotent

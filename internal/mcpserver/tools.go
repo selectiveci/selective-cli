@@ -92,6 +92,9 @@ func positional(a schema.Arg) map[string]any {
 }
 
 func hints(c schema.Command) *mcp.ToolAnnotations {
+	if c.LocalExec {
+		return &mcp.ToolAnnotations{}
+	}
 	if !c.Mutates && !c.Destructive {
 		return &mcp.ToolAnnotations{ReadOnlyHint: true}
 	}

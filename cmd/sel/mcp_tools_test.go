@@ -136,13 +136,15 @@ func TestMCPToolHintsComeFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
 			t.Errorf("%s has no annotations", tool.Name)
 			continue
 		}
-		readOnly := !c.Mutates && !c.Destructive
+		readOnly := !c.Mutates && !c.Destructive && !c.LocalExec
 		switch {
 		case a.ReadOnlyHint != readOnly:
 			t.Errorf("%s readOnlyHint = %v, want %v", tool.Name, a.ReadOnlyHint, readOnly)
-		case !readOnly && (a.DestructiveHint == nil || *a.DestructiveHint != c.Destructive):
+		case c.LocalExec && a.DestructiveHint != nil && !*a.DestructiveHint:
+			t.Errorf("%s destructiveHint = false, want the default", tool.Name)
+		case !readOnly && !c.LocalExec && (a.DestructiveHint == nil || *a.DestructiveHint != c.Destructive):
 			t.Errorf("%s destructiveHint = %v, want %v", tool.Name, a.DestructiveHint, c.Destructive)
-		case !readOnly && a.IdempotentHint != c.Mutates:
+		case !readOnly && !c.LocalExec && a.IdempotentHint != c.Mutates:
 			t.Errorf("%s idempotentHint = %v, want %v", tool.Name, a.IdempotentHint, c.Mutates)
 		}
 	}
@@ -154,7 +156,9 @@ func goldenLine(tool *mcp.Tool) string {
 		return tool.Name + " none"
 	case a.ReadOnlyHint:
 		return tool.Name + " readOnly"
-	case a.DestructiveHint != nil && *a.DestructiveHint:
+	case a.DestructiveHint == nil:
+		return tool.Name + " confirm"
+	case *a.DestructiveHint:
 		return tool.Name + " destructive idempotent"
 	}
 	return tool.Name + " additive idempotent"
@@ -173,5 +177,30 @@ func TestMCPToolListMatchesTheGoldenAllowlist(t *testing.T) {
 
 	if want := strings.Split(strings.TrimSpace(string(raw)), "\n"); !slices.Equal(got, want) {
 		t.Errorf("tools differ from internal/mcpserver/testdata/tools.golden; edit it by hand if the change is intended\ngot:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestOnlyTestIsMarkedLocalExecAndStaysAnOrdinaryCommand(t *testing.T) {
+	for _, c := range helpCommands(t) {
+		if c.LocalExec != (c.Path == "test") {
+			t.Errorf("%s local_exec = %v", c.Path, c.LocalExec)
+		}
+		if c.Path == "test" && (c.Mutates || c.Destructive) {
+			t.Errorf("test mutates = %v destructive = %v, want neither", c.Mutates, c.Destructive)
+		}
+	}
+}
+
+func TestMCPTestToolHasNoReadOnlyHintAndTheDefaultDestructiveHint(t *testing.T) {
+	tool := toolNamed(listedTools(t, newRoot()), "test")
+	if tool == nil {
+		t.Fatal("test is not listed")
+	}
+	raw, err := json.Marshal(tool.Annotations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "readOnlyHint") || strings.Contains(string(raw), `"destructiveHint":false`) {
+		t.Errorf("test annotations on the wire = %s, want no readOnlyHint and the default destructiveHint", raw)
 	}
 }

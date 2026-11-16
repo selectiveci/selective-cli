@@ -81,6 +81,7 @@ func TestBuildRejectsAnnotationsOutsideTheRegistry(t *testing.T) {
 		"unregistered event":     {"events": "made_up"},
 		"mutates not true":       {"mutates": "yes"},
 		"destructive not true":   {"destructive": "1"},
+		"local_exec not true":    {"local_exec": "yes"},
 		"wait not a duration":    {"wait_default": "soon"},
 		"secret flag not a flag": {"secret_flags": "nope"},
 		"mcp not skip":           {"mcp": "hide"},
