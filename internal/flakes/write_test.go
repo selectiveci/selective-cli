@@ -23,6 +23,8 @@ func TestWriteTextModePrintsOneSentenceOnStderrAndNothingOnStdout(t *testing.T) 
 		{"quarantine updated", 200, `{"flake":` + flakeBody + `,"result":"updated","dry_run":false}`, WriteOptions{}, Quarantine, "Quarantined flake f-1 (checkout flow).\n"},
 		{"quarantine unchanged", 200, `{"flake":` + flakeBody + `,"result":"unchanged","dry_run":false}`, WriteOptions{}, Quarantine, "Flake f-1 (checkout flow) is already quarantined.\n"},
 		{"unquarantine dry run", 200, `{"flake":` + flakeBody + `,"result":"updated","dry_run":true}`, WriteOptions{DryRun: true}, Unquarantine, "Dry run: would unquarantine flake f-1 (checkout flow).\n"},
+		{"mark-fixed deleted", 200, `{"flake":` + flakeBody + `,"result":"deleted","dry_run":false}`, WriteOptions{}, MarkFixed, "Marked flake f-1 (checkout flow) as fixed.\n"},
+		{"mark-fixed already gone", 404, `{"error":"not_found","message":"Flake not found."}`, WriteOptions{IfExists: true}, MarkFixed, "Flake f-1 is already gone.\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
