@@ -16,6 +16,8 @@ import (
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/schema"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -89,8 +91,8 @@ func (g *gateServer) sendDelete(key string) func(context.Context) (*Outcome, err
 	}
 }
 
-func (g *gateServer) gate(out io.Writer) *Gate {
-	return &Gate{Client: api.New(g.URL, "tok"), Out: out, Wait: time.Hour, Clock: &fakeClock{}}
+func (g *gateServer) gate(out, errOut io.Writer) *Gate {
+	return &Gate{Client: api.New(g.URL, "tok"), Out: out, Err: errOut, JSON: true, Wait: time.Hour, Clock: &fakeClock{}}
 }
 
 func (g *gateServer) writeCalls() []call {
@@ -120,7 +122,7 @@ func TestGateResendsOnceAfterApprovalWithTheSameRequest(t *testing.T) {
 	srv := newGateServer(t, []reply{{202, pendingA1, ""}, {200, deleted, ""}}, ok("pending"), ok("approved"))
 	var out bytes.Buffer
 
-	err := srv.gate(&out).Do(context.Background(), srv.sendDelete("key-1"), sentence)
+	err := srv.gate(&out, io.Discard).Do(context.Background(), srv.sendDelete("key-1"), sentence)
 
 	want := `{"v":1,"result":"pending_approval","dry_run":false,"approval":{"id":"a1","url":"https://selective.example/a1","status":"pending","expires_at":"2026-11-14T11:00:00Z"}}` + "\n" +
 		`{"v":1,"event":"waiting","elapsed_s":0,"for":"approval"}` + "\n" +
@@ -152,7 +154,7 @@ func TestGateDoesNotResendUnlessApproved(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newGateServer(t, []reply{{202, pendingA1, ""}, {200, deleted, ""}}, tc.approvals...)
-			gate := srv.gate(io.Discard)
+			gate := srv.gate(io.Discard, io.Discard)
 			gate.Wait = tc.wait
 
 			err := gate.Do(context.Background(), srv.sendDelete("key-1"), sentence)
@@ -168,7 +170,7 @@ func TestGateDoesNotResendUnlessApproved(t *testing.T) {
 func TestGateSecondPendingApprovalExitsSevenWithTheNewApprovalAndNeverSendsThrice(t *testing.T) {
 	srv := newGateServer(t, []reply{{202, pendingA1, ""}, {202, pendingA2, ""}, {200, deleted, ""}}, ok("approved"))
 
-	err := srv.gate(io.Discard).Do(context.Background(), srv.sendDelete("key-1"), sentence)
+	err := srv.gate(io.Discard, io.Discard).Do(context.Background(), srv.sendDelete("key-1"), sentence)
 
 	var line bytes.Buffer
 	var fielded contract.Fielded
@@ -186,7 +188,7 @@ func TestGateDryRunWithWaitReturnsThePendingAtOnceWithoutPolling(t *testing.T) {
 	srv := newGateServer(t, []reply{{200, pendingDry, ""}}, ok("approved"))
 	var out bytes.Buffer
 
-	err := srv.gate(&out).Do(context.Background(), srv.sendDelete("key-1"), sentence)
+	err := srv.gate(&out, io.Discard).Do(context.Background(), srv.sendDelete("key-1"), sentence)
 
 	var pending *api.PendingApproval
 	_, exit := codeOf(t, err)
@@ -197,7 +199,7 @@ func TestGateDryRunWithWaitReturnsThePendingAtOnceWithoutPolling(t *testing.T) {
 
 func TestGateWithoutWaitReturnsThePendingWithoutPolling(t *testing.T) {
 	srv := newGateServer(t, []reply{{202, pendingA1, ""}}, ok("approved"))
-	gate := srv.gate(io.Discard)
+	gate := srv.gate(io.Discard, io.Discard)
 	gate.Wait = 0
 
 	err := gate.Do(context.Background(), srv.sendDelete("key-1"), sentence)
@@ -212,7 +214,7 @@ func TestGateUserTokenSuccessUnderWaitPrintsTheWriteObjectThenDoneWithoutPolling
 	srv := newGateServer(t, []reply{{200, deleted, ""}}, ok("approved"))
 	var out bytes.Buffer
 
-	err := srv.gate(&out).Do(context.Background(), srv.sendDelete("key-1"), sentence)
+	err := srv.gate(&out, io.Discard).Do(context.Background(), srv.sendDelete("key-1"), sentence)
 
 	want := `{"v":1,"suite":{"id":"s1"},"result":"deleted","dry_run":false}` + "\n" +
 		`{"v":1,"event":"done","result":"deleted","suite":{"id":"s1"}}` + "\n"
@@ -224,13 +226,84 @@ func TestGateUserTokenSuccessUnderWaitPrintsTheWriteObjectThenDoneWithoutPolling
 func TestGateSuccessWithoutWaitPrintsTheWriteObjectOnly(t *testing.T) {
 	srv := newGateServer(t, []reply{{200, deleted, ""}})
 	var out bytes.Buffer
-	gate := srv.gate(&out)
+	gate := srv.gate(&out, io.Discard)
 	gate.Wait = 0
 
 	err := gate.Do(context.Background(), srv.sendDelete("key-1"), sentence)
 
 	if want := `{"v":1,"suite":{"id":"s1"},"result":"deleted","dry_run":false}` + "\n"; err != nil || out.String() != want {
 		t.Errorf("err = %v, output %q, want %q", err, out.String(), want)
+	}
+}
+
+func TestGateCancelledAfterTheApprovedPollDoesNotResend(t *testing.T) {
+	srv := newGateServer(t, []reply{{202, pendingA1, ""}, {200, deleted, ""}}, ok("approved"))
+	ctx, cancel := context.WithCancel(context.Background())
+	gate := srv.gate(io.Discard, io.Discard)
+	gate.Client.HTTP = &http.Client{Transport: cancelAfterBody{http.DefaultTransport, "/api/v1/approvals/", cancel}}
+
+	sends := 0
+	send := srv.sendDelete("key-1")
+
+	err := gate.Do(ctx, func(ctx context.Context) (*Outcome, error) {
+		sends++
+		return send(ctx)
+	}, sentence)
+
+	if !errors.Is(err, context.Canceled) || srv.pollCount() != 1 || sends != 1 || len(srv.writeCalls()) != 1 {
+		t.Errorf("err = %v, polls %d, sends %d, writes %d; want context.Canceled after one poll and one send", err, srv.pollCount(), sends, len(srv.writeCalls()))
+	}
+}
+
+type cancelAfterBody struct {
+	http.RoundTripper
+	prefix string
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterBody) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := c.RoundTripper.RoundTrip(r)
+	if err == nil && strings.HasPrefix(r.URL.Path, c.prefix) {
+		resp.Body = closeHook{resp.Body, c.cancel}
+	}
+	return resp, err
+}
+
+type closeHook struct {
+	io.ReadCloser
+	onClose func()
+}
+
+func (c closeHook) Close() error {
+	err := c.ReadCloser.Close()
+	c.onClose()
+	return err
+}
+
+func TestGateTimeoutExitsEightWithoutResending(t *testing.T) {
+	srv := newGateServer(t, []reply{{202, pendingA1, ""}}, ok("pending"))
+	gate := srv.gate(io.Discard, io.Discard)
+	gate.Timeout = time.Nanosecond
+
+	err := gate.Do(context.Background(), srv.sendDelete("key-1"), sentence)
+
+	code, exit := codeOf(t, err)
+	if code != contract.Timeout || exit != 8 || len(srv.writeCalls()) > 1 {
+		t.Errorf("code %s exit %d, %d writes; want timeout exit 8 and at most one write", code, exit, len(srv.writeCalls()))
+	}
+}
+
+func TestGateTextModeWaitsOnStderrAndPrintsTheSentenceOnStdout(t *testing.T) {
+	srv := newGateServer(t, []reply{{202, pendingA1, ""}, {200, deleted, ""}}, ok("pending"), ok("approved"))
+	var out, errOut bytes.Buffer
+	gate := srv.gate(&out, &errOut)
+	gate.JSON = false
+
+	err := gate.Do(context.Background(), srv.sendDelete("key-1"), sentence)
+
+	wantErr := "Approval needed: https://selective.example/a1. Waiting for a person to decide it.\nwaiting for approval (0s)\n"
+	if err != nil || out.String() != "Suite deleted\n" || errOut.String() != wantErr {
+		t.Errorf("err = %v, stdout %q, stderr %q; want %q and %q", err, out.String(), errOut.String(), "Suite deleted\n", wantErr)
 	}
 }
 
@@ -246,9 +319,59 @@ func TestGateRecognisesTheApprovalTheAPIClientDetects(t *testing.T) {
 	}
 	var out bytes.Buffer
 
-	err := srv.gate(&out).Do(context.Background(), send, sentence)
+	err := srv.gate(&out, io.Discard).Do(context.Background(), send, sentence)
 
 	if err != nil || len(srv.writeCalls()) != 2 || !strings.HasSuffix(out.String(), `{"v":1,"event":"done","result":"revoked","token":{"id":"t1"}}`+"\n") {
 		t.Errorf("err = %v, writes %d, output:\n%s", err, len(srv.writeCalls()), out.String())
+	}
+}
+
+func TestBindWaitAddsTheFlagsAndAnnotationsTheSchemaAccepts(t *testing.T) {
+	var gate Gate
+	root := &cobra.Command{Use: "sel"}
+	cmd := &cobra.Command{Use: "drop", Short: "Drop it", RunE: func(*cobra.Command, []string) error { return nil }}
+	BindWait(cmd, &gate)
+	root.AddCommand(cmd)
+
+	doc, err := schema.Build(root, "test")
+	node, found := schema.Lookup(doc, []string{"drop"})
+
+	if err != nil || !found || node.WaitDefault != "10m" || strings.Join(node.Events, ",") != "waiting,done" {
+		t.Fatalf("Build err = %v, found %v, node %+v; want wait_default 10m and events waiting,done", err, found, node)
+	}
+	for args, want := range map[string][2]time.Duration{"--wait": {10 * time.Minute, 0}, "--wait=5s --timeout=1m": {5 * time.Second, time.Minute}, "": {0, 0}} {
+		gate = Gate{}
+		cmd.ResetFlags()
+		BindWait(cmd, &gate)
+		if err := cmd.ParseFlags(strings.Fields(args)); err != nil || gate.Wait != want[0] || gate.Timeout != want[1] {
+			t.Errorf("%q parsed to wait %s timeout %s (%v), want %s and %s", args, gate.Wait, gate.Timeout, err, want[0], want[1])
+		}
+	}
+	if usages := cmd.Flags().FlagUsages(); strings.Count(usages, "(default 0s)") != 0 {
+		t.Errorf("flag usages show a zero default:\n%s", usages)
+	}
+}
+
+func TestGateRefusesNonPositiveWaitAndTimeoutBeforeSending(t *testing.T) {
+	for _, arg := range []string{"--wait=0s", "--timeout=-1s"} {
+		t.Run(arg, func(t *testing.T) {
+			var gate Gate
+			cmd := &cobra.Command{Use: "drop"}
+			BindWait(cmd, &gate)
+			if err := cmd.ParseFlags([]string{arg}); err != nil {
+				t.Fatal(err)
+			}
+			sends := 0
+
+			err := gate.Do(context.Background(), func(context.Context) (*Outcome, error) {
+				sends++
+				return nil, nil
+			}, sentence)
+
+			code, exit := codeOf(t, err)
+			if code != contract.UsageError || exit != 5 || sends != 0 {
+				t.Errorf("code %s exit %d, %d sends; want usage_error exit 5 and none", code, exit, sends)
+			}
+		})
 	}
 }
