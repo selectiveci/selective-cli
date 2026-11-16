@@ -33,7 +33,7 @@ func exposed(c schema.Command) bool {
 }
 
 func exposedFlag(c schema.Command, f schema.Flag) bool {
-	return !slices.Contains(neverExposed, f.Name) && !slices.Contains(c.SecretFlags, f.Name)
+	return !slices.Contains(neverExposed, f.Name) && !slices.Contains(c.SecretFlags, f.Name) && !slices.Contains(c.SkipFlags, f.Name)
 }
 
 func toolName(path string) string {
