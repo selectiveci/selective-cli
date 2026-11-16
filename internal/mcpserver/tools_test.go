@@ -28,6 +28,8 @@ func fixtureDocument(t *testing.T) schema.Document {
 	run.Flags().String("hostname", "", "host")
 	run.Flags().String("stdout", "", "secret")
 	run.Flags().String("name", "", "name")
+	run.Flags().String("token", "", "hidden")
+	_ = run.Flags().MarkHidden("token")
 	_ = run.MarkFlagRequired("name")
 	group := &cobra.Command{Use: "group"}
 	group.AddCommand(leaf("child", nil))

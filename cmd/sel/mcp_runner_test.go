@@ -21,6 +21,11 @@ func realRunner(t *testing.T) (*mcpserver.Runner, schema.Document) {
 	return mcpserver.NewRunner(doc, "/bin/sel"), doc
 }
 
+func isInvalidParams(err error) bool {
+	var wire *jsonrpc.Error
+	return errors.As(err, &wire) && wire.Code == jsonrpc.CodeInvalidParams
+}
+
 func TestMCPRunnerMapsRealCommandsToTheirArgv(t *testing.T) {
 	runner, _ := realRunner(t)
 	cases := map[string]struct {
@@ -55,8 +60,8 @@ func TestMCPRunnerRejectsEverySecretAndNeverExposedFlagOfTheRealTree(t *testing.
 			if flag == "json" {
 				args = `{"json":true}`
 			}
-			if _, err := runner.Argv(tool, json.RawMessage(args)); err == nil {
-				t.Errorf("%s accepted --%s", tool, flag)
+			if _, err := runner.Argv(tool, json.RawMessage(args)); !isInvalidParams(err) {
+				t.Errorf("%s: err = %v for --%s, want invalid params", tool, err, flag)
 			}
 			checked++
 		}
@@ -65,14 +70,12 @@ func TestMCPRunnerRejectsEverySecretAndNeverExposedFlagOfTheRealTree(t *testing.
 		t.Fatal("nothing was checked")
 	}
 	for _, name := range []string{"auth_login", "auth_logout", "help", "mcp", "__transport"} {
-		_, err := runner.Argv(name, json.RawMessage(`{}`))
-		var wire *jsonrpc.Error
-		if !errors.As(err, &wire) || wire.Code != jsonrpc.CodeInvalidParams {
+		if _, err := runner.Argv(name, json.RawMessage(`{}`)); !isInvalidParams(err) {
 			t.Errorf("%s: err = %v, want invalid params", name, err)
 		}
 	}
-	if _, err := runner.Argv("tokens_create", json.RawMessage(`{"stdout":"/tmp/k"}`)); err == nil {
-		t.Error("tokens_create accepted its secret flag --stdout")
+	if _, err := runner.Argv("tokens_create", json.RawMessage(`{"stdout":"/tmp/k"}`)); !isInvalidParams(err) {
+		t.Errorf("tokens_create accepted its secret flag --stdout: %v", err)
 	}
 }
 
