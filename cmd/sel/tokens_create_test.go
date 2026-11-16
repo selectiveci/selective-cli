@@ -370,7 +370,6 @@ func TestSecretFlagRedirectsOnlyWhereTheCommandOrTheTreeDeclaresIt(t *testing.T)
 		onStdout string
 	}{
 		"test leaf, flag after the terminator":                 {[]string{"test", "--json", "--", "--stdout"}, `"error":`},
-		"suites key declares no secret flag":                   {[]string{"suites", "key", "abc", "--stdout", "--json"}, `"error":`},
 		"orgs leaf, flag after the terminator":                 {[]string{"orgs", "--json", "--", "--stdout"}, `"error":"usage_error"`},
 		"orgs leaf, unknown flag":                              {[]string{"orgs", "--stdout", "--json"}, `"error":"usage_error"`},
 		"secret command, flag after the terminator":            {[]string{"tokens", "create", "--name", "x", "--json", "--", "--stdout"}, `"error":"usage_error"`},

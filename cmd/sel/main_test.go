@@ -248,7 +248,6 @@ func leafPaths(c *cobra.Command, prefix string, out map[string]*cobra.Command) {
 var commandsWithoutExitCodes = map[string]bool{
 	"suites configure": true,
 	"suites create":    true,
-	"suites key":       true,
 	"__transport":      true,
 }
 
