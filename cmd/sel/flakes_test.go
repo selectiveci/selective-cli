@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -114,5 +117,129 @@ func TestFlakesCommandsAreInTheSchemaWithTheirExitCodes(t *testing.T) {
 		if !strings.Contains(all, `"path":"flakes `+name+`"`) || !strings.Contains(stdout, `"exit_codes":[0,3,4,5,6]`) {
 			t.Errorf("%s: missing from help --json, or exit codes wrong: %s", name, stdout)
 		}
+	}
+}
+
+var flakeWrites = []struct {
+	name   string
+	args   []string
+	method string
+	path   string
+}{
+	{"quarantine", []string{"flakes", "quarantine", flakeID}, "PUT", "/api/v1/flakes/" + flakeID + "/quarantine"},
+	{"unquarantine", []string{"flakes", "unquarantine", flakeID}, "DELETE", "/api/v1/flakes/" + flakeID + "/quarantine"},
+}
+
+func flakeWriteBody(result string, dryRun bool) string {
+	return `{"flake":` + flakeRows + `,"result":"` + result + `","dry_run":` + strconv.FormatBool(dryRun) + `}`
+}
+
+func TestFlakeWritesSendTheirMethodAndPathAndRelayTheResult(t *testing.T) {
+	results := map[string][]string{
+		"quarantine":   {"updated", "unchanged"},
+		"unquarantine": {"updated", "unchanged"},
+	}
+	for _, tc := range flakeWrites {
+		for _, result := range results[tc.name] {
+			t.Run(tc.name+" "+result, func(t *testing.T) {
+				stub := &revokeStub{status: 200, body: flakeWriteBody(result, false)}
+				srv := stub.start(t)
+
+				res := runBinary(t, t.TempDir(), srv.URL, append(tc.args, "--json")...)
+
+				want := `{"v":1,"flake":` + flakeRows + `,"result":"` + result + `","dry_run":false}` + "\n"
+				if res.exit != 0 || res.stdout != want {
+					t.Errorf("exit %d stdout %q want %q stderr %q", res.exit, res.stdout, want, res.stderr)
+				}
+				if !slices.Equal(stub.requests, []string{tc.method + " " + tc.path}) {
+					t.Errorf("requests %v, want one %s %s", stub.requests, tc.method, tc.path)
+				}
+			})
+		}
+	}
+}
+
+func TestFlakeWritesSendDryRunAndRelayIt(t *testing.T) {
+	for _, tc := range flakeWrites {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &revokeStub{status: 200, body: flakeWriteBody("updated", true)}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, append(slices.Clone(tc.args), "--dry-run", "--json")...)
+
+			if !slices.Equal(stub.requests, []string{tc.method + " " + tc.path + "?dry_run=true"}) {
+				t.Errorf("requests %v, want one %s %s?dry_run=true", stub.requests, tc.method, tc.path)
+			}
+			if want := `{"v":1,"flake":` + flakeRows + `,"result":"updated","dry_run":true}` + "\n"; res.exit != 0 || res.stdout != want {
+				t.Errorf("exit %d stdout %q want %q", res.exit, res.stdout, want)
+			}
+		})
+	}
+}
+
+func TestFlakeWriteRefusalsExitByCode(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		exit   int
+		code   string
+	}{
+		{404, `{"error":"not_found","message":"Flake not found."}`, 3, "not_found"},
+		{403, `{"error":"insufficient_scope","message":"This token can't write."}`, 6, "insufficient_scope"},
+	}
+	for _, tc := range flakeWrites {
+		for _, c := range cases {
+			t.Run(tc.name+" "+c.code, func(t *testing.T) {
+				srv := (&revokeStub{status: c.status, body: c.body}).start(t)
+
+				res := runBinary(t, t.TempDir(), srv.URL, append(tc.args, "--json")...)
+
+				assertRefusal(t, res, c.exit, c.code)
+			})
+		}
+	}
+}
+
+func TestFlakeWriteAnsweredWithAPendingApprovalExitsSeven(t *testing.T) {
+	for _, tc := range flakeWrites {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := (&revokeStub{status: 202, body: pendingWrite}).start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, append(tc.args, "--json")...)
+
+			if res.exit != 7 || res.stdout != pendingStdout {
+				t.Errorf("exit %d stdout %q, want exit 7 and %q", res.exit, res.stdout, pendingStdout)
+			}
+		})
+	}
+}
+
+func TestFlakeWritesAreInHelpAsMutatingAndNotDestructive(t *testing.T) {
+	_, stdout, _ := execute("help", "--json")
+	var doc struct {
+		Help struct {
+			Commands []struct {
+				Path        string `json:"path"`
+				ExitCodes   []int  `json:"exit_codes"`
+				Mutates     bool   `json:"mutates"`
+				Destructive bool   `json:"destructive"`
+			} `json:"commands"`
+		} `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	for _, c := range doc.Help.Commands {
+		if !strings.HasPrefix(c.Path, "flakes ") || c.Path == "flakes list" || c.Path == "flakes show" || c.Path == "flakes prompt" {
+			continue
+		}
+		found[c.Path] = true
+		if !c.Mutates || c.Destructive || !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6, 7}) {
+			t.Errorf("%s: mutates %v destructive %v exit_codes %v", c.Path, c.Mutates, c.Destructive, c.ExitCodes)
+		}
+	}
+	if len(found) != 2 {
+		t.Errorf("flake write commands in help --json: %v, want quarantine and unquarantine", found)
 	}
 }

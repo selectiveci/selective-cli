@@ -3,23 +3,29 @@ package main
 import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/flakes"
+	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/spf13/cobra"
 )
 
-var flakeReadAnnotations = map[string]string{"exit_codes": "0,3,4,5,6"}
+var (
+	flakeReadAnnotations  = map[string]string{"exit_codes": "0,3,4,5,6"}
+	flakeWriteAnnotations = map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true"}
+)
 
 func flakesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "flakes",
-		Short: "List flaky tests and read their details and AI prompts",
-		Long: `Read the organization's flaky tests.
+		Short: "List flaky tests, read their details and AI prompts, and quarantine them",
+		Long: `Read the organization's flaky tests, and quarantine them.
 
-  sel flakes list    List flakes, ranked, with their flake rate and cost
-  sel flakes show    One flake's metrics and recent failures
-  sel flakes prompt  The prompt that asks an agent to fix a flake`,
+  sel flakes list          List flakes, ranked, with their flake rate and cost
+  sel flakes show          One flake's metrics and recent failures
+  sel flakes prompt        The prompt that asks an agent to fix a flake
+  sel flakes quarantine    Stop a flake from failing builds
+  sel flakes unquarantine  Make a quarantined flake count again`,
 		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(flakesListCmd(), flakesShowCmd(), flakesPromptCmd())
+	cmd.AddCommand(flakesListCmd(), flakesShowCmd(), flakesPromptCmd(), flakesQuarantineCmd(), flakesUnquarantineCmd())
 	return cmd
 }
 
@@ -128,4 +134,45 @@ when piped, so it pipes straight into an agent; it can't be combined with --json
 	f.bind(cmd, false)
 	cmd.Flags().BoolVar(&text, "text", false, "Print the raw text even when piped")
 	return cmd
+}
+
+func flakeWriteCmd(use, short, long, example string, do func(*setup.Env, string, flakes.WriteOptions) error) *cobra.Command {
+	var f setupFlags
+	var opts flakes.WriteOptions
+	cmd := &cobra.Command{
+		Use:         use,
+		Short:       short,
+		Long:        long,
+		Example:     example,
+		Args:        cobra.ExactArgs(1),
+		Annotations: flakeWriteAnnotations,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env, err := tokensEnv(cmd, &f)
+			if err != nil {
+				return err
+			}
+			return do(env, args[0], opts)
+		},
+	}
+	f.bind(cmd, false)
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Report what would change without changing it")
+	return cmd
+}
+
+func flakesQuarantineCmd() *cobra.Command {
+	return flakeWriteCmd("quarantine FLAKE", "Quarantine a flake",
+		`Quarantine the flake, so it stops failing builds. Quarantining a flake that is
+already quarantined changes nothing and reports result "unchanged".
+
+--dry-run reports what would happen and changes nothing.`,
+		"  sel flakes quarantine 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f", flakes.Quarantine)
+}
+
+func flakesUnquarantineCmd() *cobra.Command {
+	return flakeWriteCmd("unquarantine FLAKE", "Make a quarantined flake count again",
+		`Lift the flake's quarantine. A flake that is not quarantined changes nothing
+and reports result "unchanged".
+
+--dry-run reports what would happen and changes nothing.`,
+		"  sel flakes unquarantine 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f", flakes.Unquarantine)
 }
