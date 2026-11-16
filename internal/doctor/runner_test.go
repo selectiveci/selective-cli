@@ -185,3 +185,13 @@ func TestRunnerUsesTheSuiteTypesTheSuiteCheckFound(t *testing.T) {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
 }
+
+func TestRunnerWarningLeavesTheExitCodeAlone(t *testing.T) {
+	bare := project(t, nil)
+
+	report := run(t, serve(t, healthy()), Options{Root: func() (string, error) { return bare, nil }})
+
+	if c := check(t, report, "runner"); c.Status != Warn || c.Code != contract.NoFramework || report.Status != "warn" || report.Err() != nil {
+		t.Errorf("runner = %+v, status %q, err %v, want a warn that leaves the exit at 0", c, report.Status, report.Err())
+	}
+}
