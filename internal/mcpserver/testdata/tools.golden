@@ -6,10 +6,14 @@ builds readOnly
 doctor readOnly
 failures readOnly
 flakes_list readOnly
+flakes_mark-fixed idempotent
 flakes_prompt readOnly
+flakes_quarantine idempotent
 flakes_show readOnly
+flakes_unquarantine idempotent
 orgs readOnly
 repos readOnly
+rerun confirm
 suites readOnly
 suites_configure idempotent
 suites_create confirm

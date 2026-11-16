@@ -9,7 +9,7 @@ import (
 
 var (
 	flakeReadAnnotations  = map[string]string{"exit_codes": "0,3,4,5,6"}
-	flakeWriteAnnotations = map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true"}
+	flakeWriteAnnotations = map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true", "idempotent": "true"}
 )
 
 func flakesCmd() *cobra.Command {
@@ -194,7 +194,7 @@ and prints the id-only object with result "unchanged".`,
 			opts.IfExists = ifExists
 			return flakes.MarkFixed(env, id, opts)
 		})
-	cmd.Annotations = map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true", "destructive": "true"}
+	cmd.Annotations = map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true", "destructive": "true", "idempotent": "true"}
 	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if dryRun, _ := cmd.Flags().GetBool("dry-run"); !yes && !dryRun {
 			return contract.Errorf(contract.UsageError, "marking a flake as fixed needs --yes (or --dry-run to preview)")

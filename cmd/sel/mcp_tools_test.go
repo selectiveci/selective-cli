@@ -215,7 +215,7 @@ func TestOnlyStateSettingCommandsAreIdempotent(t *testing.T) {
 	}
 	slices.Sort(got)
 
-	if want := []string{"suites configure", "tokens revoke"}; !slices.Equal(got, want) {
+	if want := []string{"flakes mark-fixed", "flakes quarantine", "flakes unquarantine", "suites configure", "tokens revoke"}; !slices.Equal(got, want) {
 		t.Errorf("idempotent commands = %v, want %v", got, want)
 	}
 }
