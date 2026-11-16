@@ -221,6 +221,23 @@ func dialError(resp *http.Response, err error) error {
 	return contract.Errorf(contract.NetworkError, "could not connect to Selective: %v", err)
 }
 
+const tokenClosedStatus websocket.StatusCode = 4401
+
+func tokenClosed(err error) error {
+	var closed websocket.CloseError
+	if !errors.As(err, &closed) || closed.Code != tokenClosedStatus {
+		return nil
+	}
+	why := "the token is invalid or expired"
+	switch closed.Reason {
+	case "token_expired":
+		why = "the token expired"
+	case "token_revoked":
+		why = "the token was revoked"
+	}
+	return contract.Errorf(contract.Unauthorized, "Selective closed the stream: %s; run: sel auth login", why)
+}
+
 func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, interval time.Duration, timedOut *atomic.Bool) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -293,9 +310,11 @@ func stream(parent context.Context, commandStart time.Time, host, token, buildID
 
 	var summary map[string]any
 	sawFailure := false
+	var readErr error
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
+			readErr = err
 			break
 		}
 		lastLine.Store(time.Now().UnixNano())
@@ -322,6 +341,9 @@ func stream(parent context.Context, commandStart time.Time, host, token, buildID
 	if summary == nil {
 		if parent.Err() != nil {
 			return refuse(deadlineCause(parent, parent.Err()))
+		}
+		if closed := tokenClosed(readErr); closed != nil {
+			return refuse(closed)
 		}
 		if timedOut.Load() {
 			return contract.ExitRetryable, contract.Errorf(contract.NetworkError, "no response from Selective to a ping within %s; lost the connection before build %s finished", interval, buildID)
