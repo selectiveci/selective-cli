@@ -59,9 +59,6 @@ func (c *capped) endLine() {
 }
 
 func (c *capped) result(cut bool) ([]byte, bool) {
-	if c.inLine && !cut {
-		c.endLine()
-	}
 	if c.total <= c.limit && !cut {
 		return c.head, false
 	}

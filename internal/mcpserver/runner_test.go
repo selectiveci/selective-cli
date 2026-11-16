@@ -22,6 +22,8 @@ import (
 	"github.com/selectiveci/selective-cli/internal/schema"
 )
 
+var shippedTerminateGrace = terminateGrace
+
 func TestMain(m *testing.M) {
 	if len(os.Args) > 2 && os.Args[1] == "helper" {
 		os.Exit(helper(os.Args[2], os.Args[3:]))
@@ -353,7 +355,8 @@ func TestCappedKeepsWholeLinesThenTheLastLineHoweverTheBytesArrive(t *testing.T)
 		"exactly the cap is untouched":                 {"aaaa\nbbbb\n", "aaaa\nbbbb\n", false},
 		"cuts at a line boundary and appends the last": {"aaaa\nbbbb\ncccc\nterm\n", "aaaa\nbbbb\nterm\n", true},
 		"the last line straddles the cap":              {"aaaa\nbbbb\ncc\nterminal\n", "aaaa\nbbbb\nterminal\n", true},
-		"the last line has no newline":                 {"aaaa\nbbbb\ncccc\nterm", "aaaa\nbbbb\nterm", true},
+		"an unterminated last line is dropped":         {"aaaa\nbbbb\ncccc\nterm", "aaaa\nbbbb\ncccc\n", true},
+		"a child killed mid-line keeps its last whole": {strings.Repeat("x", 25) + "\n{\"t\":1}\n{\"partial", "{\"t\":1}\n", true},
 		"blank lines after the last are ignored":       {"aaaa\nbbbb\ncccc\nterm\n\n\n", "aaaa\nbbbb\nterm\n", true},
 		"an oversized last line is dropped":            {"aaaa\nbbbb\ncccc\nterm" + strings.Repeat("x", 30) + "\n", "aaaa\nbbbb\n", true},
 		"a single oversized line is dropped whole":     {strings.Repeat("x", 30) + "\n", "", true},
@@ -400,8 +403,8 @@ func TestFirstEventOverTheCapLeavesTheTerminalEventOnItsOwnLine(t *testing.T) {
 }
 
 func TestTerminateGraceOutlastsTheNestedRunnersWorstCaseShutdownByASecond(t *testing.T) {
-	if productionTerminateGrace < localrun.ShutdownBudget+time.Second {
-		t.Errorf("grace = %v, want at least %v plus 1s", productionTerminateGrace, localrun.ShutdownBudget)
+	if shippedTerminateGrace < localrun.ShutdownBudget+time.Second {
+		t.Errorf("grace = %v, want at least %v plus 1s", shippedTerminateGrace, localrun.ShutdownBudget)
 	}
 }
 
