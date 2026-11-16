@@ -1,0 +1,26 @@
+approvals_list readOnly
+approvals_show readOnly
+auth destructive
+auth_logout destructive idempotent
+auth_status readOnly
+build readOnly
+builds readOnly
+doctor readOnly
+failures readOnly
+flakes_list readOnly
+flakes_prompt readOnly
+flakes_show readOnly
+orgs readOnly
+repos readOnly
+suites destructive
+suites_configure destructive
+suites_create destructive
+suites_key destructive
+tail readOnly
+test readOnly
+tokens_create destructive idempotent
+tokens_list readOnly
+tokens_revoke destructive idempotent
+tokens_show readOnly
+trends readOnly
+version readOnly

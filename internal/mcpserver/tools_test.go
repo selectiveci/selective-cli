@@ -93,3 +93,21 @@ func TestToolsLeaveOutWhatMustNotBeExposed(t *testing.T) {
 		t.Error("group_child is not listed")
 	}
 }
+
+func TestHintsTreatACommandWithoutExitCodesAsMutating(t *testing.T) {
+	yes := true
+	cases := map[string]struct {
+		command schema.Command
+		want    mcp.ToolAnnotations
+	}{
+		"annotated read":  {schema.Command{ExitCodes: []int{0}}, mcp.ToolAnnotations{ReadOnlyHint: true}},
+		"annotated write": {schema.Command{ExitCodes: []int{0}, Mutates: true}, mcp.ToolAnnotations{DestructiveHint: &yes, IdempotentHint: true}},
+		"unannotated":     {schema.Command{}, mcp.ToolAnnotations{DestructiveHint: &yes}},
+	}
+	for name, c := range cases {
+		got := hints(c.command)
+		if got.ReadOnlyHint != c.want.ReadOnlyHint || got.IdempotentHint != c.want.IdempotentHint || (got.DestructiveHint == nil) != (c.want.DestructiveHint == nil) {
+			t.Errorf("%s: hints = %+v, want %+v", name, got, c.want)
+		}
+	}
+}

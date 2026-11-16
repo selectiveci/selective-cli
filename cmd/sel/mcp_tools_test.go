@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -118,5 +119,49 @@ func TestMCPToolListHasEachRunnableCommandNotSkippedExactlyOnce(t *testing.T) {
 
 	if !slices.Equal(got, want) {
 		t.Errorf("tools = %v, want %v", got, want)
+	}
+}
+
+func TestMCPToolsAllCarryAHint(t *testing.T) {
+	tools := listedTools(t, newRoot())
+	idempotent := map[string]bool{}
+	for _, c := range helpCommands(t) {
+		idempotent[strings.ReplaceAll(c.Path, " ", "_")] = c.Mutates && len(c.ExitCodes) > 0
+	}
+
+	for _, tool := range tools {
+		a := tool.Annotations
+		destructive := a != nil && a.DestructiveHint != nil && *a.DestructiveHint
+		if a == nil || a.ReadOnlyHint == destructive || a.IdempotentHint != idempotent[tool.Name] {
+			t.Errorf("%s annotations = %+v, want exactly one of readOnly and destructive, idempotent only when annotated as mutating", tool.Name, a)
+		}
+	}
+}
+
+func goldenLine(tool *mcp.Tool) string {
+	switch a := tool.Annotations; {
+	case a == nil:
+		return tool.Name + " none"
+	case a.ReadOnlyHint:
+		return tool.Name + " readOnly"
+	case a.IdempotentHint:
+		return tool.Name + " destructive idempotent"
+	}
+	return tool.Name + " destructive"
+}
+
+func TestMCPToolListMatchesTheGoldenAllowlist(t *testing.T) {
+	raw, err := os.ReadFile("../../internal/mcpserver/testdata/tools.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, tool := range listedTools(t, newRoot()) {
+		got = append(got, goldenLine(tool))
+	}
+	slices.Sort(got)
+
+	if want := strings.Split(strings.TrimSpace(string(raw)), "\n"); !slices.Equal(got, want) {
+		t.Errorf("tools differ from internal/mcpserver/testdata/tools.golden; edit it by hand if the change is intended\ngot:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

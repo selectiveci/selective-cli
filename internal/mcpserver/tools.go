@@ -64,6 +64,7 @@ func tool(c schema.Command) *mcp.Tool {
 		Name:        toolName(c.Path),
 		Description: c.Short,
 		InputSchema: map[string]any{"type": "object", "properties": properties, "required": required},
+		Annotations: hints(c),
 	}
 }
 
@@ -88,4 +89,15 @@ func positional(a schema.Arg) map[string]any {
 		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	}
 	return map[string]any{"type": "string"}
+}
+
+func hints(c schema.Command) *mcp.ToolAnnotations {
+	destructive := true
+	switch {
+	case len(c.ExitCodes) == 0:
+		return &mcp.ToolAnnotations{DestructiveHint: &destructive}
+	case c.Mutates:
+		return &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: true}
+	}
+	return &mcp.ToolAnnotations{ReadOnlyHint: true}
 }
