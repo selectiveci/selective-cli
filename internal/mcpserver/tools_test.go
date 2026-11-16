@@ -115,3 +115,27 @@ func TestHintsComeOnlyFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
 		}
 	}
 }
+
+func TestToolsLeaveOutTheFlagsNamedInSkipFlags(t *testing.T) {
+	root := &cobra.Command{Use: "tool"}
+	root.PersistentFlags().Bool("json", false, "JSON output")
+	show := leaf("show", map[string]string{"mcp_skip_flags": "text, format"})
+	show.Flags().Bool("text", false, "raw text")
+	show.Flags().String("format", "", "format")
+	show.Flags().String("limit", "", "limit")
+	root.AddCommand(show)
+	doc, err := schema.Build(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for name := range properties(Tools(doc)[0]) {
+		got = append(got, name)
+	}
+	slices.Sort(got)
+
+	if want := []string{"limit"}; !slices.Equal(got, want) {
+		t.Errorf("show properties = %v, want %v", got, want)
+	}
+}
