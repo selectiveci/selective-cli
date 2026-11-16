@@ -71,6 +71,7 @@ func TestArgvRejectsWhatTheToolDoesNotExposeAsInvalidParams(t *testing.T) {
 		"unknown property":                     {"run", `{"id":"7","name":"n","bogus":1}`},
 		"hidden-by-never-exposed hostname":     {"run", `{"id":"7","name":"n","hostname":"h"}`},
 		"never-exposed json":                   {"run", `{"id":"7","name":"n","json":true}`},
+		"cobra-hidden flag":                    {"run", `{"id":"7","name":"n","token":"t"}`},
 		"secret flag":                          {"run", `{"id":"7","name":"n","stdout":"/tmp/k"}`},
 		"positional that is a flag":            {"run", `{"id":"--stdout=/tmp/k","name":"n"}`},
 		"variadic positional that is a flag":   {"run", `{"id":"7","name":"n","more":["a","-x"]}`},
