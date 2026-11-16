@@ -63,7 +63,7 @@ func TestMCPRunnerRejectsEverySecretAndNeverExposedFlagOfTheRealTree(t *testing.
 		if !slices.Contains(exposed, tool) {
 			continue
 		}
-		for _, flag := range append([]string{"json", "hostname"}, c.SecretFlags...) {
+		for _, flag := range slices.Concat([]string{"json", "hostname"}, c.SecretFlags, c.SkipFlags) {
 			args := `{"` + strings.ReplaceAll(flag, "-", "_") + `":"x"}`
 			if flag == "json" {
 				args = `{"json":true}`
