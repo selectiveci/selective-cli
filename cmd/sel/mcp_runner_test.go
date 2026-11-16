@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/selectiveci/selective-cli/internal/mcpserver"
@@ -124,5 +129,44 @@ func TestMCPRunnerRejectsIntegerLexemesThatFloatRoundingWouldAccept(t *testing.T
 	got, err := runner.Argv("builds", json.RawMessage(`{"limit":9007199254740993}`))
 	if err != nil || !slices.Contains(got, "--limit=9007199254740993") {
 		t.Errorf("argv = %q, err = %v, want --limit=9007199254740993", got, err)
+	}
+}
+
+func TestMCPReadOnlyToolsLeaveTheUpdateCheckStateUntouched(t *testing.T) {
+	scratch := t.TempDir()
+	binary := filepath.Join(scratch, "sel")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=1.0.0", "-o", binary, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	config := filepath.Join(scratch, "config")
+	if err := os.MkdirAll(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(config, "update-check.json")
+	stale := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
+	seed := `{"latest_version":"1.0.0","checked_at":"` + stale + `"}`
+	for _, name := range []string{"CI", "GITHUB_ACTIONS", "BUILD_NUMBER", "RUN_ID", "CODESPACES", "SELECTIVE_NO_UPDATE_NOTIFIER", "SELECTIVE_TOKEN", "SELECTIVE_ORG"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("HOME", scratch)
+	t.Setenv("SELECTIVE_CONFIG_DIR", config)
+	t.Setenv("SELECTIVE_HOST", "127.0.0.1:1")
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+	_, doc := realRunner(t)
+	runner := mcpserver.NewRunner(doc, binary)
+
+	for _, tool := range []string{"version", "orgs"} {
+		if err := os.WriteFile(statePath, []byte(seed), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res, err := runner.Run(context.Background(), tool, json.RawMessage(`{}`))
+		if err != nil || len(res.Stdout) == 0 {
+			t.Fatalf("%s: err = %v, stdout = %q", tool, err, res.Stdout)
+		}
+		got, err := os.ReadFile(statePath)
+		if err != nil || string(got) != seed {
+			t.Errorf("after %s the update-check state = %q (err %v), want it untouched: %q", tool, got, err, seed)
+		}
 	}
 }

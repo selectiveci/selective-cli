@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/localrun"
+	"github.com/selectiveci/selective-cli/internal/update"
 )
 
 const (
@@ -51,6 +52,7 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	}
 	defer reader.Close()
 	cmd := exec.CommandContext(deadline, argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), update.OptOutVariable+"=1")
 	cmd.Stdout = writer
 	stdout := &capped{limit: stdoutCap}
 	drained := make(chan struct{})

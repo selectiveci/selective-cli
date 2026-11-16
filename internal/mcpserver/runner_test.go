@@ -20,6 +20,7 @@ import (
 
 	"github.com/selectiveci/selective-cli/internal/localrun"
 	"github.com/selectiveci/selective-cli/internal/schema"
+	"github.com/selectiveci/selective-cli/internal/update"
 )
 
 var shippedTerminateGrace = terminateGrace
@@ -68,6 +69,8 @@ func helper(mode string, args []string) int {
 		fmt.Printf("read:%d\n", n)
 	case "env":
 		fmt.Println(os.Getenv("SEL_TEST_MARKER"))
+	case "optout":
+		fmt.Println(os.Getenv(update.OptOutVariable))
 	case "exit":
 		return helperFlag(args, "code")
 	case "flood":
@@ -133,6 +136,7 @@ func helperRunner() *Runner {
 	return NewRunner(schema.Document{Commands: []schema.Command{
 		command("stdin"),
 		command("env"),
+		command("optout"),
 		command("hang"),
 		command("hangpg"),
 		command("holdpipe", schema.Flag{Name: "code", Type: "int"}),
@@ -206,6 +210,19 @@ func TestChildInheritsTheParentEnvironment(t *testing.T) {
 
 	if got := string(res.Stdout); got != "marker-7f3a\n" {
 		t.Errorf("stdout = %q, want the marker the parent set", got)
+	}
+}
+
+func TestChildGetsTheUpdateNotifierOptOutAndTheParentKeepsItsEnvironment(t *testing.T) {
+	t.Setenv(update.OptOutVariable, "")
+
+	res, _ := runHelper(t, "helper_optout", `{}`, 5)
+
+	if got := string(res.Stdout); got != "1\n" {
+		t.Errorf("child saw %s = %q, want 1", update.OptOutVariable, got)
+	}
+	if got := os.Getenv(update.OptOutVariable); got != "" {
+		t.Errorf("parent %s = %q, want it unchanged", update.OptOutVariable, got)
 	}
 }
 
