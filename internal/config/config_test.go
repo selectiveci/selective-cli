@@ -90,3 +90,33 @@ func TestBadHostnamesAreUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveHostValidForms(t *testing.T) {
+	t.Setenv("SELECTIVE_HOST", "")
+	cases := map[string]string{
+		"localhost:4000":           "http://localhost:4000",
+		"127.0.0.1":                "http://127.0.0.1",
+		"https://api.selective.ci": "https://api.selective.ci",
+		"[::1]":                    "https://[::1]",
+		"[::1]:4000":               "https://[::1]:4000",
+		"http://[::1]:4000":        "http://[::1]:4000",
+		"https://[::]:4000":        "https://[::]:4000",
+	}
+	for in, want := range cases {
+		got, err := (&Config{}).ResolveHost(in)
+		if err != nil || got != want {
+			t.Errorf("ResolveHost(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}
+
+func TestResolveHostRejectsColonOnlyHostnames(t *testing.T) {
+	t.Setenv("SELECTIVE_HOST", "")
+	for _, bad := range []string{"::", ":", ":::", "https://::", "https://:", ":4000", "http://:::"} {
+		_, err := (&Config{}).ResolveHost(bad)
+		var ce *contract.Error
+		if !errors.As(err, &ce) || ce.Code != contract.UsageError {
+			t.Errorf("ResolveHost(%q) error = %v; want usage_error", bad, err)
+		}
+	}
+}
