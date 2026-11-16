@@ -164,7 +164,7 @@ func suitesDelete(ctx context.Context, env *setup.Env, gate *approvals.Gate, org
 		return err
 	}
 	send := func(ctx context.Context) (*approvals.Outcome, error) {
-		change, err := env.Client.WithContext(ctx).DeleteSuite(id, dryRun)
+		change, err := env.Client.WithContext(ctx).DeleteSuite(org, id, dryRun)
 		if err != nil {
 			return nil, err
 		}

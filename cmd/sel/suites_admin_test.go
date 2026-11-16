@@ -280,7 +280,7 @@ func (s *deleteStub) start(t *testing.T) *httptest.Server {
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/approvals/"):
 			s.polls = append(s.polls, r.URL.Path)
 			_, _ = w.Write([]byte(`{"approval":` + s.approvals[min(len(s.polls)-1, len(s.approvals)-1)] + `}`))
-		case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/api/v1/suites/"):
+		case r.Method == "DELETE" && r.URL.Path == deleteRoute:
 			body, _ := io.ReadAll(r.Body)
 			s.writes = append(s.writes, deleteCall{r.Method, r.URL.RequestURI(), string(body), r.Header.Clone()})
 			reply := s.replies[min(len(s.writes)-1, len(s.replies)-1)]
@@ -300,6 +300,8 @@ func (s *deleteStub) requestCount() int {
 	return s.lookups + len(s.polls) + len(s.writes)
 }
 
+const deleteRoute = "/api/v1/orgs/acme/suites/" + archivedSuiteID
+
 var (
 	deletePending = deleteReply{202, `{"result":"pending_approval","dry_run":false,"approval":` + pendingApproval.json() + `}`}
 	deleteDone    = deleteReply{200, archiveOK(archivedSuite, "deleted", false)}
@@ -312,7 +314,7 @@ func TestSuitesDeleteWithoutWaitExitsSevenWithThePendingObjectAfterOneCall(t *te
 	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--org", "acme", "--json")
 
 	want := `{"v":1,"result":"pending_approval","dry_run":false,"approval":` + pendingApproval.json() + `}` + "\n"
-	if res.exit != 7 || res.stdout != want || len(stub.writes) != 1 || stub.writes[0].path != "/api/v1/suites/"+archivedSuiteID {
+	if res.exit != 7 || res.stdout != want || len(stub.writes) != 1 || stub.writes[0].path != deleteRoute {
 		t.Errorf("exit %d stdout %q writes %+v, want exit 7, %q and one DELETE of the suite", res.exit, res.stdout, stub.writes, want)
 	}
 }
@@ -333,8 +335,8 @@ func TestSuitesDeleteWaitResendsTheIdenticalKeylessRequestOnceApproved(t *testin
 		t.Fatalf("writes = %+v, want two identical requests", stub.writes)
 	}
 	for _, w := range stub.writes {
-		if _, sent := w.header["Idempotency-Key"]; sent || w.method != "DELETE" {
-			t.Errorf("write = %+v, want a DELETE with no Idempotency-Key", w)
+		if _, sent := w.header["Idempotency-Key"]; sent || w.method != "DELETE" || w.path != deleteRoute {
+			t.Errorf("write = %+v, want a DELETE of %s with no Idempotency-Key", w, deleteRoute)
 		}
 	}
 }
@@ -346,7 +348,7 @@ func TestSuitesDeleteByNameLooksUpTheArchivedSuiteAndDeletesItById(t *testing.T)
 	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", "old-minitest", "--yes", "--org", "acme", "--json")
 
 	want := `{"v":1,"suite":` + archivedSuite + `,"result":"deleted","dry_run":false}` + "\n"
-	if res.exit != 0 || res.stdout != want || stub.lookups != 1 || len(stub.writes) != 1 || stub.writes[0].path != "/api/v1/suites/"+archivedSuiteID {
+	if res.exit != 0 || res.stdout != want || stub.lookups != 1 || len(stub.writes) != 1 || stub.writes[0].path != deleteRoute {
 		t.Errorf("exit %d stdout %q lookups %d writes %+v, want exit 0, %q and a DELETE of %s", res.exit, res.stdout, stub.lookups, stub.writes, want, archivedSuiteID)
 	}
 }
@@ -393,7 +395,7 @@ func TestSuitesDeleteDryRunNeedsNoYesAndAGatedOneDoesNotPoll(t *testing.T) {
 
 	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--dry-run", "--wait", "--org", "acme", "--json")
 
-	if res.exit != 7 || !strings.Contains(res.stdout, `"dry_run":true`) || strings.Contains(res.stdout, `"approval"`) || len(stub.polls) != 0 || stub.writes[0].path != "/api/v1/suites/"+archivedSuiteID+"?dry_run=true" {
+	if res.exit != 7 || !strings.Contains(res.stdout, `"dry_run":true`) || strings.Contains(res.stdout, `"approval"`) || len(stub.polls) != 0 || stub.writes[0].path != deleteRoute+"?dry_run=true" {
 		t.Errorf("exit %d stdout %q polls %v writes %+v, want exit 7, dry_run true, no approval, zero polls", res.exit, res.stdout, stub.polls, stub.writes)
 	}
 }

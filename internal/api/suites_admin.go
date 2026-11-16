@@ -56,9 +56,9 @@ func (c *Client) SetSuiteArchived(org, id string, archived, dryRun bool) (*Suite
 	return wire.change(), nil
 }
 
-func (c *Client) DeleteSuite(id string, dryRun bool) (*SuiteChange, error) {
+func (c *Client) DeleteSuite(org, id string, dryRun bool) (*SuiteChange, error) {
 	var wire suiteChangeWire
-	path := withQuery("/api/v1/suites/"+url.PathEscape(id), dryRunQuery(dryRun))
+	path := withQuery("/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(id), dryRunQuery(dryRun))
 	if err := c.do(http.MethodDelete, path, nil, http.StatusOK, &wire); err != nil {
 		return nil, err
 	}
