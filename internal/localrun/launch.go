@@ -173,6 +173,8 @@ const (
 	noSignal     syscall.Signal = 0
 )
 
+const ShutdownBudget = closeGrace + 2*defaultGrace
+
 type Launch struct {
 	Root      string
 	Framework Framework
