@@ -243,6 +243,25 @@ func TestExitCodeComesBackRawAndAChildThatFinishesIsNotTimedOut(t *testing.T) {
 	}
 }
 
+func exited(stat []byte) bool {
+	return bytes.Contains(stat, []byte(") Z ")) || bytes.Contains(stat, []byte(") X "))
+}
+
+func TestAProcessBeingReapedCountsAsExited(t *testing.T) {
+	zombie := "265235 (mcpserver.test) Z 1 265228 258825 0 -1 4228108 500 0 0 0 0 0 0 0 25 5 1 0 2413716 0 0 0\n"
+	reaping := "265235 (mcpserver.test) X 0 -1 -1 0 -1 4228108 500 0 0 0 0 0 0 0 25 5 0 0 2413716 0 0 0\n"
+	running := "265235 (mcpserver.test) S 1 265228 258825 0 -1 4228108 500 0 0 0 0 0 0 0 25 5 1 0 2413716 0 0 0\n"
+
+	for name, stat := range map[string]string{"zombie": zombie, "being reaped": reaping} {
+		if !exited([]byte(stat)) {
+			t.Errorf("%s is judged still running: %q", name, stat)
+		}
+	}
+	if exited([]byte(running)) {
+		t.Errorf("a sleeping process is judged exited: %q", running)
+	}
+}
+
 func alive(pid int) bool {
 	if syscall.Kill(pid, 0) != nil {
 		return false
@@ -252,7 +271,7 @@ func alive(pid int) bool {
 		_, procErr := os.Stat("/proc/self/stat")
 		return procErr != nil
 	}
-	return !bytes.Contains(stat, []byte(") Z "))
+	return !exited(stat)
 }
 
 func assertDeadlineLeavesNoSurvivors(t *testing.T, tool string) {
