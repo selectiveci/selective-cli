@@ -2,8 +2,10 @@ package runs
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 
+	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
 )
@@ -30,5 +32,23 @@ func Rerun(env *setup.Env, opts RerunOptions) error {
 	if err != nil {
 		return err
 	}
-	return format.Document(env.Stdout, rerun)
+	if env.JSON {
+		return format.Document(env.Stdout, rerun)
+	}
+	fmt.Fprintln(env.Stderr, rerunSentence(rerun))
+	return nil
+}
+
+func rerunSentence(r *api.Rerun) string {
+	var body struct {
+		Enqueued int `json:"enqueued"`
+	}
+	_ = json.Unmarshal(r.Rerun, &body)
+	switch {
+	case r.Result == "unchanged":
+		return fmt.Sprintf("Nothing to queue for build %s: its failed tests are already pending.", r.BuildID)
+	case r.DryRun:
+		return fmt.Sprintf("Dry run: would queue %d failed test(s) of build %s for rerun.", body.Enqueued, r.BuildID)
+	}
+	return fmt.Sprintf("Queued %d failed test(s) of build %s for rerun.", body.Enqueued, r.BuildID)
 }
