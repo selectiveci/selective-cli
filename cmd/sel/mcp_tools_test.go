@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/mcpserver"
 	"github.com/selectiveci/selective-cli/internal/schema"
 	"github.com/spf13/cobra"
@@ -217,5 +218,96 @@ func TestOnlyStateSettingCommandsAreIdempotent(t *testing.T) {
 
 	if want := []string{"flakes mark-fixed", "flakes quarantine", "flakes unquarantine", "suites configure", "tokens revoke"}; !slices.Equal(got, want) {
 		t.Errorf("idempotent commands = %v, want %v", got, want)
+	}
+}
+
+func quotedWords(usage string) []string {
+	var words []string
+	parts := strings.Split(usage, `"`)
+	for i := 1; i+1 < len(parts); i += 2 {
+		words = append(words, parts[i])
+	}
+	return words
+}
+
+func sweepValues(f schema.Flag, property map[string]any) []string {
+	switch property["type"] {
+	case "boolean":
+		return []string{""}
+	case "integer":
+		return []string{"1"}
+	}
+	if f.Type == "duration" {
+		return []string{"1ms"}
+	}
+	return append([]string{"x"}, quotedWords(f.Usage)...)
+}
+
+func sweepArgv(c schema.Command, flag string) []string {
+	argv := strings.Fields(c.Path)
+	for _, a := range c.Args {
+		if a.Required {
+			argv = append(argv, "x")
+		}
+	}
+	for _, f := range c.Flags {
+		if f.Required && f.Name != flag {
+			argv = append(argv, "--"+f.Name+"=x")
+		}
+	}
+	return argv
+}
+
+func TestEveryExposedFlagRunsWithTheForcedJSONFlag(t *testing.T) {
+	scratch, err := os.MkdirTemp("", "sweep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+	t.Setenv("HOME", scratch)
+	t.Setenv("SELECTIVE_CONFIG_DIR", scratch)
+	t.Setenv("SELECTIVE_HOST", "127.0.0.1:1")
+	t.Setenv("SELECTIVE_TOKEN", "")
+	t.Setenv("SELECTIVE_ORG", "")
+	t.Setenv("SELECTIVE_NO_UPDATE_NOTIFIER", "1")
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(scratch); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+
+	commands := map[string]schema.Command{}
+	for _, c := range helpCommands(t) {
+		commands[strings.ReplaceAll(c.Path, " ", "_")] = c
+	}
+	calls := 0
+	for _, tool := range listedTools(t, newRoot()) {
+		c := commands[tool.Name]
+		properties := inputProperties(tool)
+		for _, f := range c.Flags {
+			property, exposed := properties[strings.ReplaceAll(f.Name, "-", "_")].(map[string]any)
+			if !exposed {
+				continue
+			}
+			for _, value := range sweepValues(f, property) {
+				setting := "--" + f.Name
+				if value != "" {
+					setting += "=" + value
+				}
+				argv := append(sweepArgv(c, f.Name), setting, "--json")
+				code, stdout, stderr := execute(argv...)
+				calls++
+				if out := strings.ToLower(stdout + stderr); code == contract.ExitUsage && strings.Contains(out, "json") {
+					t.Errorf("%v: usage error mentions json: %s", argv, out)
+				}
+			}
+		}
+	}
+	if calls < len(commands) {
+		t.Errorf("sweep made %d calls over %d commands", calls, len(commands))
 	}
 }
