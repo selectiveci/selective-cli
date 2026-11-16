@@ -100,6 +100,62 @@ func Prompt(env *setup.Env, id string, text bool) error {
 	}{prompt})
 }
 
+type WriteOptions struct {
+	DryRun bool
+}
+
+type writeAction struct {
+	send      func(*api.Client, string, bool) (*api.FlakeWrite, error)
+	done      string
+	would     string
+	unchanged string
+}
+
+var (
+	quarantineAction = writeAction{(*api.Client).QuarantineFlake,
+		"Quarantined flake %s.", "Dry run: would quarantine flake %s.", "Flake %s is already quarantined."}
+	unquarantineAction = writeAction{(*api.Client).UnquarantineFlake,
+		"Unquarantined flake %s.", "Dry run: would unquarantine flake %s.", "Flake %s is not quarantined."}
+)
+
+func Quarantine(env *setup.Env, id string, opts WriteOptions) error {
+	return write(env, id, opts, quarantineAction)
+}
+
+func Unquarantine(env *setup.Env, id string, opts WriteOptions) error {
+	return write(env, id, opts, unquarantineAction)
+}
+
+func write(env *setup.Env, id string, opts WriteOptions, action writeAction) error {
+	out, err := action.send(env.Client, id, opts.DryRun)
+	if err != nil {
+		return err
+	}
+	if env.JSON {
+		return format.Write(env.Stdout, "flake", out.Flake, out.Result, out.DryRun)
+	}
+	var f flake
+	if err := json.Unmarshal(out.Flake, &f); err != nil {
+		return unexpected(err)
+	}
+	fmt.Fprintln(env.Stderr, writeSentence(f, id, out, action))
+	return nil
+}
+
+func writeSentence(f flake, id string, out *api.FlakeWrite, action writeAction) string {
+	label := id
+	if f.Test.Name != "" {
+		label = fmt.Sprintf("%s (%s)", id, f.Test.Name)
+	}
+	switch {
+	case out.Result == "unchanged":
+		return fmt.Sprintf(action.unchanged, label)
+	case out.DryRun:
+		return fmt.Sprintf(action.would, label)
+	}
+	return fmt.Sprintf(action.done, label)
+}
+
 func fetchList(client *api.Client, opts ListOptions) (*api.FlakesPage, error) {
 	query := opts.FlakesQuery
 	single := query.Limit > 0
