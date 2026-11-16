@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -132,10 +135,17 @@ func TestMCPRunnerRejectsIntegerLexemesThatFloatRoundingWouldAccept(t *testing.T
 	}
 }
 
-func TestMCPReadOnlyToolsLeaveTheUpdateCheckStateUntouched(t *testing.T) {
+func TestMCPToolsMakeNoReleaseRequestsWhenAnUpdateCheckIsDue(t *testing.T) {
+	var requests atomic.Int32
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, nil)
+	}))
+	t.Cleanup(releases.Close)
 	scratch := t.TempDir()
 	binary := filepath.Join(scratch, "sel")
-	build := exec.Command("go", "build", "-ldflags", "-X main.version=1.0.0", "-o", binary, ".")
+	pointed := "github.com/selectiveci/selective-cli/internal/update."
+	build := exec.Command("go", "build", "-ldflags", "-X main.version=1.0.0 -X "+pointed+"releasesURL="+releases.URL+" -X "+pointed+"releasesAPIURL="+releases.URL, "-o", binary, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
@@ -143,9 +153,12 @@ func TestMCPReadOnlyToolsLeaveTheUpdateCheckStateUntouched(t *testing.T) {
 	if err := os.MkdirAll(config, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	statePath := filepath.Join(config, "update-check.json")
 	stale := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339)
-	seed := `{"latest_version":"1.0.0","checked_at":"` + stale + `"}`
+	seed := func() {
+		if err := os.WriteFile(filepath.Join(config, "update-check.json"), []byte(`{"latest_version":"1.0.0","checked_at":"`+stale+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, name := range []string{"CI", "GITHUB_ACTIONS", "BUILD_NUMBER", "RUN_ID", "CODESPACES", "SELECTIVE_NO_UPDATE_NOTIFIER", "SELECTIVE_TOKEN", "SELECTIVE_ORG"} {
 		t.Setenv(name, "")
 	}
@@ -153,20 +166,22 @@ func TestMCPReadOnlyToolsLeaveTheUpdateCheckStateUntouched(t *testing.T) {
 	t.Setenv("SELECTIVE_CONFIG_DIR", config)
 	t.Setenv("SELECTIVE_HOST", "127.0.0.1:1")
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
+	seed()
+	if out, err := exec.Command(binary, "version", "--json").CombinedOutput(); err != nil || requests.Load() == 0 {
+		t.Fatalf("control: a due check made %d release requests (err %v): %s", requests.Load(), err, out)
+	}
 	_, doc := realRunner(t)
 	runner := mcpserver.NewRunner(doc, binary)
 
 	for _, tool := range []string{"version", "orgs"} {
-		if err := os.WriteFile(statePath, []byte(seed), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		seed()
+		before := requests.Load()
 		res, err := runner.Run(context.Background(), tool, json.RawMessage(`{}`))
 		if err != nil || len(res.Stdout) == 0 {
 			t.Fatalf("%s: err = %v, stdout = %q", tool, err, res.Stdout)
 		}
-		got, err := os.ReadFile(statePath)
-		if err != nil || string(got) != seed {
-			t.Errorf("after %s the update-check state = %q (err %v), want it untouched: %q", tool, got, err, seed)
+		if got := requests.Load() - before; got != 0 {
+			t.Errorf("%s made %d release requests, want 0", tool, got)
 		}
 	}
 }
