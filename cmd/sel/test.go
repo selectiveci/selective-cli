@@ -169,7 +169,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	launch := localrun.Launch{Root: plan.root, Framework: plan.framework, Args: frameworkArgs, Sel: self, Stderr: cmd.ErrOrStderr()}
 	run := func(ctx context.Context, iteration int) (localrun.Summary, error) {
 		changed := plan.changed
-		if iteration > 1 {
+		if f.watch {
 			var err error
 			if changed, err = localrun.ChangedFiles(plan.root, f.against); err != nil {
 				return localrun.Summary{}, err

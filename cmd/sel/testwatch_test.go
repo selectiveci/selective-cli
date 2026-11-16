@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 type watchRun struct {
@@ -192,5 +193,28 @@ func TestSelTestWatchPrettyShowsAWatchingLineAndABlockPerIterationThenASummaryOn
 	lastLine := got[strings.LastIndex(got, finalSummary):]
 	if watching < 2 || strings.Count(got, finalSummary) != 3 || strings.Contains(strings.SplitN(lastLine, "\n", 2)[0], "iteration") {
 		t.Errorf("pretty output:\n%s\nwant a watching line per iteration, two iteration blocks and one final summary without an iteration number", got)
+	}
+}
+
+func TestSelTestWatchFirstIterationSelectsAgainstAnEditMadeWhileTheSuiteWasBeingResolved(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	api.hold, api.held = make(chan struct{}), make(chan struct{}, 1)
+	runnerEnv(t)
+	w := startWatch(t, api)
+	select {
+	case <-api.held:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the suite listing never started")
+	}
+	w.edit("tests/test_calc.py", "v2\n")
+	close(api.hold)
+	w.await("iteration_end", 1)
+
+	_, _ = w.interrupt()
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.selections) == 0 || !slices.Contains(anyStrings(api.selections[0]["changed"]), "tests/test_calc.py") {
+		t.Errorf("selection requests %v, want the first to carry the file edited before the watcher started", api.selections)
 	}
 }
