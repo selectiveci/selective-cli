@@ -41,7 +41,7 @@ func suitesArchivedCmd(archive bool, verb, short, long string) *cobra.Command {
 		Long:        long,
 		Example:     fmt.Sprintf("  sel suites %s web-rspec\n  sel suites %s web-rspec --dry-run --json", verb, verb),
 		Args:        cobra.ExactArgs(1),
-		Annotations: map[string]string{"exit_codes": "0,3,4,5,6", "mutates": "true"},
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6", "mutates": "true", "idempotent": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
 			if err != nil {
