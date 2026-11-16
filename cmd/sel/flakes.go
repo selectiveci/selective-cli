@@ -15,17 +15,18 @@ var (
 func flakesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "flakes",
-		Short: "List flaky tests, read their details and AI prompts, and quarantine them",
-		Long: `Read the organization's flaky tests, and quarantine them.
+		Short: "List flaky tests, read their details and AI prompts, and change their state",
+		Long: `Read the organization's flaky tests, and quarantine or fix them.
 
   sel flakes list          List flakes, ranked, with their flake rate and cost
   sel flakes show          One flake's metrics and recent failures
   sel flakes prompt        The prompt that asks an agent to fix a flake
   sel flakes quarantine    Stop a flake from failing builds
-  sel flakes unquarantine  Make a quarantined flake count again`,
+  sel flakes unquarantine  Make a quarantined flake count again
+  sel flakes mark-fixed    Delete a flake and its recorded failures`,
 		Args: cobra.NoArgs,
 	}
-	cmd.AddCommand(flakesListCmd(), flakesShowCmd(), flakesPromptCmd(), flakesQuarantineCmd(), flakesUnquarantineCmd())
+	cmd.AddCommand(flakesListCmd(), flakesShowCmd(), flakesPromptCmd(), flakesQuarantineCmd(), flakesUnquarantineCmd(), flakesMarkFixedCmd())
 	return cmd
 }
 
@@ -175,4 +176,32 @@ and reports result "unchanged".
 
 --dry-run reports what would happen and changes nothing.`,
 		"  sel flakes unquarantine 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f", flakes.Unquarantine)
+}
+
+func flakesMarkFixedCmd() *cobra.Command {
+	var yes, ifExists bool
+	cmd := flakeWriteCmd("mark-fixed FLAKE", "Mark a flake as fixed",
+		`Delete the flake and its recorded failures, as the dashboard's Mark as fixed
+does. A flake that fails again later is detected as a new one.
+
+--yes is required, with or without a terminal; the command never asks.
+--dry-run reports what would happen, changes nothing and needs no --yes.
+
+A flake that is already gone exits 3 (not_found). With --if-exists it exits 0
+and prints the id-only object with result "unchanged".`,
+		"  sel flakes mark-fixed 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f --yes\n  sel flakes mark-fixed FLAKE --dry-run",
+		func(env *setup.Env, id string, opts flakes.WriteOptions) error {
+			opts.IfExists = ifExists
+			return flakes.MarkFixed(env, id, opts)
+		})
+	cmd.Annotations = map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true", "destructive": "true"}
+	cmd.PreRunE = func(cmd *cobra.Command, args []string) error {
+		if dryRun, _ := cmd.Flags().GetBool("dry-run"); !yes && !dryRun {
+			return contract.Errorf(contract.UsageError, "marking a flake as fixed needs --yes (or --dry-run to preview)")
+		}
+		return nil
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm the mark-fixed (required, with or without a terminal)")
+	cmd.Flags().BoolVar(&ifExists, "if-exists", false, "Exit 0 with result unchanged when the flake is already gone")
+	return cmd
 }

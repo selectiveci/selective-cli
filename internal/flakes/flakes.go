@@ -2,8 +2,10 @@ package flakes
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -101,7 +103,8 @@ func Prompt(env *setup.Env, id string, text bool) error {
 }
 
 type WriteOptions struct {
-	DryRun bool
+	DryRun   bool
+	IfExists bool
 }
 
 type writeAction struct {
@@ -116,6 +119,8 @@ var (
 		"Quarantined flake %s.", "Dry run: would quarantine flake %s.", "Flake %s is already quarantined."}
 	unquarantineAction = writeAction{(*api.Client).UnquarantineFlake,
 		"Unquarantined flake %s.", "Dry run: would unquarantine flake %s.", "Flake %s is not quarantined."}
+	markFixedAction = writeAction{(*api.Client).MarkFlakeFixed,
+		"Marked flake %s as fixed.", "Dry run: would mark flake %s as fixed.", "Flake %s is already gone."}
 )
 
 func Quarantine(env *setup.Env, id string, opts WriteOptions) error {
@@ -126,8 +131,19 @@ func Unquarantine(env *setup.Env, id string, opts WriteOptions) error {
 	return write(env, id, opts, unquarantineAction)
 }
 
+func MarkFixed(env *setup.Env, id string, opts WriteOptions) error {
+	return write(env, id, opts, markFixedAction)
+}
+
 func write(env *setup.Env, id string, opts WriteOptions, action writeAction) error {
 	out, err := action.send(env.Client, id, opts.DryRun)
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound && opts.IfExists {
+		idOnly, _ := json.Marshal(struct {
+			ID string `json:"id"`
+		}{id})
+		out, err = &api.FlakeWrite{Flake: idOnly, Result: "unchanged", DryRun: opts.DryRun}, nil
+	}
 	if err != nil {
 		return err
 	}

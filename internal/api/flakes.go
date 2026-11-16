@@ -98,6 +98,10 @@ func (c *Client) UnquarantineFlake(id string, dryRun bool) (*FlakeWrite, error) 
 	return c.flakeWrite("DELETE", "/api/v1/flakes/"+url.PathEscape(id)+"/quarantine", dryRun)
 }
 
+func (c *Client) MarkFlakeFixed(id string, dryRun bool) (*FlakeWrite, error) {
+	return c.flakeWrite("DELETE", "/api/v1/flakes/"+url.PathEscape(id), dryRun)
+}
+
 func (c *Client) flakeWrite(method, path string, dryRun bool) (*FlakeWrite, error) {
 	params := url.Values{}
 	if dryRun {

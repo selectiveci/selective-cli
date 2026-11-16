@@ -128,6 +128,7 @@ var flakeWrites = []struct {
 }{
 	{"quarantine", []string{"flakes", "quarantine", flakeID}, "PUT", "/api/v1/flakes/" + flakeID + "/quarantine"},
 	{"unquarantine", []string{"flakes", "unquarantine", flakeID}, "DELETE", "/api/v1/flakes/" + flakeID + "/quarantine"},
+	{"mark-fixed", []string{"flakes", "mark-fixed", flakeID, "--yes"}, "DELETE", "/api/v1/flakes/" + flakeID},
 }
 
 func flakeWriteBody(result string, dryRun bool) string {
@@ -138,6 +139,7 @@ func TestFlakeWritesSendTheirMethodAndPathAndRelayTheResult(t *testing.T) {
 	results := map[string][]string{
 		"quarantine":   {"updated", "unchanged"},
 		"unquarantine": {"updated", "unchanged"},
+		"mark-fixed":   {"deleted"},
 	}
 	for _, tc := range flakeWrites {
 		for _, result := range results[tc.name] {
@@ -164,8 +166,9 @@ func TestFlakeWritesSendDryRunAndRelayIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &revokeStub{status: 200, body: flakeWriteBody("updated", true)}
 			srv := stub.start(t)
+			args := slices.DeleteFunc(slices.Clone(tc.args), func(a string) bool { return a == "--yes" })
 
-			res := runBinary(t, t.TempDir(), srv.URL, append(slices.Clone(tc.args), "--dry-run", "--json")...)
+			res := runBinary(t, t.TempDir(), srv.URL, append(args, "--dry-run", "--json")...)
 
 			if !slices.Equal(stub.requests, []string{tc.method + " " + tc.path + "?dry_run=true"}) {
 				t.Errorf("requests %v, want one %s %s?dry_run=true", stub.requests, tc.method, tc.path)
@@ -174,6 +177,21 @@ func TestFlakeWritesSendDryRunAndRelayIt(t *testing.T) {
 				t.Errorf("exit %d stdout %q want %q", res.exit, res.stdout, want)
 			}
 		})
+	}
+}
+
+func TestMarkFixedWithoutYesIsRefusedWithOrWithoutATerminalAndSendsNothing(t *testing.T) {
+	stub := &revokeStub{status: 200, body: flakeWriteBody("deleted", false)}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "flakes", "mark-fixed", flakeID, "--json")
+
+	assertRefusal(t, res, 5, "usage_error")
+	if !strings.Contains(res.stdout, "--yes") || strings.Contains(res.stderr, "[y/N]") {
+		t.Errorf("stdout %q stderr %q, want the refusal to name --yes and no prompt", res.stdout, res.stderr)
+	}
+	if len(stub.requests) != 0 {
+		t.Errorf("server saw %v, want 0 requests", stub.requests)
 	}
 }
 
@@ -200,6 +218,17 @@ func TestFlakeWriteRefusalsExitByCode(t *testing.T) {
 	}
 }
 
+func TestMarkFixedIfExistsTurnsANotFoundIntoAnIdOnlyUnchanged(t *testing.T) {
+	srv := (&revokeStub{status: 404, body: `{"error":"not_found","message":"Flake not found."}`}).start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "flakes", "mark-fixed", flakeID, "--yes", "--if-exists", "--json")
+
+	want := `{"v":1,"flake":{"id":"` + flakeID + `"},"result":"unchanged","dry_run":false}` + "\n"
+	if res.exit != 0 || res.stdout != want {
+		t.Errorf("exit %d stdout %q want %q", res.exit, res.stdout, want)
+	}
+}
+
 func TestFlakeWriteAnsweredWithAPendingApprovalExitsSeven(t *testing.T) {
 	for _, tc := range flakeWrites {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,7 +243,7 @@ func TestFlakeWriteAnsweredWithAPendingApprovalExitsSeven(t *testing.T) {
 	}
 }
 
-func TestFlakeWritesAreInHelpAsMutatingAndNotDestructive(t *testing.T) {
+func TestFlakeWritesAreInHelpAsMutatingAndOnlyMarkFixedAsDestructive(t *testing.T) {
 	_, stdout, _ := execute("help", "--json")
 	var doc struct {
 		Help struct {
@@ -235,11 +264,11 @@ func TestFlakeWritesAreInHelpAsMutatingAndNotDestructive(t *testing.T) {
 			continue
 		}
 		found[c.Path] = true
-		if !c.Mutates || c.Destructive || !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6, 7}) {
+		if !c.Mutates || c.Destructive != (c.Path == "flakes mark-fixed") || !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6, 7}) {
 			t.Errorf("%s: mutates %v destructive %v exit_codes %v", c.Path, c.Mutates, c.Destructive, c.ExitCodes)
 		}
 	}
-	if len(found) != 2 {
-		t.Errorf("flake write commands in help --json: %v, want quarantine and unquarantine", found)
+	if len(found) != 3 {
+		t.Errorf("flake write commands in help --json: %v, want quarantine, unquarantine and mark-fixed", found)
 	}
 }
