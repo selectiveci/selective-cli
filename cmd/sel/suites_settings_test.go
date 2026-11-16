@@ -21,6 +21,8 @@ const (
 type showStub struct {
 	mu       sync.Mutex
 	requests []string
+	listing  string
+	detail   string
 }
 
 func (s *showStub) start(t *testing.T) *httptest.Server {
@@ -33,7 +35,13 @@ func (s *showStub) start(t *testing.T) *httptest.Server {
 		showRoute := "/api/v1/orgs/acme/suites/"
 		switch {
 		case r.Method == "GET" && r.URL.RequestURI() == "/api/v1/orgs/acme/suites?state=all":
-			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `,` + archivedSuite + `]}`))
+			listing := activeSuite + `,` + archivedSuite
+			if s.listing != "" {
+				listing = s.listing
+			}
+			_, _ = w.Write([]byte(`{"suites":[` + listing + `]}`))
+		case r.Method == "GET" && r.URL.Path == showRoute+activeSuiteID && s.detail != "":
+			_, _ = w.Write([]byte(s.detail))
 		case r.Method == "GET" && r.URL.Path == showRoute+activeSuiteID:
 			_, _ = w.Write([]byte(`{"suite":` + activeSuite + `,"settings":` + suiteSettings + `}`))
 		case r.Method == "GET" && r.URL.Path == showRoute+archivedSuiteID:
@@ -94,5 +102,61 @@ func TestSuitesShowTextModeNamesTheSuiteAndListsEverySetting(t *testing.T) {
 		if err != nil || !strings.Contains(out.String(), want) {
 			t.Errorf("err %v stdout %q, want it to contain %q", err, out.String(), want)
 		}
+	}
+}
+
+func TestSuitesNameSharedByArchivedSuitesAndNoActiveOneIsRefusedNotGuessed(t *testing.T) {
+	const twinID = "33333333-3333-4333-8333-333333333333"
+	twin := `{"id":"` + twinID + `","name":"old-minitest","type":"minitest","repo":"acme/web","archived_at":"2026-11-01T09:00:00Z","last_run_at":null}`
+	listing := archivedSuite + "," + twin
+	list := "GET /api/v1/orgs/acme/suites?state=all"
+	assertNamesBothIDs := func(t *testing.T, res cliResult) {
+		t.Helper()
+		assertRefusal(t, res, 5, "usage_error")
+		if !strings.Contains(res.stdout, archivedSuiteID) || !strings.Contains(res.stdout, twinID) || !strings.Contains(res.stdout, "pass one of the ids") {
+			t.Errorf("stdout %q, want both ids named and the pass-an-id advice", res.stdout)
+		}
+	}
+	t.Run("show", func(t *testing.T) {
+		stub := &showStub{listing: listing}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "show", "old-minitest", "--org", "acme", "--json")
+
+		assertNamesBothIDs(t, res)
+		if !slices.Equal(stub.requests, []string{list}) {
+			t.Errorf("requests %v, want only [%s]", stub.requests, list)
+		}
+	})
+	t.Run("archive", func(t *testing.T) {
+		stub := &archiveStub{status: 200, body: archiveOK(archivedSuite, "updated", false), listing: listing}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "archive", "old-minitest", "--org", "acme", "--json")
+
+		assertNamesBothIDs(t, res)
+		if !slices.Equal(stub.requests, []string{list}) {
+			t.Errorf("requests %v, want only [%s]", stub.requests, list)
+		}
+	})
+}
+
+func TestSuitesShowRefusesAResponseWithoutASuiteObjectAndASettingsObject(t *testing.T) {
+	for name, detail := range map[string]string{
+		"empty object":      `{}`,
+		"null suite":        `{"suite":null,"settings":` + suiteSettings + `}`,
+		"settings an array": `{"suite":` + activeSuite + `,"settings":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &showStub{detail: detail}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "suites", "show", activeSuiteID, "--org", "acme", "--json")
+
+			assertRefusal(t, res, 4, "server_error")
+			if strings.Contains(res.stdout, `"v":1,"suite"`) || strings.Contains(res.stdout, `"settings":`) {
+				t.Errorf("stdout %q, want no success document", res.stdout)
+			}
+		})
 	}
 }

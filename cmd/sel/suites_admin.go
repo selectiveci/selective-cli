@@ -92,12 +92,15 @@ func suiteIDForArchive(client *api.Client, org, want string, archive bool) (stri
 			other = append(other, s.ID)
 		}
 	}
+	if len(wanted) == 0 && len(other) > 1 {
+		wanted = other
+	}
 	switch {
 	case len(wanted) == 1:
 		return wanted[0], nil
 	case len(wanted) > 1:
 		return "", contract.Errorf(contract.UsageError, "%d suites in %s are named %q (%s); pass one of the ids", len(wanted), org, want, strings.Join(wanted, ", "))
-	case len(other) > 0:
+	case len(other) == 1:
 		return other[0], nil
 	case tokenID.MatchString(want):
 		return want, nil

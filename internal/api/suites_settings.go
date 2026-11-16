@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 type SuiteDetail struct {
@@ -17,5 +19,12 @@ func (c *Client) ShowSuite(org, id string) (*SuiteDetail, error) {
 	if err := c.do(http.MethodGet, path, nil, http.StatusOK, &detail); err != nil {
 		return nil, err
 	}
+	if !isJSONObject(detail.Suite) || !isJSONObject(detail.Settings) {
+		return nil, &Error{Code: contract.ServerError, Message: "unexpected response from " + path + ": suite and settings must both be objects"}
+	}
 	return &detail, nil
+}
+
+func isJSONObject(raw json.RawMessage) bool {
+	return len(raw) > 0 && raw[0] == '{'
 }
