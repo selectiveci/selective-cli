@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -64,6 +66,9 @@ func checkoutOfAcmeWeb(t *testing.T) string {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(dir, "Gemfile.lock"), []byte("    rspec-core (3.13.0)\n    selective-ruby-core (0.3.0)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -97,7 +102,7 @@ func TestDoctorPassingRunPrintsOneDocumentAndExitsZero(t *testing.T) {
 	for _, c := range doc.Doctor.Checks {
 		counts[c.Status]++
 	}
-	if res.exit != 0 || doc.V != 1 || doc.Doctor.Status != "pass" || counts["ok"] != 5 || counts["skip"] != 3 {
+	if res.exit != 0 || doc.V != 1 || doc.Doctor.Status != "pass" || counts["ok"] != 6 || counts["skip"] != 2 {
 		t.Errorf("exit %d, doc %+v, counts %v\nstderr %q", res.exit, doc, counts, res.stderr)
 	}
 }
@@ -113,7 +118,7 @@ func TestDoctorFailingRunPrintsOneErrorObjectCarryingEveryCheck(t *testing.T) {
 	for i, c := range doc.Doctor.Checks {
 		names[i] = c.Name + "=" + c.Status
 	}
-	want := "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=skip cli_version=skip"
+	want := "config=ok server=ok auth=fail org=skip suite=skip socket=skip runner=ok cli_version=skip"
 	if res.exit != 4 || doc.V != 1 || doc.Error != "unauthorized" || doc.Doctor.Status != "fail" || strings.Join(names, " ") != want {
 		t.Errorf("exit %d, doc %+v, checks %v", res.exit, doc, names)
 	}
