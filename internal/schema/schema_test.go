@@ -23,13 +23,14 @@ func fixture(use string, annotations map[string]string) *cobra.Command {
 
 func TestBuildDescribesPositionalsFlagsAndAnnotations(t *testing.T) {
 	root := fixture("put KEY [LABEL] FILES...", map[string]string{
-		"exit_codes":   "0,3,4",
-		"events":       "summary,heartbeat",
-		"mutates":      "true",
-		"destructive":  "true",
-		"wait_default": "10m",
-		"secret_flags": "stdout",
-		"mcp":          "skip",
+		"exit_codes":     "0,3,4",
+		"events":         "summary,heartbeat",
+		"mutates":        "true",
+		"destructive":    "true",
+		"wait_default":   "10m",
+		"secret_flags":   "stdout",
+		"mcp":            "skip",
+		"mcp_skip_flags": "wait, name",
 	})
 	doc, err := Build(root, "1.2.3")
 	if err != nil {
@@ -57,7 +58,7 @@ func TestBuildDescribesPositionalsFlagsAndAnnotations(t *testing.T) {
 		t.Errorf("persistent flags wrong: %+v", names)
 	}
 	if !node.Mutates || !node.Destructive || node.WaitDefault != "10m" || node.MCP != "skip" ||
-		strings.Join(node.Events, ",") != "summary,heartbeat" || strings.Join(node.SecretFlags, ",") != "stdout" ||
+		strings.Join(node.Events, ",") != "summary,heartbeat" || strings.Join(node.SecretFlags, ",") != "stdout" || strings.Join(node.SkipFlags, ",") != "wait,name" ||
 		len(node.ExitCodes) != 3 || node.ExitCodes[2] != 4 {
 		t.Errorf("annotations not carried: %+v", node)
 	}
@@ -76,14 +77,18 @@ func TestBuildLeavesAbsentAnnotationsAbsent(t *testing.T) {
 
 func TestBuildRejectsAnnotationsOutsideTheRegistry(t *testing.T) {
 	cases := map[string]map[string]string{
-		"unregistered exit":      {"exit_codes": "0,42"},
-		"non-numeric exit":       {"exit_codes": "zero"},
-		"unregistered event":     {"events": "made_up"},
-		"mutates not true":       {"mutates": "yes"},
-		"destructive not true":   {"destructive": "1"},
-		"wait not a duration":    {"wait_default": "soon"},
-		"secret flag not a flag": {"secret_flags": "nope"},
-		"mcp not skip":           {"mcp": "hide"},
+		"unregistered exit":        {"exit_codes": "0,42"},
+		"non-numeric exit":         {"exit_codes": "zero"},
+		"unregistered event":       {"events": "made_up"},
+		"mutates not true":         {"mutates": "yes"},
+		"destructive not true":     {"destructive": "1"},
+		"local_exec not true":      {"local_exec": "yes"},
+		"idempotent not true":      {"idempotent": "yes", "mutates": "true"},
+		"idempotent on a read":     {"idempotent": "true"},
+		"wait not a duration":      {"wait_default": "soon"},
+		"secret flag not a flag":   {"secret_flags": "nope"},
+		"mcp not skip":             {"mcp": "hide"},
+		"mcp skip flag not a flag": {"mcp_skip_flags": "nope"},
 	}
 	for name, annotations := range cases {
 		if _, err := Build(fixture("put", annotations), "v"); err == nil {
@@ -97,5 +102,20 @@ func TestBuildRejectsWaitDefaultWithoutAWaitFlag(t *testing.T) {
 	root.AddCommand(&cobra.Command{Use: "go", Annotations: map[string]string{"wait_default": "1m"}, Run: func(*cobra.Command, []string) {}})
 	if _, err := Build(root, "v"); err == nil {
 		t.Error("wait_default without --wait was accepted")
+	}
+}
+
+func TestBuildAcceptsIdempotentOnMutatingAndDestructiveCommands(t *testing.T) {
+	for _, annotations := range []map[string]string{
+		{"idempotent": "true", "mutates": "true"},
+		{"idempotent": "true", "destructive": "true"},
+	} {
+		doc, err := Build(fixture("put", annotations), "v")
+		if err != nil {
+			t.Fatalf("%v: %v", annotations, err)
+		}
+		if node, _ := Lookup(doc, []string{"put"}); !node.Idempotent {
+			t.Errorf("%v: idempotent not carried", annotations)
+		}
 	}
 }

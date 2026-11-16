@@ -30,7 +30,7 @@ func annotate(node *Command, c *cobra.Command) error {
 		}
 		node.Events = append(node.Events, name)
 	}
-	for _, key := range []string{"mutates", "destructive", "sends_paths"} {
+	for _, key := range []string{"mutates", "destructive", "sends_paths", "local_exec", "idempotent"} {
 		if v, ok := c.Annotations[key]; ok && v != "true" {
 			fail("%s must be \"true\" or absent, got %q", key, v)
 		}
@@ -38,6 +38,11 @@ func annotate(node *Command, c *cobra.Command) error {
 	node.Mutates = c.Annotations["mutates"] == "true"
 	node.Destructive = c.Annotations["destructive"] == "true"
 	node.SendsPaths = c.Annotations["sends_paths"] == "true"
+	node.LocalExec = c.Annotations["local_exec"] == "true"
+	node.Idempotent = c.Annotations["idempotent"] == "true"
+	if node.Idempotent && !node.Mutates && !node.Destructive {
+		fail("idempotent needs mutates or destructive")
+	}
 	if v, ok := c.Annotations["wait_default"]; ok {
 		if _, err := time.ParseDuration(v); err != nil || c.Flags().Lookup("wait") == nil {
 			fail("wait_default %q needs a duration and a --wait flag", v)
@@ -51,6 +56,13 @@ func annotate(node *Command, c *cobra.Command) error {
 			continue
 		}
 		node.SecretFlags = append(node.SecretFlags, name)
+	}
+	for _, name := range splitList(c.Annotations["mcp_skip_flags"]) {
+		if c.Flags().Lookup(name) == nil {
+			fail("mcp_skip_flags names --%s, which the command does not have", name)
+			continue
+		}
+		node.SkipFlags = append(node.SkipFlags, name)
 	}
 	if v, ok := c.Annotations["mcp"]; ok && v != "skip" {
 		fail("mcp must be \"skip\" or absent, got %q", v)

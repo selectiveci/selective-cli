@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
@@ -91,5 +92,51 @@ func TestToolsLeaveOutWhatMustNotBeExposed(t *testing.T) {
 	}
 	if tools["group_child"] == nil {
 		t.Error("group_child is not listed")
+	}
+}
+
+func TestHintsComeOnlyFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
+	cases := map[string]struct {
+		command schema.Command
+		want    mcp.ToolAnnotations
+	}{
+		"read":                    {schema.Command{}, mcp.ToolAnnotations{ReadOnlyHint: true}},
+		"read with exit codes":    {schema.Command{ExitCodes: []int{0}}, mcp.ToolAnnotations{ReadOnlyHint: true}},
+		"local exec":              {schema.Command{LocalExec: true}, mcp.ToolAnnotations{}},
+		"mutates":                 {schema.Command{Mutates: true}, mcp.ToolAnnotations{}},
+		"mutates and idempotent":  {schema.Command{Mutates: true, Idempotent: true}, mcp.ToolAnnotations{IdempotentHint: true}},
+		"mutates and destructive": {schema.Command{Mutates: true, Destructive: true}, mcp.ToolAnnotations{}},
+		"destructive idempotent":  {schema.Command{Destructive: true, Idempotent: true}, mcp.ToolAnnotations{IdempotentHint: true}},
+	}
+	for name, c := range cases {
+		got := hints(c.command)
+		if got.ReadOnlyHint != c.want.ReadOnlyHint || got.IdempotentHint != c.want.IdempotentHint || !reflect.DeepEqual(got.DestructiveHint, c.want.DestructiveHint) {
+			t.Errorf("%s: hints = %+v, want %+v", name, got, c.want)
+		}
+	}
+}
+
+func TestToolsLeaveOutTheFlagsNamedInSkipFlags(t *testing.T) {
+	root := &cobra.Command{Use: "tool"}
+	root.PersistentFlags().Bool("json", false, "JSON output")
+	show := leaf("show", map[string]string{"mcp_skip_flags": "text, format"})
+	show.Flags().Bool("text", false, "raw text")
+	show.Flags().String("format", "", "format")
+	show.Flags().String("limit", "", "limit")
+	root.AddCommand(show)
+	doc, err := schema.Build(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := properties(Tools(doc)[0])
+
+	if _, ok := got["limit"]; !ok {
+		t.Errorf("show properties = %v, want limit", got)
+	}
+	for _, name := range []string{"text", "format"} {
+		if _, ok := got[name]; ok {
+			t.Errorf("show exposes %q", name)
+		}
 	}
 }

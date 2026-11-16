@@ -32,6 +32,10 @@ func exposed(c schema.Command) bool {
 	return c.Runnable && c.MCP != "skip" && c.Path != "help" && c.Path != "mcp"
 }
 
+func exposedFlag(c schema.Command, f schema.Flag) bool {
+	return !slices.Contains(neverExposed, f.Name) && !slices.Contains(c.SecretFlags, f.Name) && !slices.Contains(c.SkipFlags, f.Name)
+}
+
 func toolName(path string) string {
 	return strings.ReplaceAll(path, " ", "_")
 }
@@ -44,7 +48,7 @@ func tool(c schema.Command) *mcp.Tool {
 	properties := map[string]map[string]any{}
 	required := []string{}
 	for _, f := range c.Flags {
-		if slices.Contains(neverExposed, f.Name) || slices.Contains(c.SecretFlags, f.Name) {
+		if !exposedFlag(c, f) {
 			continue
 		}
 		properties[propertyName(f.Name)] = property(f)
@@ -64,6 +68,7 @@ func tool(c schema.Command) *mcp.Tool {
 		Name:        toolName(c.Path),
 		Description: c.Short,
 		InputSchema: map[string]any{"type": "object", "properties": properties, "required": required},
+		Annotations: hints(c),
 	}
 }
 
@@ -88,4 +93,14 @@ func positional(a schema.Arg) map[string]any {
 		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 	}
 	return map[string]any{"type": "string"}
+}
+
+func hints(c schema.Command) *mcp.ToolAnnotations {
+	if c.LocalExec {
+		return &mcp.ToolAnnotations{}
+	}
+	if !c.Mutates && !c.Destructive {
+		return &mcp.ToolAnnotations{ReadOnlyHint: true}
+	}
+	return &mcp.ToolAnnotations{IdempotentHint: c.Idempotent}
 }

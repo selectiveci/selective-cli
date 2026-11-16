@@ -74,6 +74,7 @@ summary.`,
 			"exit_codes":  "0,1,3,4,5,6,8,130",
 			"events":      "build_start,selection,test_pass,test_fail,progress,heartbeat,summary",
 			"sends_paths": "true",
+			"local_exec":  "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := runTest(cmd, args, f)

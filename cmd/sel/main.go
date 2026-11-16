@@ -352,7 +352,7 @@ func suitesConfigureCmd() *cobra.Command {
 	var defaultBranch string
 	cmd := &cobra.Command{
 		Use:         "configure SUITE",
-		Annotations: map[string]string{"mutates": "true"},
+		Annotations: map[string]string{"mutates": "true", "idempotent": "true"},
 		Short:       "Change a suite's settings, such as test selection",
 		Long: `Change a suite's settings (by name or ID). Needs a --setup login, as an
 owner or admin of the organization.
