@@ -35,3 +35,18 @@ func TestHelpDeclaresExitCodesAndEventsForTheAuthOrgsAndReposCommands(t *testing
 		}
 	}
 }
+
+func TestAuthLogoutIsHiddenFromMCP(t *testing.T) {
+	_, stdout, _ := execute("help", "auth", "logout", "--json")
+	var doc struct {
+		Command struct {
+			MCP string `json:"mcp"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Command.MCP != "skip" {
+		t.Errorf("auth logout mcp = %q, want skip", doc.Command.MCP)
+	}
+}

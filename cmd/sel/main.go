@@ -310,8 +310,9 @@ func suitesKeyCmd() *cobra.Command {
 	var f setupFlags
 	var opts setup.KeyOptions
 	cmd := &cobra.Command{
-		Use:   "key SUITE",
-		Short: "Hand a suite's API key to a secret store without showing it",
+		Use:         "key SUITE",
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9", "secret_flags": "stdout"},
+		Short:       "Hand a suite's API key to a secret store without showing it",
 		Long: `Send a suite's API key (by name or ID) where CI can read it, without it
 appearing on screen.
 
