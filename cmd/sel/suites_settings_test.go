@@ -248,6 +248,27 @@ func TestSuitesSettingsRefusesBadInputBeforeSendingAnything(t *testing.T) {
 	}
 }
 
+func TestSuitesSettingsRefusesAPutResponseWithoutASuiteObjectAndASettingsObject(t *testing.T) {
+	for name, reply := range map[string]string{
+		"empty object":      `{"result":"updated","dry_run":false}`,
+		"null suite":        `{"suite":null,"settings":` + suiteSettings + `,"result":"updated","dry_run":false}`,
+		"settings an array": `{"suite":` + activeSuite + `,"settings":[],"result":"updated","dry_run":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &settingsStub{status: 200, reply: reply}
+			srv := stub.start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "suites", "settings", "web-rspec", "--org", "acme", "--json", "--set", "selection.mode=live")
+
+			assertRefusal(t, res, 4, "server_error")
+			wantRequests := []string{"GET /api/v1/orgs/acme/suites?state=all", "PUT " + settingsRoute}
+			if strings.Contains(res.stdout, `"result"`) || !slices.Equal(stub.requests, wantRequests) {
+				t.Errorf("stdout %q requests %v, want no success document and %v", res.stdout, stub.requests, wantRequests)
+			}
+		})
+	}
+}
+
 func TestSuitesSettingsMapsServerRefusalsAndNeverRetriesTheKeylessPut(t *testing.T) {
 	cases := []struct {
 		name   string

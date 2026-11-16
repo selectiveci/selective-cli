@@ -19,10 +19,17 @@ func (c *Client) ShowSuite(org, id string) (*SuiteDetail, error) {
 	if err := c.do(http.MethodGet, path, nil, http.StatusOK, &detail); err != nil {
 		return nil, err
 	}
-	if !isJSONObject(detail.Suite) || !isJSONObject(detail.Settings) {
-		return nil, &Error{Code: contract.ServerError, Message: "unexpected response from " + path + ": suite and settings must both be objects"}
+	if err := detail.check(path); err != nil {
+		return nil, err
 	}
 	return &detail, nil
+}
+
+func (d SuiteDetail) check(path string) error {
+	if !isJSONObject(d.Suite) || !isJSONObject(d.Settings) {
+		return &Error{Code: contract.ServerError, Message: "unexpected response from " + path + ": suite and settings must both be objects"}
+	}
+	return nil
 }
 
 type SuiteSettingsChange struct {
@@ -35,6 +42,9 @@ func (c *Client) UpdateSuiteSettings(org, id string, body map[string]any, dryRun
 	var change SuiteSettingsChange
 	path := withQuery("/api/v1/orgs/"+url.PathEscape(org)+"/suites/"+url.PathEscape(id)+"/settings", dryRunQuery(dryRun))
 	if err := c.do(http.MethodPut, path, body, http.StatusOK, &change); err != nil {
+		return nil, err
+	}
+	if err := change.check(path); err != nil {
 		return nil, err
 	}
 	return &change, nil

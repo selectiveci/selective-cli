@@ -44,7 +44,7 @@ a change adds "result" (updated or unchanged) and "dry_run".
 
 Booleans are true or false, counts are whole numbers, selection.mode is one of
 off, shadow or live, and selection.ignore_patterns is a comma-separated list
-(empty clears it). An unknown key or a value of the wrong type exits 5 before
+(empty clears it; elements are trimmed and an empty element exits 5). An unknown key or a value of the wrong type exits 5 before
 anything is sent; ranges are checked by the server (validation_failed, exit 5,
 with the offending fields). --dry-run needs --set, reports what would change
 and changes nothing. A change needs a token with the write scope, as an owner
