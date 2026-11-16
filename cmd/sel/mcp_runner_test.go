@@ -111,3 +111,18 @@ func TestMCPToolsAdvertiseTimeoutSeconds(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPRunnerRejectsIntegerLexemesThatFloatRoundingWouldAccept(t *testing.T) {
+	runner, _ := realRunner(t)
+
+	for _, args := range []string{`{"limit":1.0000000000000001}`, `{"limit":9223372036854775808}`, `{"timeout_s":600.00000000000001}`} {
+		_, err := runner.Argv("builds", json.RawMessage(args))
+		if !isInvalidParams(err) {
+			t.Errorf("%s: err = %v, want an invalid-params error", args, err)
+		}
+	}
+	got, err := runner.Argv("builds", json.RawMessage(`{"limit":9007199254740993}`))
+	if err != nil || !slices.Contains(got, "--limit=9007199254740993") {
+		t.Errorf("argv = %q, err = %v, want --limit=9007199254740993", got, err)
+	}
+}

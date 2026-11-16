@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -159,4 +161,69 @@ func TestEveryToolAdvertisesTimeoutSeconds(t *testing.T) {
 			t.Errorf("%s timeout_s = %v, want integer 1..600 default 60", name, prop)
 		}
 	}
+}
+
+func TestIntegerInputsAreJudgedOnTheExactLexeme(t *testing.T) {
+	runner := fixtureRunner(t)
+	maxInt := strconv.Itoa(math.MaxInt)
+	minInt := strconv.Itoa(math.MinInt)
+	accepted := map[string]string{
+		"60":                  "60",
+		"60.0":                "60",
+		"6e1":                 "60",
+		"600e-1":              "60",
+		"0.6e2":               "60",
+		"-0":                  "0",
+		"0e1000000000":        "0",
+		"-3":                  "-3",
+		"9007199254740993":    "9007199254740993",
+		"90071992547409.93e2": "9007199254740993",
+		maxInt:                maxInt,
+		minInt:                minInt,
+	}
+	for lexeme, want := range accepted {
+		got, err := runner.Argv("run", json.RawMessage(`{"id":"7","name":"n","retries":`+lexeme+`}`))
+		if err != nil || !slices.Contains(got, "--retries="+want) {
+			t.Errorf("%s: argv = %q, err = %v, want --retries=%s", lexeme, got, err, want)
+		}
+	}
+	rejected := []string{
+		"1.0000000000000001",
+		"60.5",
+		"1e-1000000000",
+		"1e1000000000",
+		"1e19",
+		"9223372036854775808",
+		"-9223372036854775809",
+		"92233720368547758080e-1",
+		"0.1e0",
+		strings.Repeat("9", 100000),
+		"1" + strings.Repeat("0", 100000),
+		"0." + strings.Repeat("0", 100000) + "1",
+	}
+	for _, lexeme := range rejected {
+		started := time.Now()
+		got, err := runner.Argv("run", json.RawMessage(`{"id":"7","name":"n","retries":`+lexeme+`}`))
+		if !isInvalid(err) {
+			t.Errorf("%.40s: argv = %q, err = %v, want an invalid-params error", lexeme, got, err)
+		}
+		if elapsed := time.Since(started); elapsed > 50*time.Millisecond {
+			t.Errorf("%.40s: decided in %v, want under 50ms", lexeme, elapsed)
+		}
+	}
+}
+
+func TestTimeoutSecondsIsJudgedOnTheExactLexeme(t *testing.T) {
+	runner := fixtureRunner(t)
+	for _, lexeme := range []string{"600.0000000000001", "600.00000000000001", "1.00000000000000001", "0.99999999999999999", "1e1000000000"} {
+		_, _, err := runner.prepare("group_child", json.RawMessage(`{"timeout_s":`+lexeme+`}`))
+		if !isInvalid(err) {
+			t.Errorf("%s: err = %v, want an invalid-params error", lexeme, err)
+		}
+	}
+}
+
+func isInvalid(err error) bool {
+	var wire *jsonrpc.Error
+	return errors.As(err, &wire) && wire.Code == jsonrpc.CodeInvalidParams
 }

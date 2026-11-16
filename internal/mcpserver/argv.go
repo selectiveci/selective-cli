@@ -20,7 +20,8 @@ const (
 	minTimeoutSeconds     = 1
 	maxTimeoutSeconds     = 600
 	defaultTimeoutSeconds = 60
-	maxExactInteger       = 1 << 53
+	maxIntegerDigits      = 20
+	maxExponentDigits     = 9
 )
 
 type Runner struct {
@@ -199,11 +200,53 @@ func integer(key string, value any) (int64, error) {
 	if !ok {
 		return 0, invalidParams("%s must be an integer", key)
 	}
-	f, err := strconv.ParseFloat(number.String(), 64)
-	if err != nil || f != math.Trunc(f) || math.Abs(f) > maxExactInteger {
-		return 0, invalidParams("%s must be an integer", key)
+	n, ok := exactInteger(number.String())
+	if !ok {
+		return 0, invalidParams("%s must be an integer in the range %d to %d", key, math.MinInt, math.MaxInt)
 	}
-	return int64(f), nil
+	return n, nil
+}
+
+func exactInteger(lexeme string) (int64, bool) {
+	negative := strings.HasPrefix(lexeme, "-")
+	lexeme = strings.TrimPrefix(lexeme, "-")
+	mantissa, exponent, _ := strings.Cut(strings.ToLower(lexeme), "e")
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	digits := strings.TrimLeft(whole+fraction, "0")
+	if digits == "" {
+		return 0, true
+	}
+	scale := clampedExponent(exponent) - int64(len(fraction))
+	trimmed := strings.TrimRight(digits, "0")
+	scale += int64(len(digits) - len(trimmed))
+	if scale < 0 || int64(len(trimmed))+scale > maxIntegerDigits {
+		return 0, false
+	}
+	text := trimmed + strings.Repeat("0", int(scale))
+	if negative {
+		text = "-" + text
+	}
+	n, err := strconv.ParseInt(text, 10, strconv.IntSize)
+	return n, err == nil
+}
+
+func clampedExponent(exponent string) int64 {
+	if exponent == "" {
+		return 0
+	}
+	negative := strings.HasPrefix(exponent, "-")
+	digits := strings.TrimLeft(strings.TrimLeft(exponent, "+-"), "0")
+	if len(digits) > maxExponentDigits {
+		digits = strings.Repeat("9", maxExponentDigits)
+	}
+	if digits == "" {
+		return 0
+	}
+	n, _ := strconv.ParseInt(digits, 10, 64)
+	if negative {
+		return -n
+	}
+	return n
 }
 
 func stringList(key string, value any) ([]string, error) {
