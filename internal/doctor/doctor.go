@@ -16,6 +16,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
 	"github.com/selectiveci/selective-cli/internal/setup"
+	"github.com/selectiveci/selective-cli/internal/update"
 )
 
 var (
@@ -28,7 +29,7 @@ const (
 	suiteFix = "sel suites create --name <name> --framework <type>"
 )
 
-var laterChecks = []string{"socket", "runner", "cli_version"}
+var laterChecks = []string{"socket", "runner"}
 
 type Status string
 
@@ -73,6 +74,8 @@ type state struct {
 	me      *api.Me
 	meErr   error
 	orgSlug string
+
+	advertised advertised
 }
 
 type step struct {
@@ -122,6 +125,14 @@ func Run(opts Options) *Report {
 	}
 	for _, name := range laterChecks {
 		report.Checks = append(report.Checks, Check{Name: name, Status: Skip, Message: "added in a later release"})
+	}
+	switch by := blockedBy["server"]; {
+	case expired:
+		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because the run's timeout expired"})
+	case by != "":
+		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because " + by + " failed"})
+	default:
+		report.Checks = append(report.Checks, s.checkCLIVersion())
 	}
 	report.Status = summarize(report.Checks)
 	return report
@@ -290,6 +301,7 @@ func (s *state) checkServer() Check {
 	}
 	s.secret = token
 	s.client = api.New(s.host, token).WithContext(s.ctx)
+	s.client.HTTP.Transport = recordingTransport{base: s.client.HTTP.Transport, seen: &s.advertised}
 	s.client.HTTP.Timeout = httpTimeout
 
 	began := time.Now()
@@ -386,4 +398,31 @@ func (s *state) checkSuite() Check {
 		Message: fmt.Sprintf("%s: %s", repo, strings.Join(names, ", ")),
 		Detail:  map[string]any{"repo": repo, "suites": matches},
 	}
+}
+
+func (s *state) checkCLIVersion() Check {
+	info := update.Status(update.Version, "", s.advertised.state())
+	if info.LatestVersion == "" && info.MinVersion == "" {
+		return Check{Name: "cli_version", Status: Skip, Message: "no version information: a dev build, or the server advertised none"}
+	}
+	detail := map[string]any{}
+	if info.LatestVersion != "" {
+		detail["latest_version"] = info.LatestVersion
+	}
+	if info.MinVersion != "" {
+		detail["min_version"] = info.MinVersion
+	}
+	belowMinimum := info.BelowMinimum != nil && *info.BelowMinimum
+	if info.BelowMinimum != nil {
+		detail["below_minimum"] = belowMinimum
+	}
+	switch {
+	case belowMinimum:
+		return Check{Name: "cli_version", Status: Warn, Message: fmt.Sprintf("sel %s is below the server's minimum %s", info.Version, info.MinVersion), Detail: detail, Fix: info.UpgradeCommand}
+	case info.UpdateAvailable != nil && *info.UpdateAvailable:
+		return Check{Name: "cli_version", Status: Warn, Message: fmt.Sprintf("sel %s can be upgraded to %s", info.Version, info.LatestVersion), Detail: detail, Fix: info.UpgradeCommand}
+	case info.LatestVersion == "":
+		return Check{Name: "cli_version", Status: OK, Message: fmt.Sprintf("sel %s meets the server's minimum %s", info.Version, info.MinVersion), Detail: detail}
+	}
+	return Check{Name: "cli_version", Status: OK, Message: fmt.Sprintf("sel %s is the latest release", info.Version), Detail: detail}
 }
