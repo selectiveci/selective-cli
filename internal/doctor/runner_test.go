@@ -1,12 +1,14 @@
 package doctor
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/localrun"
@@ -193,5 +195,51 @@ func TestRunnerWarningLeavesTheExitCodeAlone(t *testing.T) {
 
 	if c := check(t, report, "runner"); c.Status != Warn || c.Code != contract.NoFramework || report.Status != "warn" || report.Err() != nil {
 		t.Errorf("runner = %+v, status %q, err %v, want a warn that leaves the exit at 0", c, report.Status, report.Err())
+	}
+}
+
+func TestRunnerWarnsWhenBundleIsNotOnPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	c := runnerOf(project(t, map[string]string{"Gemfile.lock": rspecLock}))
+
+	if c.Status != Warn || c.Code != contract.RunnerMissing || !strings.Contains(c.Message, "bundle") {
+		t.Errorf("check = %+v, want a runner_missing warn naming bundle", c)
+	}
+}
+
+func TestRunnerOutputNeverCarriesTheToken(t *testing.T) {
+	leaky := strings.Replace(suites, `"type":"rspec"`, `"type":"`+token+`"`, 1)
+
+	report := run(t, serve(t, with("/api/v1/orgs/acme/suites", reply(200, leaky))), Options{})
+
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := check(t, report, "runner"); !strings.Contains(c.Message, "[redacted]") || strings.Contains(string(raw), token) {
+		t.Errorf("runner = %+v; the token must be redacted and absent from %s", c, raw)
+	}
+}
+
+func TestRunnerIsBoundedByTheRunsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	blocked := func() (string, error) { <-release; return "", errors.New("released") }
+	isolate(t, token)
+	host := serve(t, healthy())
+	done := make(chan *Report, 1)
+	began := time.Now()
+	go func() {
+		done <- Run(Options{Hostname: host, Timeout: 500 * time.Millisecond, Repo: inRepo, Root: blocked})
+	}()
+
+	select {
+	case report := <-done:
+		if c := check(t, report, "runner"); c.Status != Skip || report.Err() != nil || time.Since(began) > 3*time.Second {
+			t.Errorf("runner = %+v, err %v, after %s; want a skip that leaves the exit at 0", c, report.Err(), time.Since(began))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run was still blocked 5s after a 500ms timeout: the runner check is not bounded by the deadline")
 	}
 }

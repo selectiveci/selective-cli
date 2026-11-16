@@ -134,11 +134,14 @@ func Run(opts Options) *Report {
 		report.Checks = append(report.Checks, c)
 	}
 	report.Checks = append(report.Checks, Check{Name: "socket", Status: Skip, Message: "added in a later release"})
-	if expired {
-		report.Checks = append(report.Checks, Check{Name: "runner", Status: Skip, Message: "skipped because the run's timeout expired"})
-	} else {
-		report.Checks = append(report.Checks, s.checkRunner())
+	runner := Check{Name: "runner", Status: Skip, Message: "skipped because the run's timeout expired"}
+	if !expired && ctx.Err() == nil {
+		if c := runWithin(ctx, s, step{"runner", "", (*state).checkRunner}); c.Status != Fail {
+			runner = c
+		}
 	}
+	expired = expired || runner.Status == Skip
+	report.Checks = append(report.Checks, runner)
 	switch by := blockedBy["server"]; {
 	case expired:
 		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because the run's timeout expired"})

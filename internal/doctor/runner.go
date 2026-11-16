@@ -3,9 +3,11 @@ package doctor
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/localrun"
 )
 
@@ -21,8 +23,12 @@ func (s *state) checkRunner() Check {
 	if err != nil {
 		return runnerWarn(err)
 	}
-	if _, err := localrun.ClientCommand(root, framework, os.Environ()); err != nil {
+	argv, err := localrun.ClientCommand(root, framework, os.Environ())
+	if err != nil {
 		return runnerWarn(err)
+	}
+	if _, err := exec.LookPath(argv[0]); err != nil {
+		return Check{Name: "runner", Status: Warn, Code: contract.RunnerMissing, Message: fmt.Sprintf("sel test needs %s on PATH and could not find it", argv[0])}
 	}
 	if message := s.suiteDisagreement(root, framework); message != "" {
 		return Check{Name: "runner", Status: Warn, Message: message}

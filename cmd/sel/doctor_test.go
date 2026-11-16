@@ -69,6 +69,11 @@ func checkoutOfAcmeWeb(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(dir, "Gemfile.lock"), []byte("    rspec-core (3.13.0)\n    selective-ruby-core (0.3.0)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "bundle"), nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return dir
 }
 
