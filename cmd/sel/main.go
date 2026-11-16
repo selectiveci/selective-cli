@@ -258,7 +258,8 @@ func suitesCmd() *cobra.Command {
   sel suites create   Create a suite for a repository (needs --setup login)
   sel suites key        Hand a suite's API key to a secret store
   sel suites configure  Change a suite's settings, such as test selection
-  sel suites archive    Archive a suite`,
+  sel suites archive    Archive a suite
+  sel suites restore    Bring an archived suite back`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -269,7 +270,7 @@ func suitesCmd() *cobra.Command {
 		},
 	}
 	f.bind(cmd, true)
-	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd(), suitesArchiveCmd())
+	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd(), suitesArchiveCmd(), suitesRestoreCmd())
 	return cmd
 }
 
