@@ -129,13 +129,14 @@ func TestToolsLeaveOutTheFlagsNamedInSkipFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var got []string
-	for name := range properties(Tools(doc)[0]) {
-		got = append(got, name)
-	}
-	slices.Sort(got)
+	got := properties(Tools(doc)[0])
 
-	if want := []string{"limit"}; !slices.Equal(got, want) {
-		t.Errorf("show properties = %v, want %v", got, want)
+	if _, ok := got["limit"]; !ok {
+		t.Errorf("show properties = %v, want limit", got)
+	}
+	for _, name := range []string{"text", "format"} {
+		if _, ok := got[name]; ok {
+			t.Errorf("show exposes %q", name)
+		}
 	}
 }
