@@ -270,7 +270,7 @@ func suitesCmd() *cobra.Command {
 		},
 	}
 	f.bind(cmd, true)
-	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd(), suitesArchiveCmd(), suitesRestoreCmd())
+	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd(), suitesArchiveCmd(), suitesRestoreCmd(), suitesDeleteCmd())
 	return cmd
 }
 

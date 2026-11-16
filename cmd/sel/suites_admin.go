@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 
 	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/approvals"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/setup"
@@ -109,4 +112,83 @@ func archivedSentence(change *api.SuiteChange, archive bool) string {
 		return fmt.Sprintf("Archived suite %q.", change.Name)
 	}
 	return fmt.Sprintf("Restored suite %q.", change.Name)
+}
+
+func suitesDeleteCmd() *cobra.Command {
+	var f setupFlags
+	var yes, dryRun bool
+	gate := &approvals.Gate{}
+	cmd := &cobra.Command{
+		Use:   "delete SUITE",
+		Short: "Delete an archived suite for good",
+		Long: `Delete an archived suite (by name or ID) and everything stored under it.
+It cannot be undone. Needs a token with the write scope, as an owner or admin
+of the organization.
+
+A suite must be archived first (sel suites archive): an active suite exits 5
+(suite_not_archived), and so does a suite that still has runs
+(suite_has_runs).
+
+--yes is required, with or without a terminal. --dry-run reports what would
+happen, changes nothing and needs no --yes.
+
+An agent token needs a person's approval first: without --wait the command
+exits 7 with the approval to decide. --wait[=10m] waits for the decision, then
+deletes the suite and ends with a done line; --timeout bounds the whole run
+(exit 8).`,
+		Example:     "  sel suites delete old-minitest --yes\n  sel suites delete old-minitest --yes --wait=10m --json\n  sel suites delete old-minitest --dry-run",
+		Args:        cobra.ExactArgs(1),
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,7,8", "mutates": "true", "destructive": "true"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes && !dryRun {
+				return contract.Errorf(contract.UsageError, "deleting a suite needs --yes (or --dry-run to preview)")
+			}
+			env, org, err := f.env(true)
+			if err != nil {
+				return err
+			}
+			env.Stdout, env.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			gate.Client, gate.Out, gate.Err, gate.JSON = env.Client, env.Stdout, env.Stderr, env.JSON
+			return suitesDelete(cmd.Context(), env, gate, org, args[0], dryRun)
+		},
+	}
+	f.bind(cmd, true)
+	cmd.Flags().BoolVar(&yes, "yes", false, "Confirm the delete (required, with or without a terminal)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report what would be deleted without deleting it")
+	approvals.BindWait(cmd, gate)
+	return cmd
+}
+
+func suitesDelete(ctx context.Context, env *setup.Env, gate *approvals.Gate, org, want string, dryRun bool) error {
+	id, err := suiteIDForArchive(env.Client, org, want, false)
+	if err != nil {
+		return err
+	}
+	key, err := newIdempotencyKey()
+	if err != nil {
+		return err
+	}
+	send := func(ctx context.Context) (*approvals.Outcome, error) {
+		change, err := env.Client.WithContext(ctx).DeleteSuite(id, key, dryRun)
+		if err != nil {
+			return nil, err
+		}
+		return &approvals.Outcome{Key: "suite", Resource: change.Suite, Result: change.Result, DryRun: change.DryRun}, nil
+	}
+	return gate.Do(ctx, send, func(o *approvals.Outcome) string { return deletedSentence(want, o) })
+}
+
+func deletedSentence(name string, outcome *approvals.Outcome) string {
+	if outcome.DryRun {
+		return fmt.Sprintf("Dry run: would delete suite %q.", name)
+	}
+	return fmt.Sprintf("Deleted suite %q.", name)
+}
+
+func newIdempotencyKey() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", raw), nil
 }

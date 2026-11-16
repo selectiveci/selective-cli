@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -244,4 +246,193 @@ func TestHelpDeclaresSuitesArchiveAndRestoreAsWrites(t *testing.T) {
 			t.Errorf("help --json lacks %s with mutates and exit codes 0,3,4,5,6", path)
 		}
 	}
+}
+
+type deleteCall struct {
+	method, path, body string
+	header             http.Header
+}
+
+type deleteStub struct {
+	mu        sync.Mutex
+	writes    []deleteCall
+	polls     []string
+	lookups   int
+	replies   []deleteReply
+	approvals []string
+}
+
+type deleteReply struct {
+	status int
+	body   string
+}
+
+func (s *deleteStub) start(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
+			s.lookups++
+			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `,` + archivedSuite + `]}`))
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/approvals/"):
+			s.polls = append(s.polls, r.URL.Path)
+			_, _ = w.Write([]byte(`{"approval":` + s.approvals[min(len(s.polls)-1, len(s.approvals)-1)] + `}`))
+		case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/api/v1/suites/"):
+			body, _ := io.ReadAll(r.Body)
+			s.writes = append(s.writes, deleteCall{r.Method, r.URL.RequestURI(), string(body), r.Header.Clone()})
+			reply := s.replies[min(len(s.writes)-1, len(s.replies)-1)]
+			w.WriteHeader(reply.status)
+			_, _ = w.Write([]byte(reply.body))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func (s *deleteStub) requestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lookups + len(s.polls) + len(s.writes)
+}
+
+var (
+	deletePending = deleteReply{202, `{"result":"pending_approval","dry_run":false,"approval":` + pendingApproval.json() + `}`}
+	deleteDone    = deleteReply{200, archiveOK(archivedSuite, "deleted", false)}
+)
+
+func TestSuitesDeleteWithoutWaitExitsSevenWithThePendingObjectAfterOneCall(t *testing.T) {
+	stub := &deleteStub{replies: []deleteReply{deletePending}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--org", "acme", "--json")
+
+	want := `{"v":1,"result":"pending_approval","dry_run":false,"approval":` + pendingApproval.json() + `}` + "\n"
+	if res.exit != 7 || res.stdout != want || len(stub.writes) != 1 || stub.writes[0].path != "/api/v1/suites/"+archivedSuiteID {
+		t.Errorf("exit %d stdout %q writes %+v, want exit 7, %q and one DELETE of the suite", res.exit, res.stdout, stub.writes, want)
+	}
+}
+
+func TestSuitesDeleteWaitResendsTheIdenticalRequestOnceApproved(t *testing.T) {
+	approved := approvalFixture{status: "approved", expiresAt: "2026-11-15T10:00:00.123456Z", decidedAt: "2026-11-14T10:05:00Z"}
+	stub := &deleteStub{replies: []deleteReply{deletePending, deleteDone}, approvals: []string{pendingApproval.json(), approved.json()}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--wait=2m", "--org", "acme", "--json")
+
+	lines := strings.Split(strings.TrimSuffix(res.stdout, "\n"), "\n")
+	last := `{"v":1,"event":"done","result":"deleted","suite":` + archivedSuite + `}`
+	if res.exit != 0 || len(lines) < 3 || !strings.HasPrefix(lines[0], `{"v":1,"result":"pending_approval"`) || !strings.Contains(lines[1], `"event":"waiting"`) || lines[len(lines)-1] != last {
+		t.Fatalf("exit %d stdout %q, want exit 0 with pending, waiting and %q", res.exit, res.stdout, last)
+	}
+	if len(stub.writes) != 2 || !reflect.DeepEqual(stub.writes[0], stub.writes[1]) {
+		t.Fatalf("writes = %+v, want two identical requests", stub.writes)
+	}
+	if key := stub.writes[0].header.Get("Idempotency-Key"); len(key) != 32 || stub.writes[0].method != "DELETE" {
+		t.Errorf("first write = %+v, want a DELETE with a 32-character Idempotency-Key", stub.writes[0])
+	}
+}
+
+func TestSuitesDeleteByNameLooksUpTheArchivedSuiteAndDeletesItById(t *testing.T) {
+	stub := &deleteStub{replies: []deleteReply{deleteDone}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", "old-minitest", "--yes", "--org", "acme", "--json")
+
+	want := `{"v":1,"suite":` + archivedSuite + `,"result":"deleted","dry_run":false}` + "\n"
+	if res.exit != 0 || res.stdout != want || stub.lookups != 1 || len(stub.writes) != 1 || stub.writes[0].path != "/api/v1/suites/"+archivedSuiteID {
+		t.Errorf("exit %d stdout %q lookups %d writes %+v, want exit 0, %q and a DELETE of %s", res.exit, res.stdout, stub.lookups, stub.writes, want, archivedSuiteID)
+	}
+}
+
+func TestSuitesDeleteMapsEachServerRefusalToItsExit(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply deleteReply
+		exit  int
+		code  string
+	}{
+		{"not archived", deleteReply{409, `{"error":"suite_not_archived","message":"Archive the suite first."}`}, 5, "suite_not_archived"},
+		{"has runs", deleteReply{409, `{"error":"suite_has_runs","message":"The suite still has runs."}`}, 5, "suite_has_runs"},
+		{"no such suite", deleteReply{404, `{"error":"suite_not_found","message":"No such suite in this organization."}`}, 3, "suite_not_found"},
+		{"approval denied", deleteReply{403, `{"error":"approval_denied","message":"A person denied this action."}`}, 6, "approval_denied"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := (&deleteStub{replies: []deleteReply{tc.reply}}).start(t)
+
+			res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--org", "acme", "--json")
+
+			assertRefusal(t, res, tc.exit, tc.code)
+		})
+	}
+}
+
+func TestSuitesDeleteWithoutYesIsAUsageErrorBeforeAnyRequest(t *testing.T) {
+	stub := &deleteStub{replies: []deleteReply{deleteDone}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", "old-minitest", "--org", "acme", "--json")
+
+	assertRefusal(t, res, 5, "usage_error")
+	if n := stub.requestCount(); n != 0 {
+		t.Errorf("made %d requests, want none", n)
+	}
+}
+
+func TestSuitesDeleteDryRunNeedsNoYesAndAGatedOneDoesNotPoll(t *testing.T) {
+	gatedDry := deleteReply{200, `{"result":"pending_approval","dry_run":true}`}
+	stub := &deleteStub{replies: []deleteReply{gatedDry}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--dry-run", "--wait", "--org", "acme", "--json")
+
+	if res.exit != 7 || !strings.Contains(res.stdout, `"dry_run":true`) || strings.Contains(res.stdout, `"approval"`) || len(stub.polls) != 0 || stub.writes[0].path != "/api/v1/suites/"+archivedSuiteID+"?dry_run=true" {
+		t.Errorf("exit %d stdout %q polls %v writes %+v, want exit 7, dry_run true, no approval, zero polls", res.exit, res.stdout, stub.polls, stub.writes)
+	}
+}
+
+func TestSuitesDeleteWaitByAUserTokenReportsDeletedThenDoneWithoutPolling(t *testing.T) {
+	stub := &deleteStub{replies: []deleteReply{deleteDone}}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--wait", "--org", "acme", "--json")
+
+	want := `{"v":1,"suite":` + archivedSuite + `,"result":"deleted","dry_run":false}` + "\n" +
+		`{"v":1,"event":"done","result":"deleted","suite":` + archivedSuite + `}` + "\n"
+	if res.exit != 0 || res.stdout != want || len(stub.polls) != 0 || len(stub.writes) != 1 {
+		t.Errorf("exit %d stdout %q polls %v writes %d, want exit 0, %q, no polls and one write", res.exit, res.stdout, stub.polls, len(stub.writes), want)
+	}
+}
+
+func TestSuitesDeleteDeclaresItsGatedWriteContractInHelp(t *testing.T) {
+	_, stdout, _ := execute("help", "--json")
+	var doc struct {
+		Help struct {
+			Commands []struct {
+				Path        string   `json:"path"`
+				ExitCodes   []int    `json:"exit_codes"`
+				Events      []string `json:"events"`
+				WaitDefault string   `json:"wait_default"`
+				Mutates     bool     `json:"mutates"`
+			} `json:"commands"`
+		} `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range doc.Help.Commands {
+		if c.Path != "suites delete" {
+			continue
+		}
+		if !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6, 7, 8}) || !slices.Equal(c.Events, []string{"waiting", "done"}) || c.WaitDefault != "10m" || !c.Mutates {
+			t.Errorf("suites delete = %+v, want exit codes 0,3,4,5,6,7,8, events waiting,done, wait_default 10m and mutates", c)
+		}
+		return
+	}
+	t.Error("help --json lists no suites delete")
 }
