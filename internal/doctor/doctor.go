@@ -74,6 +74,8 @@ type state struct {
 	me      *api.Me
 	meErr   error
 	orgSlug string
+
+	advertised advertised
 }
 
 type step struct {
@@ -124,9 +126,12 @@ func Run(opts Options) *Report {
 	for _, name := range laterChecks {
 		report.Checks = append(report.Checks, Check{Name: name, Status: Skip, Message: "added in a later release"})
 	}
-	if by := blockedBy["server"]; by != "" {
+	switch by := blockedBy["server"]; {
+	case expired:
+		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because the run's timeout expired"})
+	case by != "":
 		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because " + by + " failed"})
-	} else {
+	default:
 		report.Checks = append(report.Checks, s.checkCLIVersion())
 	}
 	report.Status = summarize(report.Checks)
@@ -296,6 +301,7 @@ func (s *state) checkServer() Check {
 	}
 	s.secret = token
 	s.client = api.New(s.host, token).WithContext(s.ctx)
+	s.client.HTTP.Transport = recordingTransport{base: s.client.HTTP.Transport, seen: &s.advertised}
 	s.client.HTTP.Timeout = httpTimeout
 
 	began := time.Now()
@@ -395,7 +401,7 @@ func (s *state) checkSuite() Check {
 }
 
 func (s *state) checkCLIVersion() Check {
-	info := update.Status(update.Version, "", update.LoadState())
+	info := update.Status(update.Version, "", s.advertised.state())
 	if info.LatestVersion == "" && info.MinVersion == "" {
 		return Check{Name: "cli_version", Status: Skip, Message: "no version information: a dev build, or the server advertised none"}
 	}

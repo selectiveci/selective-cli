@@ -150,9 +150,8 @@ func TestTheVersionCheckNeverFailsWhateverTheServerAdvertises(t *testing.T) {
 		for _, latest := range advertised {
 			for _, minimum := range advertised {
 				asVersion(t, version)
-				isolate(t, token)
-				update.RecordServerHeaders(http.Header{update.LatestHeader: {latest}, update.MinHeader: {minimum}})
 				s := &state{}
+				s.advertised.record(http.Header{update.LatestHeader: {latest}, update.MinHeader: {minimum}})
 
 				got := s.checkCLIVersion()
 
@@ -161,5 +160,61 @@ func TestTheVersionCheckNeverFailsWhateverTheServerAdvertises(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestHeadersCachedByAnEarlierProcessOrHostNeverDecideTheVerdict(t *testing.T) {
+	asVersion(t, "1.0.0")
+	isolate(t, token)
+	update.RecordServerHeaders(http.Header{update.LatestHeader: {"5.0.0"}, update.MinHeader: {"4.0.0"}})
+	if st := update.LoadState(); st.ServerMinVersion != "4.0.0" {
+		t.Fatalf("stale cache not seeded: %+v", st)
+	}
+
+	report := Run(Options{Hostname: serve(t, healthy()), Timeout: time.Minute, Repo: inRepo})
+
+	got := check(t, report, "cli_version")
+	if got.Status != Skip || got.Detail != nil || got.Fix != "" {
+		t.Errorf("cli_version = %+v, want a skip that ignores the cached server values", got)
+	}
+}
+
+func TestThisRunsHeadersWinOverStaleCachedOnes(t *testing.T) {
+	asVersion(t, "1.0.0")
+	isolate(t, token)
+	update.RecordServerHeaders(http.Header{update.LatestHeader: {"5.0.0"}, update.MinHeader: {"4.0.0"}})
+
+	report := Run(Options{Hostname: serve(t, advertising("2.0.0", "", healthy())), Timeout: time.Minute, Repo: inRepo})
+
+	got := check(t, report, "cli_version")
+	if got.Status != Warn || got.Detail["latest_version"] != "2.0.0" {
+		t.Errorf("cli_version = %+v, want a warn naming this run's 2.0.0", got)
+	}
+	if _, stale := got.Detail["min_version"]; stale || got.Detail["below_minimum"] != nil {
+		t.Errorf("cli_version detail %+v carries the cached minimum", got.Detail)
+	}
+}
+
+func TestTheVersionCheckDoesNotRunOnceALaterStepHasUsedUpTheTimeout(t *testing.T) {
+	asVersion(t, "1.0.0")
+	release := make(chan struct{})
+	routes := advertising("2.0.0", "", healthy())
+	hang := func(w http.ResponseWriter, r *http.Request) { <-release }
+	routes["/api/v1/orgs"] = hang
+	host := serve(t, routes)
+	t.Cleanup(func() { close(release) })
+
+	began := time.Now()
+	report := run(t, host, Options{Timeout: 300 * time.Millisecond})
+	elapsed := time.Since(began)
+
+	if got, want := shape(report), "config=ok server=ok auth=ok org=fail suite=skip socket=skip runner=skip cli_version=skip"; got != want {
+		t.Fatalf("checks = %s, want %s", got, want)
+	}
+	if got := check(t, report, "cli_version"); got.Message != "skipped because the run's timeout expired" {
+		t.Errorf("cli_version = %+v", got)
+	}
+	if elapsed > 300*time.Millisecond+settleGrace+time.Second {
+		t.Errorf("took %s with a 300ms timeout", elapsed)
 	}
 }
