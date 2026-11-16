@@ -79,22 +79,26 @@ func suiteIDForArchive(client *api.Client, org, want string, archive bool) (stri
 	if err != nil {
 		return "", err
 	}
-	var found *api.ListedSuite
-	for i, s := range suites {
+	var wanted, other []string
+	for _, s := range suites {
 		if !strings.EqualFold(strings.TrimSpace(s.Name), strings.TrimSpace(want)) {
 			continue
 		}
 		if (s.ArchivedAt == nil) == archive {
-			return s.ID, nil
-		}
-		if found == nil {
-			found = &suites[i]
+			wanted = append(wanted, s.ID)
+		} else {
+			other = append(other, s.ID)
 		}
 	}
-	if found == nil {
-		return "", contract.Errorf(contract.SuiteNotFound, "no suite %q in %s; see: sel suites --org %s", want, org, org)
+	switch {
+	case len(wanted) == 1:
+		return wanted[0], nil
+	case len(wanted) > 1:
+		return "", contract.Errorf(contract.UsageError, "%d suites in %s are named %q (%s); pass one of the ids", len(wanted), org, want, strings.Join(wanted, ", "))
+	case len(other) > 0:
+		return other[0], nil
 	}
-	return found.ID, nil
+	return "", contract.Errorf(contract.SuiteNotFound, "no suite %q in %s; see: sel suites --org %s", want, org, org)
 }
 
 func archivedSentence(change *api.SuiteChange, archive bool) string {
@@ -159,12 +163,17 @@ deletes the suite and ends with a done line; --timeout bounds the whole run
 }
 
 func suitesDelete(ctx context.Context, env *setup.Env, gate *approvals.Gate, org, want string, dryRun bool) error {
-	id, err := suiteIDForArchive(env.Client, org, want, false)
-	if err != nil {
-		return err
-	}
+	var id string
 	send := func(ctx context.Context) (*approvals.Outcome, error) {
-		change, err := env.Client.WithContext(ctx).DeleteSuite(org, id, dryRun)
+		client := env.Client.WithContext(ctx)
+		if id == "" {
+			resolved, err := suiteIDForArchive(client, org, want, false)
+			if err != nil {
+				return nil, err
+			}
+			id = resolved
+		}
+		change, err := client.DeleteSuite(org, id, dryRun)
 		if err != nil {
 			return nil, err
 		}

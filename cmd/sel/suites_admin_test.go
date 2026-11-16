@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/setup"
@@ -260,6 +261,8 @@ type deleteStub struct {
 	lookups   int
 	replies   []deleteReply
 	approvals []string
+	listing   string
+	stall     time.Duration
 }
 
 type deleteReply struct {
@@ -270,13 +273,24 @@ type deleteReply struct {
 func (s *deleteStub) start(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.stall > 0 {
+			select {
+			case <-time.After(s.stall):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
 			s.lookups++
-			_, _ = w.Write([]byte(`{"suites":[` + activeSuite + `,` + archivedSuite + `]}`))
+			listing := activeSuite + `,` + archivedSuite
+			if s.listing != "" {
+				listing = s.listing
+			}
+			_, _ = w.Write([]byte(`{"suites":[` + listing + `]}`))
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/approvals/"):
 			s.polls = append(s.polls, r.URL.Path)
 			_, _ = w.Write([]byte(`{"approval":` + s.approvals[min(len(s.polls)-1, len(s.approvals)-1)] + `}`))
@@ -439,4 +453,45 @@ func TestSuitesDeleteDeclaresItsGatedWriteContractInHelp(t *testing.T) {
 		return
 	}
 	t.Error("help --json lists no suites delete")
+}
+
+func TestSuitesDeleteTimeoutBoundsTheNameLookupAndExitsEightWithoutDeleting(t *testing.T) {
+	stub := &deleteStub{replies: []deleteReply{deleteDone}, stall: 5 * time.Second}
+	srv := stub.start(t)
+
+	began := time.Now()
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", "old-minitest", "--yes", "--timeout=1s", "--org", "acme", "--json")
+
+	assertRefusal(t, res, 8, "timeout")
+	if took := time.Since(began); took > 3*time.Second || len(stub.writes) != 0 {
+		t.Errorf("took %s with %d writes, want the lookup cut off within 3s and no DELETE", took, len(stub.writes))
+	}
+}
+
+func TestSuitesDeleteAndRestoreRefuseANameSharedBySeveralSuitesInTheWantedState(t *testing.T) {
+	const twinID = "33333333-3333-4333-8333-333333333333"
+	twin := `{"id":"` + twinID + `","name":"old-minitest","type":"minitest","repo":"acme/web","archived_at":"2026-11-01T09:00:00Z","last_run_at":null}`
+	listing := archivedSuite + "," + twin
+	t.Run("delete", func(t *testing.T) {
+		stub := &deleteStub{replies: []deleteReply{deleteDone}, listing: listing}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", "old-minitest", "--yes", "--org", "acme", "--json")
+
+		assertRefusal(t, res, 5, "usage_error")
+		if !strings.Contains(res.stdout, archivedSuiteID) || !strings.Contains(res.stdout, twinID) || len(stub.writes) != 0 {
+			t.Errorf("stdout %q writes %d, want both ids named and no DELETE", res.stdout, len(stub.writes))
+		}
+	})
+	t.Run("restore", func(t *testing.T) {
+		stub := &archiveStub{status: 200, body: archiveOK(archivedSuite, "updated", false), listing: listing}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "restore", "old-minitest", "--org", "acme", "--json")
+
+		assertRefusal(t, res, 5, "usage_error")
+		if !strings.Contains(res.stdout, archivedSuiteID) || !strings.Contains(res.stdout, twinID) || len(stub.requests) != 1 {
+			t.Errorf("stdout %q requests %v, want both ids named and only the lookup", res.stdout, stub.requests)
+		}
+	})
 }
