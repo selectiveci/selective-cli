@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/wait"
 	"nhooyr.io/websocket"
 )
@@ -127,6 +128,59 @@ func TestStreamExitCodes(t *testing.T) {
 			}
 			if err != nil && !strings.Contains(err.Error(), "lost the connection") {
 				t.Errorf("err = %q, want a lost-connection error", err)
+			}
+		})
+	}
+}
+
+func closingTailServer(t *testing.T, code websocket.StatusCode, reason string) (*httptest.Server, *int32) {
+	t.Helper()
+	var connects int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&connects, 1)
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		if err := c.Write(context.Background(), websocket.MessageText, []byte(buildStart)); err != nil {
+			t.Errorf("write: %v", err)
+			return
+		}
+		_ = c.Close(code, reason)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &connects
+}
+
+func TestStreamMapsATokenClosedStreamToUnauthorizedWithoutReconnecting(t *testing.T) {
+	cases := []struct {
+		name       string
+		code       websocket.StatusCode
+		reason     string
+		wantCode   contract.Code
+		wantInText string
+	}{
+		{"token expired", 4401, "token_expired", contract.Unauthorized, "the token expired"},
+		{"token revoked", 4401, "token_revoked", contract.Unauthorized, "the token was revoked"},
+		{"unknown reason", 4401, "other", contract.Unauthorized, "the token is invalid or expired"},
+		{"normal close with no summary", websocket.StatusNormalClosure, "", contract.NetworkError, "lost the connection"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, connects := closingTailServer(t, tc.code, tc.reason)
+
+			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+
+			if got := atomic.LoadInt32(connects); got != 1 {
+				t.Fatalf("server saw %d connections, want 1", got)
+			}
+			assertRefused(t, err, tc.wantCode, 4)
+			if code != 4 {
+				t.Errorf("exit code = %d, want 4", code)
+			}
+			if !strings.Contains(err.Error(), tc.wantInText) {
+				t.Errorf("err = %q, want it to say %q", err, tc.wantInText)
 			}
 		})
 	}
