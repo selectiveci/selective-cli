@@ -82,17 +82,19 @@ func TestMCPToolListFollowsTheCommandTree(t *testing.T) {
 	if toolNamed(tools, "test") == nil {
 		t.Error("test is not listed")
 	}
-	for _, name := range []string{"auth_login", "auth_signup", "help", "mcp", "__transport"} {
+	for _, name := range []string{"auth", "auth_login", "auth_signup", "auth_logout", "help", "mcp", "__transport"} {
 		if toolNamed(tools, name) != nil {
 			t.Errorf("%s is listed", name)
 		}
 	}
-	tokens := toolNamed(tools, "tokens_create")
-	if tokens == nil {
-		t.Fatal("tokens_create is not listed")
-	}
-	if _, ok := inputProperties(tokens)["stdout"]; ok {
-		t.Error("tokens_create exposes its secret flag --stdout")
+	for _, name := range []string{"tokens_create", "suites_key"} {
+		tool := toolNamed(tools, name)
+		if tool == nil {
+			t.Fatalf("%s is not listed", name)
+		}
+		if _, ok := inputProperties(tool)["stdout"]; ok {
+			t.Errorf("%s exposes its secret flag --stdout", name)
+		}
 	}
 	for _, tool := range tools {
 		for _, name := range []string{"json", "hostname"} {
