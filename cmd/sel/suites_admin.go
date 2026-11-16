@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/approvals"
@@ -150,6 +151,7 @@ deletes the suite and ends with a done line; --timeout bounds the whole run
 		Args:        cobra.ExactArgs(1),
 		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,7,8", "mutates": "true", "destructive": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			gate.Started = time.Now()
 			if !yes && !dryRun {
 				return contract.Errorf(contract.UsageError, "deleting a suite needs --yes (or --dry-run to preview)")
 			}
