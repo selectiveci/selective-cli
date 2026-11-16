@@ -63,11 +63,18 @@ func tool(c schema.Command) *mcp.Tool {
 			required = append(required, name)
 		}
 	}
+	properties[timeoutProperty] = map[string]any{
+		"type":        "integer",
+		"description": "Seconds before the command is killed",
+		"minimum":     minTimeoutSeconds,
+		"maximum":     maxTimeoutSeconds,
+		"default":     defaultTimeoutSeconds,
+	}
 	slices.Sort(required)
 	return &mcp.Tool{
 		Name:        toolName(c.Path),
 		Description: c.Short,
-		InputSchema: map[string]any{"type": "object", "properties": properties, "required": required},
+		InputSchema: map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false},
 		Annotations: hints(c),
 	}
 }
