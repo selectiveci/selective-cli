@@ -18,10 +18,14 @@ import (
 	"github.com/selectiveci/selective-cli/internal/setup"
 )
 
-const (
+var (
 	httpTimeout = 10 * time.Second
-	loginFix    = "sel auth login --setup"
-	suiteFix    = "sel suites create --name <name> --framework <type>"
+	settleGrace = 250 * time.Millisecond
+)
+
+const (
+	loginFix = "sel auth login --setup"
+	suiteFix = "sel suites create --name <name> --framework <type>"
 )
 
 var laterChecks = []string{"socket", "runner", "cli_version"}
@@ -58,6 +62,7 @@ type Options struct {
 }
 
 type state struct {
+	ctx     context.Context
 	opts    Options
 	cfg     *config.Config
 	host    string
@@ -91,7 +96,7 @@ func Run(opts Options) *Report {
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
 
-	s := &state{opts: opts}
+	s := &state{ctx: ctx, opts: opts}
 	blockedBy := map[string]string{}
 	expired := false
 	report := &Report{Status: "pass"}
@@ -104,7 +109,7 @@ func Run(opts Options) *Report {
 		case expired:
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because the run's timeout expired"}
 		case ctx.Err() != nil:
-			c = timedOut(st.name, opts.Timeout)
+			c = timedOut(st.name, opts.Timeout, Check{})
 			blockedBy[st.name], expired = st.name, true
 		default:
 			c = runWithin(ctx, s, st)
@@ -130,14 +135,45 @@ func runWithin(ctx context.Context, s *state, st step) Check {
 	}()
 	select {
 	case c := <-done:
+		if c.Status == Fail && ctx.Err() != nil {
+			return timedOut(st.name, s.opts.Timeout, c)
+		}
 		return c
 	case <-ctx.Done():
-		return timedOut(st.name, s.opts.Timeout)
+		select {
+		case c := <-done:
+			return timedOut(st.name, s.opts.Timeout, c)
+		case <-time.After(settleGrace):
+			return timedOut(st.name, s.opts.Timeout, Check{})
+		}
 	}
 }
 
-func timedOut(name string, limit time.Duration) Check {
-	return fail(name, contract.Timeout, fmt.Sprintf("did not finish within %s", limit), "")
+func timedOut(name string, limit time.Duration, attempted Check) Check {
+	c := fail(name, contract.Timeout, fmt.Sprintf("did not finish within %s", limit), "")
+	if n := attempted.attempts(); n > 1 {
+		c.Detail = map[string]any{"attempts": n}
+	}
+	return c
+}
+
+func (c Check) attempts() int {
+	switch n := c.Detail["attempts"].(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+func attemptsOf(err error) int {
+	var fielded contract.Fielded
+	if !errors.As(err, &fielded) {
+		return 0
+	}
+	n, _ := fielded.ErrorFields()["attempts"].(int)
+	return n
 }
 
 func (c Check) redact(secret string) Check {
@@ -182,7 +218,11 @@ func summarize(checks []Check) string {
 func (r *Report) Err() error {
 	for _, c := range r.Checks {
 		if c.Status == Fail {
-			return &contract.Error{Code: c.Code, Message: c.Message, Fields: map[string]any{"doctor": r}}
+			fields := map[string]any{"doctor": r}
+			if n := c.attempts(); n > 1 {
+				fields["attempts"] = n
+			}
+			return &contract.Error{Code: c.Code, Message: c.Message, Fields: fields}
 		}
 	}
 	return nil
@@ -249,7 +289,7 @@ func (s *state) checkServer() Check {
 		token = s.cred.Token
 	}
 	s.secret = token
-	s.client = api.New(s.host, token)
+	s.client = api.New(s.host, token).WithContext(s.ctx)
 	s.client.HTTP.Timeout = httpTimeout
 
 	began := time.Now()
@@ -258,6 +298,9 @@ func (s *state) checkServer() Check {
 
 	if code, down := unreachable(s.meErr); down {
 		c := fail("server", code, s.meErr.Error(), "")
+		if n := attemptsOf(s.meErr); n > 1 {
+			c.Detail = map[string]any{"attempts": n}
+		}
 		c.MS = &ms
 		return c
 	}
