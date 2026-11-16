@@ -49,6 +49,9 @@ func (w Watch) Run(ctx context.Context, iterate Iteration) (Summary, error) {
 	}
 	var sum Summary
 	for n := 1; ; n++ {
+		if ctx.Err() != nil {
+			return sum, ErrInterrupted
+		}
 		if sum, err = iterate(ctx, n); err != nil {
 			return sum, err
 		}
@@ -63,7 +66,10 @@ func (w Watch) Run(ctx context.Context, iterate Iteration) (Summary, error) {
 			if pause(cmp.Or(w.Debounce, WatchDebounce)) != nil {
 				return sum, ErrInterrupted
 			}
-			next := probe(current)
+			next, err := fingerprint(w.Dir)
+			if err != nil {
+				continue
+			}
 			settled, current = next == current, next
 		}
 		seen = current
@@ -88,7 +94,7 @@ func treeFingerprint(dir string) (string, error) {
 	}
 	digest := sha256.New()
 	for _, path := range slices.Sorted(maps.Keys(snapshot.Files)) {
-		fmt.Fprintf(digest, "%s\x00%s\n", path, snapshot.Files[path])
+		fmt.Fprintf(digest, "%s\x00%s\x00%s\n", path, snapshot.Files[path], snapshot.modes[path])
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
