@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"strings"
 
@@ -164,12 +163,8 @@ func suitesDelete(ctx context.Context, env *setup.Env, gate *approvals.Gate, org
 	if err != nil {
 		return err
 	}
-	key, err := newIdempotencyKey()
-	if err != nil {
-		return err
-	}
 	send := func(ctx context.Context) (*approvals.Outcome, error) {
-		change, err := env.Client.WithContext(ctx).DeleteSuite(id, key, dryRun)
+		change, err := env.Client.WithContext(ctx).DeleteSuite(id, dryRun)
 		if err != nil {
 			return nil, err
 		}
@@ -183,12 +178,4 @@ func deletedSentence(name string, outcome *approvals.Outcome) string {
 		return fmt.Sprintf("Dry run: would delete suite %q.", name)
 	}
 	return fmt.Sprintf("Deleted suite %q.", name)
-}
-
-func newIdempotencyKey() (string, error) {
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", raw), nil
 }

@@ -317,7 +317,7 @@ func TestSuitesDeleteWithoutWaitExitsSevenWithThePendingObjectAfterOneCall(t *te
 	}
 }
 
-func TestSuitesDeleteWaitResendsTheIdenticalRequestOnceApproved(t *testing.T) {
+func TestSuitesDeleteWaitResendsTheIdenticalKeylessRequestOnceApproved(t *testing.T) {
 	approved := approvalFixture{status: "approved", expiresAt: "2026-11-15T10:00:00.123456Z", decidedAt: "2026-11-14T10:05:00Z"}
 	stub := &deleteStub{replies: []deleteReply{deletePending, deleteDone}, approvals: []string{pendingApproval.json(), approved.json()}}
 	srv := stub.start(t)
@@ -332,8 +332,10 @@ func TestSuitesDeleteWaitResendsTheIdenticalRequestOnceApproved(t *testing.T) {
 	if len(stub.writes) != 2 || !reflect.DeepEqual(stub.writes[0], stub.writes[1]) {
 		t.Fatalf("writes = %+v, want two identical requests", stub.writes)
 	}
-	if key := stub.writes[0].header.Get("Idempotency-Key"); len(key) != 32 || stub.writes[0].method != "DELETE" {
-		t.Errorf("first write = %+v, want a DELETE with a 32-character Idempotency-Key", stub.writes[0])
+	for _, w := range stub.writes {
+		if _, sent := w.header["Idempotency-Key"]; sent || w.method != "DELETE" {
+			t.Errorf("write = %+v, want a DELETE with no Idempotency-Key", w)
+		}
 	}
 }
 

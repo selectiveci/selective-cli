@@ -56,11 +56,10 @@ func (c *Client) SetSuiteArchived(org, id string, archived, dryRun bool) (*Suite
 	return wire.change(), nil
 }
 
-func (c *Client) DeleteSuite(id, idempotencyKey string, dryRun bool) (*SuiteChange, error) {
+func (c *Client) DeleteSuite(id string, dryRun bool) (*SuiteChange, error) {
 	var wire suiteChangeWire
 	path := withQuery("/api/v1/suites/"+url.PathEscape(id), dryRunQuery(dryRun))
-	header := http.Header{"Idempotency-Key": {idempotencyKey}}
-	if err := c.doWith(header, http.MethodDelete, path, nil, http.StatusOK, &wire); err != nil {
+	if err := c.do(http.MethodDelete, path, nil, http.StatusOK, &wire); err != nil {
 		return nil, err
 	}
 	return wire.change(), nil
