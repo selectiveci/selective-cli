@@ -96,7 +96,6 @@ func TestToolsLeaveOutWhatMustNotBeExposed(t *testing.T) {
 }
 
 func TestHintsComeOnlyFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
-	no, yes := false, true
 	cases := map[string]struct {
 		command schema.Command
 		want    mcp.ToolAnnotations
@@ -104,8 +103,8 @@ func TestHintsComeOnlyFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
 		"read":                    {schema.Command{}, mcp.ToolAnnotations{ReadOnlyHint: true}},
 		"read with exit codes":    {schema.Command{ExitCodes: []int{0}}, mcp.ToolAnnotations{ReadOnlyHint: true}},
 		"local exec":              {schema.Command{LocalExec: true}, mcp.ToolAnnotations{}},
-		"mutates":                 {schema.Command{Mutates: true}, mcp.ToolAnnotations{DestructiveHint: &no, IdempotentHint: true}},
-		"mutates and destructive": {schema.Command{Mutates: true, Destructive: true}, mcp.ToolAnnotations{DestructiveHint: &yes, IdempotentHint: true}},
+		"mutates":                 {schema.Command{Mutates: true}, mcp.ToolAnnotations{IdempotentHint: true}},
+		"mutates and destructive": {schema.Command{Mutates: true, Destructive: true}, mcp.ToolAnnotations{IdempotentHint: true}},
 	}
 	for name, c := range cases {
 		got := hints(c.command)

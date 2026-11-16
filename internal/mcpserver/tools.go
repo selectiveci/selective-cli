@@ -98,6 +98,5 @@ func hints(c schema.Command) *mcp.ToolAnnotations {
 	if !c.Mutates && !c.Destructive {
 		return &mcp.ToolAnnotations{ReadOnlyHint: true}
 	}
-	destructive := c.Destructive
-	return &mcp.ToolAnnotations{DestructiveHint: &destructive, IdempotentHint: c.Mutates}
+	return &mcp.ToolAnnotations{IdempotentHint: c.Mutates}
 }

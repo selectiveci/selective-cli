@@ -124,28 +124,31 @@ func TestMCPToolListHasEachRunnableCommandNotSkippedExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestMCPToolHintsComeFromTheMutatesAndDestructiveAnnotations(t *testing.T) {
+func TestMCPToolsNeverSendDestructiveHintAndMarkReadOnlyOnlyReads(t *testing.T) {
 	commands := map[string]schema.Command{}
 	for _, c := range helpCommands(t) {
 		commands[strings.ReplaceAll(c.Path, " ", "_")] = c
 	}
 
 	for _, tool := range listedTools(t, newRoot()) {
-		c, a := commands[tool.Name], tool.Annotations
-		if a == nil {
-			t.Errorf("%s has no annotations", tool.Name)
-			continue
+		c := commands[tool.Name]
+		raw, err := json.Marshal(tool.Annotations)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			t.Fatal(err)
 		}
 		readOnly := !c.Mutates && !c.Destructive && !c.LocalExec
-		switch {
-		case a.ReadOnlyHint != readOnly:
-			t.Errorf("%s readOnlyHint = %v, want %v", tool.Name, a.ReadOnlyHint, readOnly)
-		case c.LocalExec && a.DestructiveHint != nil && !*a.DestructiveHint:
-			t.Errorf("%s destructiveHint = false, want the default", tool.Name)
-		case !readOnly && !c.LocalExec && (a.DestructiveHint == nil || *a.DestructiveHint != c.Destructive):
-			t.Errorf("%s destructiveHint = %v, want %v", tool.Name, a.DestructiveHint, c.Destructive)
-		case !readOnly && !c.LocalExec && a.IdempotentHint != c.Mutates:
-			t.Errorf("%s idempotentHint = %v, want %v", tool.Name, a.IdempotentHint, c.Mutates)
+		if _, sent := wire["destructiveHint"]; sent {
+			t.Errorf("%s sends destructiveHint: %s", tool.Name, raw)
+		}
+		if (wire["readOnlyHint"] == true) != readOnly {
+			t.Errorf("%s readOnlyHint on the wire = %v, want %v: %s", tool.Name, wire["readOnlyHint"] == true, readOnly, raw)
+		}
+		if (wire["idempotentHint"] == true) != (c.Mutates && !c.LocalExec) {
+			t.Errorf("%s idempotentHint on the wire = %v, want %v: %s", tool.Name, wire["idempotentHint"] == true, c.Mutates && !c.LocalExec, raw)
 		}
 	}
 }
@@ -156,12 +159,10 @@ func goldenLine(tool *mcp.Tool) string {
 		return tool.Name + " none"
 	case a.ReadOnlyHint:
 		return tool.Name + " readOnly"
-	case a.DestructiveHint == nil:
-		return tool.Name + " confirm"
-	case *a.DestructiveHint:
-		return tool.Name + " destructive idempotent"
+	case a.IdempotentHint:
+		return tool.Name + " idempotent"
 	}
-	return tool.Name + " additive idempotent"
+	return tool.Name + " confirm"
 }
 
 func TestMCPToolListMatchesTheGoldenAllowlist(t *testing.T) {

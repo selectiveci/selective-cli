@@ -11,14 +11,14 @@ flakes_show readOnly
 orgs readOnly
 repos readOnly
 suites readOnly
-suites_configure additive idempotent
-suites_create additive idempotent
-suites_key additive idempotent
+suites_configure idempotent
+suites_create idempotent
+suites_key idempotent
 tail readOnly
 test confirm
-tokens_create additive idempotent
+tokens_create idempotent
 tokens_list readOnly
-tokens_revoke destructive idempotent
+tokens_revoke idempotent
 tokens_show readOnly
 trends readOnly
 version readOnly
