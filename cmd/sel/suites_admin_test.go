@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -132,15 +133,15 @@ func TestSuitesArchiveByNamePicksTheActiveTwinWhenTheArchivedOneIsListedFirst(t 
 	}
 }
 
-func TestSuitesArchiveByIdSkipsTheLookup(t *testing.T) {
+func TestSuitesArchiveByIdListsOnceThenSendsThatId(t *testing.T) {
 	stub := &archiveStub{status: 200, body: archiveOK(archivedSuite, "unchanged", false)}
 	srv := stub.start(t)
 
 	res := runBinary(t, t.TempDir(), srv.URL, "suites", "archive", archivedSuiteID, "--org", "acme", "--json")
 
 	want := `{"v":1,"suite":` + archivedSuite + `,"result":"unchanged","dry_run":false}` + "\n"
-	if res.exit != 0 || res.stdout != want || len(stub.requests) != 1 || !strings.HasPrefix(stub.requests[0], "PUT ") {
-		t.Errorf("exit %d stdout %q requests %v, want exit 0, %q and one PUT", res.exit, res.stdout, stub.requests, want)
+	if res.exit != 0 || res.stdout != want || len(stub.requests) != 2 || !strings.HasPrefix(stub.requests[1], "PUT ") || !strings.Contains(stub.requests[1], archivedSuiteID) {
+		t.Errorf("exit %d stdout %q requests %v, want exit 0, %q, the lookup and one PUT of the id", res.exit, res.stdout, stub.requests, want)
 	}
 }
 
@@ -151,7 +152,7 @@ func TestSuitesArchiveDryRunSendsTheFlagAndReportsDryRunTrue(t *testing.T) {
 	res := runBinary(t, t.TempDir(), srv.URL, "suites", "archive", activeSuiteID, "--dry-run", "--org", "acme", "--json")
 
 	want := `{"v":1,"suite":` + activeSuite + `,"result":"updated","dry_run":true}` + "\n"
-	if res.exit != 0 || res.stdout != want || stub.requests[0] != "PUT /api/v1/orgs/acme/suites/"+activeSuiteID+"/archive?dry_run=true" {
+	if res.exit != 0 || res.stdout != want || stub.requests[len(stub.requests)-1] != "PUT /api/v1/orgs/acme/suites/"+activeSuiteID+"/archive?dry_run=true" {
 		t.Errorf("exit %d stdout %q requests %v, want exit 0, %q and dry_run=true on the query", res.exit, res.stdout, stub.requests, want)
 	}
 }
@@ -262,6 +263,7 @@ type deleteStub struct {
 	replies   []deleteReply
 	approvals []string
 	listing   string
+	route     string
 	stall     time.Duration
 }
 
@@ -284,6 +286,8 @@ func (s *deleteStub) start(t *testing.T) *httptest.Server {
 		defer s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs":
+			_, _ = w.Write([]byte(`{"organizations":[{"slug":"acme","name":"Acme","role":"owner","github_account":"acme"}]}`))
 		case r.Method == "GET" && r.URL.Path == "/api/v1/orgs/acme/suites":
 			s.lookups++
 			listing := activeSuite + `,` + archivedSuite
@@ -294,7 +298,7 @@ func (s *deleteStub) start(t *testing.T) *httptest.Server {
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/approvals/"):
 			s.polls = append(s.polls, r.URL.Path)
 			_, _ = w.Write([]byte(`{"approval":` + s.approvals[min(len(s.polls)-1, len(s.approvals)-1)] + `}`))
-		case r.Method == "DELETE" && r.URL.Path == deleteRoute:
+		case r.Method == "DELETE" && r.URL.Path == cmp.Or(s.route, deleteRoute):
 			body, _ := io.ReadAll(r.Body)
 			s.writes = append(s.writes, deleteCall{r.Method, r.URL.RequestURI(), string(body), r.Header.Clone()})
 			reply := s.replies[min(len(s.writes)-1, len(s.replies)-1)]
@@ -349,9 +353,12 @@ func TestSuitesDeleteWaitResendsTheIdenticalKeylessRequestOnceApproved(t *testin
 		t.Fatalf("writes = %+v, want two identical requests", stub.writes)
 	}
 	for _, w := range stub.writes {
-		if _, sent := w.header["Idempotency-Key"]; sent || w.method != "DELETE" || w.path != deleteRoute {
-			t.Errorf("write = %+v, want a DELETE of %s with no Idempotency-Key", w, deleteRoute)
+		if _, sent := w.header["Idempotency-Key"]; sent || w.method != "DELETE" || w.path != deleteRoute || w.body != "" {
+			t.Errorf("write = %+v, want an empty-bodied DELETE of %s with no Idempotency-Key", w, deleteRoute)
 		}
+	}
+	if stub.lookups != 1 {
+		t.Errorf("suite list requests = %d, want 1 across pending, approval and re-send", stub.lookups)
 	}
 }
 
@@ -494,4 +501,59 @@ func TestSuitesDeleteAndRestoreRefuseANameSharedBySeveralSuitesInTheWantedState(
 			t.Errorf("stdout %q requests %v, want both ids named and only the lookup", res.stdout, stub.requests)
 		}
 	})
+}
+
+func TestSuitesDeleteTimeoutBoundsTheOrganizationLookupAndExitsEightWithoutDeleting(t *testing.T) {
+	t.Setenv("SELECTIVE_ORG", "")
+	stub := &deleteStub{replies: []deleteReply{deleteDone}, stall: 5 * time.Second}
+	srv := stub.start(t)
+
+	began := time.Now()
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", archivedSuiteID, "--yes", "--timeout=1s", "--json")
+
+	assertRefusal(t, res, 8, "timeout")
+	if took := time.Since(began); took > 3*time.Second || len(stub.writes) != 0 {
+		t.Errorf("took %s with %d writes, want the organization lookup cut off within 3s and no DELETE", took, len(stub.writes))
+	}
+}
+
+func TestSuitesDeleteAndRestoreResolveAUuidShapedNameBeforeTreatingItAsAnId(t *testing.T) {
+	const (
+		shapedName = "44444444-4444-4444-8444-444444444444"
+		shapedID   = "55555555-5555-4555-8555-555555555555"
+	)
+	shaped := `{"id":"` + shapedID + `","name":"` + shapedName + `","type":"rspec","repo":"acme/web","archived_at":"2026-11-01T09:00:00Z","last_run_at":null}`
+	t.Run("delete", func(t *testing.T) {
+		stub := &deleteStub{replies: []deleteReply{deleteDone}, listing: archivedSuite + "," + shaped, route: "/api/v1/orgs/acme/suites/" + shapedID}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", shapedName, "--yes", "--org", "acme", "--json")
+
+		if want := "/api/v1/orgs/acme/suites/" + shapedID; res.exit != 0 || len(stub.writes) != 1 || stub.writes[0].path != want {
+			t.Errorf("exit %d writes %+v, want one DELETE of %s", res.exit, stub.writes, want)
+		}
+	})
+	t.Run("restore", func(t *testing.T) {
+		stub := &archiveStub{status: 200, body: archiveOK(shaped, "updated", false), listing: archivedSuite + "," + shaped}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "restore", shapedName, "--org", "acme", "--json")
+
+		if want := "DELETE /api/v1/orgs/acme/suites/" + shapedID + "/archive"; res.exit != 0 || stub.requests[len(stub.requests)-1] != want {
+			t.Errorf("exit %d requests %v, want the last to be %q", res.exit, stub.requests, want)
+		}
+	})
+}
+
+func TestSuitesDeleteSendsAnUnlistedUuidAsTheIdAndLetsTheServerAnswer(t *testing.T) {
+	const unlisted = "66666666-6666-4666-8666-666666666666"
+	stub := &deleteStub{replies: []deleteReply{{404, `{"error":"suite_not_found","message":"No such suite in this organization."}`}}, route: "/api/v1/orgs/acme/suites/" + unlisted}
+	srv := stub.start(t)
+
+	res := runBinary(t, t.TempDir(), srv.URL, "suites", "delete", unlisted, "--yes", "--org", "acme", "--json")
+
+	assertRefusal(t, res, 3, "suite_not_found")
+	if len(stub.writes) != 1 || stub.writes[0].path != "/api/v1/orgs/acme/suites/"+unlisted {
+		t.Errorf("writes = %+v, want one DELETE of %s", stub.writes, unlisted)
+	}
 }

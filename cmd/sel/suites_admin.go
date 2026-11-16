@@ -72,12 +72,14 @@ func suitesSetArchived(env *setup.Env, org, want string, archive, dryRun bool) e
 }
 
 func suiteIDForArchive(client *api.Client, org, want string, archive bool) (string, error) {
-	if tokenID.MatchString(want) {
-		return want, nil
-	}
 	suites, err := client.SuitesIn(org, "all")
 	if err != nil {
 		return "", err
+	}
+	for _, s := range suites {
+		if s.ID == want {
+			return s.ID, nil
+		}
 	}
 	var wanted, other []string
 	for _, s := range suites {
@@ -97,6 +99,8 @@ func suiteIDForArchive(client *api.Client, org, want string, archive bool) (stri
 		return "", contract.Errorf(contract.UsageError, "%d suites in %s are named %q (%s); pass one of the ids", len(wanted), org, want, strings.Join(wanted, ", "))
 	case len(other) > 0:
 		return other[0], nil
+	case tokenID.MatchString(want):
+		return want, nil
 	}
 	return "", contract.Errorf(contract.SuiteNotFound, "no suite %q in %s; see: sel suites --org %s", want, org, org)
 }
@@ -146,13 +150,13 @@ deletes the suite and ends with a done line; --timeout bounds the whole run
 			if !yes && !dryRun {
 				return contract.Errorf(contract.UsageError, "deleting a suite needs --yes (or --dry-run to preview)")
 			}
-			env, org, err := f.env(true)
+			env, _, err := f.env(false)
 			if err != nil {
 				return err
 			}
 			env.Stdout, env.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
 			gate.Client, gate.Out, gate.Err, gate.JSON = env.Client, env.Stdout, env.Stderr, env.JSON
-			return suitesDelete(cmd.Context(), env, gate, org, args[0], dryRun)
+			return suitesDelete(cmd.Context(), env, gate, f.org, args[0], dryRun)
 		},
 	}
 	f.bind(cmd, true)
@@ -162,18 +166,21 @@ deletes the suite and ends with a done line; --timeout bounds the whole run
 	return cmd
 }
 
-func suitesDelete(ctx context.Context, env *setup.Env, gate *approvals.Gate, org, want string, dryRun bool) error {
-	var id string
+func suitesDelete(ctx context.Context, env *setup.Env, gate *approvals.Gate, orgFlag, want string, dryRun bool) error {
+	var org, id string
 	send := func(ctx context.Context) (*approvals.Outcome, error) {
-		client := env.Client.WithContext(ctx)
+		scoped := *env
+		scoped.Client = env.Client.WithContext(ctx)
 		if id == "" {
-			resolved, err := suiteIDForArchive(client, org, want, false)
-			if err != nil {
+			var err error
+			if org, err = scoped.ResolveOrg(orgFlag); err != nil {
 				return nil, err
 			}
-			id = resolved
+			if id, err = suiteIDForArchive(scoped.Client, org, want, false); err != nil {
+				return nil, err
+			}
 		}
-		change, err := client.DeleteSuite(org, id, dryRun)
+		change, err := scoped.Client.DeleteSuite(org, id, dryRun)
 		if err != nil {
 			return nil, err
 		}
