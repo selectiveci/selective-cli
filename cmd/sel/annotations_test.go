@@ -35,3 +35,33 @@ func TestHelpDeclaresExitCodesAndEventsForTheAuthOrgsAndReposCommands(t *testing
 		}
 	}
 }
+
+func commandDoc(t *testing.T, path ...string) (doc struct {
+	Command struct {
+		Mutates bool   `json:"mutates"`
+		MCP     string `json:"mcp"`
+	} `json:"command"`
+}) {
+	t.Helper()
+	_, stdout, _ := execute(append(append([]string{"help"}, path...), "--json")...)
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+func TestCommandsHiddenFromMCP(t *testing.T) {
+	for _, path := range [][]string{{"auth"}, {"auth", "logout"}} {
+		if got := commandDoc(t, path...).Command.MCP; got != "skip" {
+			t.Errorf("%v mcp = %q, want skip", path, got)
+		}
+	}
+}
+
+func TestSuitesWritesDeclareMutates(t *testing.T) {
+	for _, path := range [][]string{{"suites", "create"}, {"suites", "configure"}, {"suites", "key"}} {
+		if !commandDoc(t, path...).Command.Mutates {
+			t.Errorf("%v does not declare mutates", path)
+		}
+	}
+}
