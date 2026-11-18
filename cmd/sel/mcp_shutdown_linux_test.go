@@ -160,12 +160,8 @@ func (r *shutdownRig) signalAndWait(t *testing.T, sig syscall.Signal) syscall.Wa
 
 func assertGroupGone(t *testing.T, pgid int) {
 	t.Helper()
-	deadline := time.Now().Add(shutdownBound)
-	for len(groupParents(pgid)) > 0 && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
-	}
 	if left := groupParents(pgid); len(left) > 0 {
-		t.Errorf("process group %d still has %v within %s of the signal", pgid, left, shutdownBound)
+		t.Errorf("sel mcp is gone but process group %d still has %v", pgid, left)
 	}
 }
 

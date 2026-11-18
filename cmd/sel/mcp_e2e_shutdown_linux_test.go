@@ -73,10 +73,20 @@ func TestMCPStdioE2ESigtermDuringTheTestToolLeavesNeitherTheTestChildNorTheRunne
 	if err := syscall.Kill(mcpPid, syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	for end := time.Now().Add(x14Bound); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
-		if len(groupParents(testGroup))+len(groupParents(runnerGroup)) == 0 {
-			return
-		}
+	for end := time.Now().Add(x14Bound); processLive(mcpPid) && time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 	}
-	t.Errorf("within %s of SIGTERM, sel test group %d has %v and runner group %d has %v", x14Bound, testGroup, groupParents(testGroup), runnerGroup, groupParents(runnerGroup))
+	if processLive(mcpPid) {
+		t.Fatalf("sel mcp %d still running %s after SIGTERM", mcpPid, x14Bound)
+	}
+	if left := groupParents(testGroup); len(left) > 0 {
+		t.Errorf("sel mcp is gone but the sel test group %d still has %v", testGroup, left)
+	}
+	if left := groupParents(runnerGroup); len(left) > 0 {
+		t.Errorf("sel mcp is gone but the runner group %d still has %v", runnerGroup, left)
+	}
+}
+
+func processLive(pid int) bool {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	return err == nil && !strings.HasPrefix(string(stat[strings.LastIndexByte(string(stat), ')')+2:]), "Z")
 }
