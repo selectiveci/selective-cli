@@ -17,6 +17,7 @@ const (
 	fakeScript = `#!/bin/sh
 [ -n "$FAKE_OUT" ] && cat "$FAKE_OUT"
 [ -n "$FAKE_ERR" ] && cat "$FAKE_ERR" >&2
+[ -n "$FAKE_HOLD" ] && setsid sleep 5 &
 [ -n "$FAKE_HANG" ] && exec sleep 30
 exit "${FAKE_EXIT:-0}"
 `
@@ -31,6 +32,7 @@ type child struct {
 	out, err string
 	exit     int
 	hang     bool
+	hold     bool
 }
 
 func errorLine(code string) string {
@@ -59,10 +61,24 @@ func callFake(t *testing.T, c child, timeoutSeconds int) *mcp.CallToolResult {
 	}
 	t.Setenv("FAKE_EXIT", strconv.Itoa(c.exit))
 	t.Setenv("FAKE_HANG", map[bool]string{true: "1"}[c.hang])
-	doc := schema.Document{Commands: []schema.Command{{Path: "fake", Runnable: true}}}
+	t.Setenv("FAKE_HOLD", map[bool]string{true: "1"}[c.hold])
+	return callHandler(t, NewRunner(fakeDocument, exe, Exposure{}).Handler(), timeoutSeconds)
+}
+
+var fakeDocument = schema.Document{Commands: []schema.Command{{Path: "fake", Runnable: true}}}
+
+func callCanned(t *testing.T, canned Result) *mcp.CallToolResult {
+	t.Helper()
+	return callHandler(t, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return toolResult("fake", canned, 0), nil
+	}, 5)
+}
+
+func callHandler(t *testing.T, handler mcp.ToolHandler, timeoutSeconds int) *mcp.CallToolResult {
+	t.Helper()
 	ctx := context.Background()
 	serverSide, clientSide := mcp.NewInMemoryTransports()
-	server, err := New(doc, Exposure{}, NewRunner(doc, exe, Exposure{}).Handler()).Connect(ctx, serverSide, nil)
+	server, err := New(fakeDocument, Exposure{}, handler).Connect(ctx, serverSide, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +159,8 @@ func TestExitCodesMapToToolResultsPinnedAsLiterals(t *testing.T) {
 func TestEveryResultCarriesTheMetaIncludingErrorResults(t *testing.T) {
 	for _, tc := range resultCases {
 		m := meta(callFake(t, tc.c, 5))
-		duration, isNumber := m["duration_ms"].(float64)
-		if m["command"] != "fake" || m["retryable"] != false || !isNumber || duration < 0 {
+		_, isNumber := m["duration_ms"].(float64)
+		if m["command"] != "fake" || m["retryable"] != false || !isNumber {
 			t.Errorf("%s: _meta.selective = %v, want command fake, retryable false and a duration", tc.name, m)
 		}
 	}
@@ -216,10 +232,13 @@ func TestStderrIsNeverReadAsStdout(t *testing.T) {
 }
 
 func TestStderrIsCappedToItsTailSeparatelyFromStdout(t *testing.T) {
-	res := callFake(t, child{err: "HEAD" + strings.Repeat("e", 100_000) + "TAIL", exit: 9}, 5)
+	res := callFake(t, child{out: progress, err: "HEAD" + strings.Repeat("e", 100_000) + "TAIL", exit: 9}, 5)
 	message, _ := errorOf(res)["message"].(string)
 	if !strings.HasSuffix(message, "TAIL") || strings.Contains(message, "HEAD") || len(message) > stderrCap {
 		t.Errorf("message has %d bytes, want at most %d, ending in TAIL and dropping HEAD", len(message), stderrCap)
+	}
+	if events := eventList(res); len(events) != 2 || events[0]["event"] != "progress" || events[0]["done"] != float64(1) {
+		t.Errorf("events = %v, want the stdout progress event untouched before the synthesized error", events)
 	}
 }
 

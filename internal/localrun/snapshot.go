@@ -14,6 +14,7 @@ type treeSnapshot struct {
 	Prefix string            `json:"prefix"`
 	Files  map[string]string `json:"files"`
 	Dirty  []string          `json:"dirty"`
+	modes  map[string]string
 }
 
 func takeSnapshot(dir string) (treeSnapshot, error) {
@@ -27,21 +28,22 @@ func takeSnapshot(dir string) (treeSnapshot, error) {
 		return treeSnapshot{}, errors.New("not a git checkout")
 	}
 	sha, _ := gitOutput(root, "rev-parse", "HEAD")
-	snapshot := treeSnapshot{SHA: strings.TrimSpace(sha), Prefix: prefixWithin(root, dir), Files: map[string]string{}}
+	snapshot := treeSnapshot{SHA: strings.TrimSpace(sha), Prefix: prefixWithin(root, dir), Files: map[string]string{}, modes: map[string]string{}}
 	for _, entry := range strings.Split(listing, "\x00") {
 		meta, path, found := strings.Cut(entry, "\t")
 		if fields := strings.Split(meta, " "); found && len(fields) > 2 {
 			snapshot.Files[path] = fields[2]
+			snapshot.modes[path] = fields[0]
 		}
 	}
 	var err error
-	if snapshot.Dirty, err = foldWorkingTree(root, snapshot.Files); err != nil {
+	if snapshot.Dirty, err = foldWorkingTree(root, snapshot.Files, snapshot.modes); err != nil {
 		return treeSnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func foldWorkingTree(root string, files map[string]string) ([]string, error) {
+func foldWorkingTree(root string, files, modes map[string]string) ([]string, error) {
 	status, ok := gitOutput(root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
 	if !ok {
 		return nil, errors.New("git status failed; cannot tell which files are dirty")
@@ -62,6 +64,7 @@ func foldWorkingTree(root string, files map[string]string) ([]string, error) {
 		if statErr != nil {
 			continue
 		}
+		modes[path] = gitMode(info)
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			if target, err := os.Readlink(filepath.Join(root, path)); err == nil {
@@ -77,6 +80,16 @@ func foldWorkingTree(root string, files map[string]string) ([]string, error) {
 		files[path] = blob
 	}
 	return append(append([]string{}, changed...), deleted...), nil
+}
+
+func gitMode(info os.FileInfo) string {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return "120000"
+	case info.Mode()&0o111 != 0:
+		return "100755"
+	}
+	return "100644"
 }
 
 func hashInto(files map[string]string, path, root, stdin string, args ...string) {

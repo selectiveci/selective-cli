@@ -11,7 +11,10 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
-const laterTrailer = " socket=skip runner=skip cli_version=skip"
+const (
+	laterTrailer   = " socket=skip runner=ok cli_version=skip"
+	expiredTrailer = " socket=skip runner=skip cli_version=skip"
+)
 
 func stub(name, after string, status Status, code contract.Code) step {
 	return step{name, after, func(*state) Check {
@@ -84,7 +87,7 @@ func TestAStepThatOutlastsTheTimeoutFailsAndTheRestSkip(t *testing.T) {
 	report := runSteps(t, 200*time.Millisecond, stub("a", "", OK, ""), hang, stub("c", "b", OK, ""), stub("d", "", OK, ""))
 	elapsed := time.Since(began)
 
-	if got, want := shape(report), "a=ok b=fail c=skip d=skip"+laterTrailer; got != want {
+	if got, want := shape(report), "a=ok b=fail c=skip d=skip"+expiredTrailer; got != want {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
 	if b := check(t, report, "b"); b.Code != contract.Timeout || exitOf(report) != 8 || elapsed > 2*time.Second {
@@ -109,7 +112,7 @@ func TestASecretInAStepsTextNeverReachesTheReportOrTheError(t *testing.T) {
 func TestARunWhoseDeadlineHasAlreadyPassedFailsWithTimeoutInsteadOfPassing(t *testing.T) {
 	report := runSteps(t, 0, stub("a", "", OK, ""), stub("b", "a", OK, ""))
 
-	if got, want := shape(report), "a=fail b=skip"+laterTrailer; got != want {
+	if got, want := shape(report), "a=fail b=skip"+expiredTrailer; got != want {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
 	if a := check(t, report, "a"); a.Code != contract.Timeout || report.Status != "fail" || exitOf(report) != 8 {

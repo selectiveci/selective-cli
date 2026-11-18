@@ -90,8 +90,9 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	if cancelled.Load() {
 		_ = killTree(cmd)
 	}
-	held := drain(drained, reader, cmd)
-	drain(errDrained, errReader, cmd)
+	drainBy := time.Now().Add(pipeDrainWindow)
+	held := drain(drained, reader, cmd, drainBy)
+	drain(errDrained, errReader, cmd, drainBy)
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -105,11 +106,11 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	}, nil
 }
 
-func drain(done <-chan struct{}, r *os.File, cmd *exec.Cmd) bool {
+func drain(done <-chan struct{}, r *os.File, cmd *exec.Cmd, by time.Time) bool {
 	select {
 	case <-done:
 		return false
-	case <-time.After(pipeDrainWindow):
+	case <-time.After(time.Until(by)):
 		_ = killTree(cmd)
 		_ = r.Close()
 		<-done
