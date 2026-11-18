@@ -116,7 +116,7 @@ func (fw *Writer) writePretty(raw []byte) error {
 		total, _ := ev["total"].(float64)
 		fmt.Fprintf(fw.w, "  … showing %d of %d failures; the rest were not replayed\n", int(shown), int(total))
 
-	case "summary":
+	case "summary", "iteration_end":
 		passed, _ := ev["passed"].(float64)
 		failed, _ := ev["failed"].(float64)
 		flaky, _ := ev["flaky"].(float64)
@@ -125,7 +125,12 @@ func (fw *Writer) writePretty(raw []byte) error {
 		if flaky > 0 {
 			counts += fmt.Sprintf("  %d flaky (passed on retry)", int(flaky))
 		}
-		fmt.Fprintf(fw.w, "\n  %s  %s  %.1fs\n\n", summaryIcon(int(failed)), counts, ms/1000)
+		iteration := ""
+		if n, ok := ev["iteration"].(float64); ok {
+			iteration = fmt.Sprintf("  iteration %d", int(n))
+			clear(fw.failed)
+		}
+		fmt.Fprintf(fw.w, "\n  %s  %s  %.1fs%s\n\n", summaryIcon(int(failed)), counts, ms/1000, iteration)
 	}
 	return nil
 }

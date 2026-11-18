@@ -586,7 +586,7 @@ func TestHelpJSONShowsTestWithItsAnnotationsAndNoTransport(t *testing.T) {
 	if codes := fmt.Sprint(found["exit_codes"]); codes != "[0 1 3 4 5 6 8 130]" {
 		t.Errorf("exit_codes = %s", codes)
 	}
-	if events := fmt.Sprint(found["events"]); events != "[build_start selection test_pass test_fail progress heartbeat summary]" {
+	if events := fmt.Sprint(found["events"]); events != "[build_start selection test_pass test_fail progress heartbeat iteration_end summary]" {
 		t.Errorf("events = %s", events)
 	}
 	if found["sends_paths"] != true || found["mutates"] != nil {
