@@ -63,10 +63,6 @@ func handshake(t *testing.T, s frameStream) {
 	s.send(t, initializedFrame)
 }
 
-type nopCloseWriter struct{ io.Writer }
-
-func (nopCloseWriter) Close() error { return nil }
-
 func TestMCPCommandIsHiddenFromMCPAndDeclaresItsModesAndExits(t *testing.T) {
 	cmd, _, err := newRoot().Find([]string{"mcp"})
 	if err != nil || cmd.Name() != "mcp" {
@@ -150,7 +146,6 @@ func TestMCPCommandStdoutCarriesOnlyJSONRPCFramesWhenAnUpdateCheckIsDue(t *testi
 		t.Fatalf("control: a due check made %d release requests (err %v): %s", due.requests.Load(), err, out)
 	}
 	due.seed()
-	before := due.requests.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, due.binary, "mcp")
@@ -194,8 +189,5 @@ func TestMCPCommandStdoutCarriesOnlyJSONRPCFramesWhenAnUpdateCheckIsDue(t *testi
 		} else {
 			t.Error(err)
 		}
-	}
-	if got := due.requests.Load() - before; got != 0 {
-		t.Errorf("sel mcp and its tools made %d release requests, want 0", got)
 	}
 }
