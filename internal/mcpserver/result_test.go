@@ -98,6 +98,13 @@ func eventList(res *mcp.CallToolResult) []map[string]any {
 	return out
 }
 
+func errorOf(res *mcp.CallToolResult) map[string]any {
+	if events := eventList(res); len(events) > 0 {
+		return events[len(events)-1]
+	}
+	return structured(res)
+}
+
 func text(res *mcp.CallToolResult) string {
 	if len(res.Content) == 0 {
 		return ""
@@ -147,7 +154,7 @@ func TestSynthesizedErrorUsesTheDefaultCodeForItsExitPlusTheStderrTail(t *testin
 	want := map[int]string{3: "not_found", 4: "network_error", 5: "usage_error", 6: "forbidden", 8: "timeout", 9: "internal_error", 130: "interrupted"}
 	for exit, code := range want {
 		res := callFake(t, child{err: "first\nlast words\n", exit: exit}, 5)
-		got := structured(res)
+		got := errorOf(res)
 		message, _ := got["message"].(string)
 		if !res.IsError || got["error"] != code || !strings.Contains(message, "last words") || meta(res)["synthesized"] != true || meta(res)["exit_code"] != float64(exit) {
 			t.Errorf("exit %d: result = %v meta = %v, want a synthesized %s with the stderr tail", exit, got, meta(res), code)
@@ -159,7 +166,7 @@ func TestARealErrorObjectPassesThroughUnchangedAndIsNeverSynthesizedOver(t *test
 	line := `{"v":1,"error":"suite_not_found","message":"no such suite","scope":"read"}`
 	res := callFake(t, child{out: line + "\n", err: "Error: no such suite\n", exit: 3}, 5)
 	_, marked := meta(res)["synthesized"]
-	if !res.IsError || structured(res)["error"] != "suite_not_found" || marked || text(res) != line {
+	if !res.IsError || errorOf(res)["error"] != "suite_not_found" || marked || text(res) != line {
 		t.Errorf("isError = %v, structured = %v, synthesized key = %v, content = %q, want the object untouched", res.IsError, structured(res), marked, text(res))
 	}
 	res = callFake(t, child{out: progress + interrupted, exit: 130}, 5)
@@ -172,7 +179,7 @@ func TestARealErrorObjectPassesThroughUnchangedAndIsNeverSynthesizedOver(t *test
 
 func TestStderrIsNeverReadAsStdout(t *testing.T) {
 	res := callFake(t, child{err: errorLine("suite_not_found"), exit: 3}, 5)
-	if got := structured(res)["error"]; got != "not_found" || meta(res)["synthesized"] != true {
+	if got := errorOf(res)["error"]; got != "not_found" || meta(res)["synthesized"] != true {
 		t.Errorf("an error object on stderr gave %v, want a synthesized not_found", got)
 	}
 	res = callFake(t, child{out: oneShot, err: "STDERR-NOISE\n"}, 5)
@@ -183,7 +190,7 @@ func TestStderrIsNeverReadAsStdout(t *testing.T) {
 
 func TestStderrIsCappedToItsTailSeparatelyFromStdout(t *testing.T) {
 	res := callFake(t, child{err: "HEAD" + strings.Repeat("e", 100_000) + "TAIL", exit: 9}, 5)
-	message, _ := structured(res)["message"].(string)
+	message, _ := errorOf(res)["message"].(string)
 	if !strings.HasSuffix(message, "TAIL") || strings.Contains(message, "HEAD") || len(message) > stderrCap {
 		t.Errorf("message has %d bytes, want at most %d, ending in TAIL and dropping HEAD", len(message), stderrCap)
 	}
@@ -222,7 +229,7 @@ func TestNDJSONOverTheCapIsTruncatedAndStillEndsAtTheTerminalEvent(t *testing.T)
 func TestChildKilledAtTimeoutSecondsIsATimeoutToolErrorWithExitEight(t *testing.T) {
 	res := callFake(t, child{hang: true}, 1)
 	m := meta(res)
-	if duration, _ := m["duration_ms"].(float64); !res.IsError || structured(res)["error"] != "timeout" || m["synthesized"] != true || m["exit_code"] != float64(8) || duration < 1000 {
+	if duration, _ := m["duration_ms"].(float64); !res.IsError || errorOf(res)["error"] != "timeout" || m["synthesized"] != true || m["exit_code"] != float64(8) || duration < 1000 {
 		t.Errorf("isError = %v, structured = %v, meta = %v, want a synthesized timeout with exit_code 8 after at least a second", res.IsError, structured(res), m)
 	}
 	res = callFake(t, child{out: progress, hang: true}, 1)
@@ -243,12 +250,12 @@ func TestAnExitThatIsNotAnOutcomeIsAnInternalErrorNeverASuccess(t *testing.T) {
 	}
 	for name, c := range cases {
 		res := callFake(t, c, 5)
-		if !res.IsError || structured(res)["error"] != "internal_error" || meta(res)["synthesized"] != true {
+		if !res.IsError || errorOf(res)["error"] != "internal_error" || meta(res)["synthesized"] != true {
 			t.Errorf("%s: isError = %v, structured = %v, meta = %v, want a synthesized internal_error", name, res.IsError, structured(res), meta(res))
 		}
 	}
 	res := callFake(t, child{out: progress + summary, exit: 2}, 5)
-	if res.IsError || structured(res)["error"] != nil || meta(res)["exit_code"] != float64(2) {
+	if res.IsError || errorOf(res)["error"] != nil || meta(res)["exit_code"] != float64(2) {
 		t.Errorf("exit 2 ending in a summary: isError = %v, structured = %v, want an outcome with exit_code 2", res.IsError, structured(res))
 	}
 }
@@ -261,7 +268,7 @@ func TestApprovalOutcomesAndRunnerErrorsKeepTheirOwnMeaning(t *testing.T) {
 	}
 	res = callFake(t, child{out: errorLine("runner_error"), exit: 1}, 5)
 	_, marked := meta(res)["synthesized"]
-	if !res.IsError || structured(res)["error"] != "runner_error" || marked {
+	if !res.IsError || errorOf(res)["error"] != "runner_error" || marked {
 		t.Errorf("exit 1 with runner_error: isError = %v, structured = %v, synthesized key = %v, want the object passed through as an error", res.IsError, structured(res), marked)
 	}
 }

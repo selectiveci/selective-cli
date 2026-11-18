@@ -49,6 +49,7 @@ const (
 	RunnerError          Code = "runner_error"
 	NoFramework          Code = "no_framework"
 	RunnerMissing        Code = "runner_missing"
+	Interrupted          Code = "interrupted"
 )
 
 const (
@@ -110,6 +111,17 @@ var exits = map[Code]int{
 	RunnerError:          ExitFailures,
 	NoFramework:          ExitUsage,
 	RunnerMissing:        ExitUsage,
+	Interrupted:          ExitInterrupted,
+}
+
+var defaultCodes = map[int]Code{
+	ExitNotFound:    NotFound,
+	ExitRetryable:   NetworkError,
+	ExitUsage:       UsageError,
+	ExitForbidden:   Forbidden,
+	ExitTimeout:     Timeout,
+	ExitInternal:    InternalError,
+	ExitInterrupted: Interrupted,
 }
 
 func Registered(code Code) bool {
@@ -167,6 +179,9 @@ func Errorf(code Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
 
-func DefaultCode(exit int) (Code, bool) { return "", false }
+func DefaultCode(exit int) (Code, bool) {
+	code, ok := defaultCodes[exit]
+	return code, ok
+}
 
-func Retryable(exit int) bool { return false }
+func Retryable(exit int) bool { return exit == ExitRetryable }
