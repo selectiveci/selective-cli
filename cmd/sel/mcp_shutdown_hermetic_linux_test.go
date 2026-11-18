@@ -94,46 +94,51 @@ func TestMCPShutdownWaitsForAChildThatTakesTimeToExitBeforeSelMCPExits(t *testin
 	assertGroupGone(t, pgid)
 }
 
-func TestMCPShutdownLeavesAnInheritedIgnoreOfASignalIgnored(t *testing.T) {
-	cases := []struct {
-		trap           string
-		ignored, other syscall.Signal
-	}{{"INT", syscall.SIGINT, syscall.SIGTERM}, {"TERM", syscall.SIGTERM, syscall.SIGINT}}
-	for _, c := range cases {
-		t.Run(c.ignored.String(), func(t *testing.T) {
-			exe, err := os.Executable()
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.Command("/bin/sh", "-c", `trap "" `+c.trap+`; exec "$0" mcp`, exe)
-			rig := launchSelMCP(t, cmd, []string{"SELECTIVE_TEST_RUN_MAIN=1"}, orgsCallWith(9, ignoredCallSecond))
-			rig.liveChildGroup(t)
-			pid := rig.cmd.Process.Pid
-			if !sigIgnHas(t, pid, c.ignored) {
-				t.Errorf("sel mcp %d lost the inherited ignore of %v at startup", pid, c.ignored)
-			}
-			if err := rig.cmd.Process.Signal(c.ignored); err != nil {
-				t.Fatal(err)
-			}
-			if got := exitCodeOfResponse(rig.stream.response(t, 9)); got != float64(8) {
-				t.Errorf("in-flight call after the ignored %v: exit_code = %v, want 8 (its own timeout)", c.ignored, got)
-			}
-			rig.stream.send(t, versionFrame)
-			if got := exitCodeOfResponse(rig.stream.response(t, 3)); got != float64(0) {
-				t.Errorf("call after the ignored %v: exit_code = %v, want 0", c.ignored, got)
-			}
-			if !sigIgnHas(t, pid, c.ignored) {
-				t.Errorf("sel mcp %d no longer ignores %v", pid, c.ignored)
-			}
-			rig.stream.send(t, orgsCallWith(10, 30))
-			pgid := rig.liveChildGroup(t)
-			status := rig.signalAndWait(t, c.other)
-			if !status.Signaled() || status.Signal() != c.other {
-				t.Errorf("wait status = %v, want killed by %v", status, c.other)
-			}
-			assertGroupGone(t, pgid)
-		})
+func startUnderTrap(t *testing.T, trap, call string) *shutdownRig {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
+	cmd := exec.Command("/bin/sh", "-c", `trap "" `+trap+`; exec "$0" mcp`, exe)
+	return launchSelMCP(t, cmd, []string{"SELECTIVE_TEST_RUN_MAIN=1"}, call)
+}
+
+func TestMCPShutdownLeavesAnInheritedSigintIgnoreIgnored(t *testing.T) {
+	rig := startUnderTrap(t, "INT", orgsCallWith(9, ignoredCallSecond))
+	rig.liveChildGroup(t)
+	pid := rig.cmd.Process.Pid
+	if !sigIgnHas(t, pid, syscall.SIGINT) {
+		t.Errorf("sel mcp %d lost the inherited ignore of SIGINT at startup", pid)
+	}
+	if err := rig.cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	if got := exitCodeOfResponse(rig.stream.response(t, 9)); got != float64(8) {
+		t.Errorf("in-flight call after the ignored SIGINT: exit_code = %v, want 8 (its own timeout)", got)
+	}
+	rig.stream.send(t, versionFrame)
+	if got := exitCodeOfResponse(rig.stream.response(t, 3)); got != float64(0) {
+		t.Errorf("call after the ignored SIGINT: exit_code = %v, want 0", got)
+	}
+	if !sigIgnHas(t, pid, syscall.SIGINT) {
+		t.Errorf("sel mcp %d no longer ignores SIGINT", pid)
+	}
+	rig.stream.send(t, orgsCallWith(10, 30))
+	pgid := rig.liveChildGroup(t)
+	if status := rig.signalAndWait(t, syscall.SIGTERM); !status.Signaled() || status.Signal() != syscall.SIGTERM {
+		t.Errorf("wait status = %v, want killed by SIGTERM", status)
+	}
+	assertGroupGone(t, pgid)
+}
+
+func TestMCPShutdownSigtermStillEndsTheChildrenUnderAnInheritedTermTrap(t *testing.T) {
+	rig := startUnderTrap(t, "TERM", orgsCall())
+	pgid := rig.liveChildGroup(t)
+	if status := rig.signalAndWait(t, syscall.SIGTERM); !status.Signaled() || status.Signal() != syscall.SIGTERM {
+		t.Errorf("wait status = %v, want killed by SIGTERM", status)
+	}
+	assertGroupGone(t, pgid)
 }
 
 func TestMCPRunnerRefusesEveryCallOnceShutdownHasBegun(t *testing.T) {
