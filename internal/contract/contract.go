@@ -166,3 +166,7 @@ func (e *Error) ErrorFields() map[string]any { return e.Fields }
 func Errorf(code Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
 }
+
+func DefaultCode(exit int) (Code, bool) { return "", false }
+
+func Retryable(exit int) bool { return false }
