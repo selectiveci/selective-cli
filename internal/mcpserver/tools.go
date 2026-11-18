@@ -23,14 +23,24 @@ func New(doc schema.Document, exposure Exposure, call mcp.ToolHandler) *mcp.Serv
 	return server
 }
 
-func Tools(doc schema.Document, _ Exposure) []*mcp.Tool {
+func Tools(doc schema.Document, exposure Exposure) []*mcp.Tool {
 	var tools []*mcp.Tool
 	for _, c := range doc.Commands {
-		if exposed(c) {
+		if exposure.lists(c) {
 			tools = append(tools, tool(c))
 		}
 	}
 	return tools
+}
+
+func (e Exposure) lists(c schema.Command) bool {
+	if !exposed(c) {
+		return false
+	}
+	if e.ReadOnly {
+		return !c.Mutates && !c.Destructive && !c.LocalExec
+	}
+	return e.AllowDestructive || !c.Destructive
 }
 
 func exposed(c schema.Command) bool {
