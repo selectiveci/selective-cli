@@ -120,6 +120,15 @@ func exitCodeOf(res *mcp.CallToolResult) any {
 	return selective["exit_code"]
 }
 
+func expectRefused(t *testing.T, mode string, session *mcp.ClientSession, name string, args map[string]any) {
+	t.Helper()
+	res, err := callTool(t, session, name, args)
+	var wire *jsonrpc.Error
+	if res != nil || !errors.As(err, &wire) || wire.Code != jsonrpc.CodeInvalidParams {
+		t.Errorf("%s: calling hidden %s: result = %+v, err = %v, want an invalid-params protocol error and no result", mode, name, res, err)
+	}
+}
+
 func TestMCPStdioE2EListsEachModeAndRelaysRealServerResults(t *testing.T) {
 	seed, binary := e2eSetup(t)
 	cwd := t.TempDir()
@@ -151,15 +160,21 @@ func TestMCPStdioE2EListsEachModeAndRelaysRealServerResults(t *testing.T) {
 		t.Errorf("read-only token on suites_create: err = %v, result = %+v, want isError with exit_code 6", err, created)
 	}
 
-	hidden, err := callTool(t, byDefault, "suites_delete", map[string]any{"suite": seed.Keep, "yes": true})
-	var wire *jsonrpc.Error
-	if hidden != nil || !errors.As(err, &wire) || wire.Code != jsonrpc.CodeInvalidParams {
-		t.Errorf("suites_delete by default: result = %+v, err = %v, want an invalid-params protocol error and no result", hidden, err)
-	}
+	expectRefused(t, "default", byDefault, "suites_delete", map[string]any{"suite": seed.Keep, "yes": true})
 	kept, err := callTool(t, byDefault, "suites_show", map[string]any{"suite": seed.Keep})
 	if err != nil || kept.IsError || !strings.Contains(fmt.Sprint(kept.StructuredContent), seed.Keep) {
 		t.Errorf("suites_show %s after the refused delete: err = %v, result = %+v, want the suite still there", seed.Keep, err, kept)
 	}
+
+	readOrgs, err := callTool(t, readOnly, "orgs", nil)
+	if err != nil || readOrgs.IsError || exitCodeOf(readOrgs) != float64(0) {
+		t.Errorf("read-only: orgs: err = %v, result = %+v, want it to run", err, readOrgs)
+	}
+	expectRefused(t, "read-only", readOnly, "suites_create", map[string]any{"name": "c3-hidden-" + strconv.FormatInt(time.Now().UnixNano(), 36)})
+	expectRefused(t, "read-only", readOnly, "suites_delete", map[string]any{"suite": seed.Keep, "yes": true})
+	expectRefused(t, "read-only", readOnly, "test", nil)
+	expectRefused(t, "allow-destructive", allowed, "help", nil)
+	expectRefused(t, "allow-destructive", allowed, "mcp", nil)
 
 	index := int(nextControl.Add(1)) - 1
 	if index >= len(seed.Pool) {
