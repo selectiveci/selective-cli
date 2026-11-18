@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -28,6 +30,9 @@ const (
 type Runner struct {
 	exe      string
 	commands map[string]schema.Command
+	shutdown context.Context
+	gate     sync.Mutex
+	live     sync.WaitGroup
 }
 
 func NewRunner(doc schema.Document, exe string, exposure Exposure) *Runner {
@@ -37,7 +42,7 @@ func NewRunner(doc schema.Document, exe string, exposure Exposure) *Runner {
 			commands[toolName(c.Path)] = c
 		}
 	}
-	return &Runner{exe: exe, commands: commands}
+	return &Runner{exe: exe, commands: commands, shutdown: context.Background()}
 }
 
 func (r *Runner) Argv(name string, raw json.RawMessage) ([]string, error) {

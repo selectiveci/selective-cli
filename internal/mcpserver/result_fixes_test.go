@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 const (
@@ -125,5 +126,12 @@ func TestATimeoutAlwaysEndsWithASynthesizedTimeoutAndKeepsWhatTheChildPrinted(t 
 		if !c.res.IsError || errorOf(c.res)["error"] != "timeout" || meta(c.res)["synthesized"] != true || meta(c.res)["exit_code"] != float64(8) || eventBeforeLast(c.res)[c.key] != c.value {
 			t.Errorf("%s: isError = %v, events = %v, meta = %v, want the child's line kept and a synthesized timeout last with exit_code 8", c.name, c.res.IsError, events, meta(c.res))
 		}
+	}
+}
+
+func TestASynthesizedMessageKeepsHTMLCharactersRawInTheContentText(t *testing.T) {
+	res := toolResult("orgs", Result{ExitCode: contract.ExitRetryable, Stderr: []byte("a<b>&c")}, 0)
+	if got := text(res); !strings.Contains(got, "a<b>&c") || strings.Contains(got, `\u00`) {
+		t.Errorf("content text = %s, want the characters < > & unescaped", got)
 	}
 }

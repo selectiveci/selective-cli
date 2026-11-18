@@ -136,6 +136,5 @@ func synthesize(command string, exit int, stderr []byte, overflow bool) (json.Ra
 	if message == "" {
 		message = fmt.Sprintf("%s exited %d", command, exit)
 	}
-	line, _ := json.Marshal(map[string]any{"v": 1, "error": code, "message": message})
-	return line, string(code)
+	return json.RawMessage(encode(map[string]any{"v": 1, "error": code, "message": message})), string(code)
 }

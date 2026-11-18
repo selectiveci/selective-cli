@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -16,6 +19,14 @@ import (
 type unclosable struct{ io.Writer }
 
 func (unclosable) Close() error { return nil }
+
+func exitBySignal(sig os.Signal) {
+	signal.Reset(sig)
+	if self, err := os.FindProcess(os.Getpid()); err == nil && self.Signal(sig) == nil {
+		select {}
+	}
+	os.Exit(contract.ExitInterrupted)
+}
 
 func mcpCmd() *cobra.Command {
 	var exposure mcpserver.Exposure
@@ -40,7 +51,19 @@ flags cannot be combined.`,
 			if err != nil {
 				return contract.Errorf(contract.InternalError, "cannot find this executable: %v", err)
 			}
-			server := mcpserver.New(doc, exposure, mcpserver.NewRunner(doc, exe, exposure).Handler())
+			shutdown, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			runner := mcpserver.NewRunner(doc, exe, exposure).WithShutdown(shutdown)
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(signals)
+			go func() {
+				sig := <-signals
+				cancel()
+				runner.Wait()
+				exitBySignal(sig)
+			}()
+			server := mcpserver.New(doc, exposure, runner.Handler())
 			transport := &mcp.IOTransport{Reader: io.NopCloser(cmd.InOrStdin()), Writer: unclosable{cmd.OutOrStdout()}}
 			if err := server.Run(cmd.Context(), transport); err != nil && !errors.Is(err, io.EOF) {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: mcp server stopped: %v\n", err)
