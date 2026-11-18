@@ -94,6 +94,19 @@ func TestMCPCommandRefusesBothModeFlagsBeforeServing(t *testing.T) {
 	}
 }
 
+func TestMCPCommandKeepsStdoutToFramesWhenStdinClosesBeforeTheHandshakeEnds(t *testing.T) {
+	root := newRoot()
+	root.SetIn(strings.NewReader(initializeFrame + "\n"))
+	var stdout, stderr bytes.Buffer
+	run(root, []string{"mcp"}, &stdout, &stderr)
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(line), &frame); line != "" && (err != nil || frame["jsonrpc"] != "2.0") {
+			t.Errorf("stdout line %q is not a JSON-RPC frame", line)
+		}
+	}
+}
+
 func TestMCPCommandServesTheToolsOfItsModeAndExitsZeroWhenStdinCloses(t *testing.T) {
 	cases := []struct {
 		mode  string
