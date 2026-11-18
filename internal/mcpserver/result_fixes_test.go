@@ -118,7 +118,7 @@ func TestATimeoutAlwaysEndsWithASynthesizedTimeoutAndKeepsWhatTheChildPrinted(t 
 	}{
 		{"a real error then a hang", callFake(t, child{out: errorLine("suite_not_found"), hang: true}, 1), "error", "suite_not_found"},
 		{"a summary then a hang", callFake(t, child{out: progress + summary, hang: true}, 1), "event", "summary"},
-		{"an interrupted summary at exit 130", callCanned(t, Result{Stdout: []byte(progress + interrupted), ExitCode: 130, TimedOut: true}), "event", "summary"},
+		{"an interrupted summary, then exit 130 after the kill", callFake(t, child{out: progress + interrupted, trap: true}, 1), "event", "summary"},
 	}
 	for _, c := range cases {
 		events := eventList(c.res)
