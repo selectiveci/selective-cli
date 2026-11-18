@@ -271,6 +271,17 @@ func TestMCPStdioE2ETestToolTimeoutKillsARunnerThatIgnoresSignalsWithinTheBudget
 	if !res.IsError || exitCodeOf(res) != float64(8) {
 		t.Errorf("result = %+v, want a timeout tool error with exit_code 8", res)
 	}
+	events, _ := res.StructuredContent.(map[string]any)["events"].([]any)
+	if len(events) < 2 {
+		t.Errorf("events = %v, want the interrupted summary then a synthesized timeout", events)
+	} else {
+		last, _ := events[len(events)-1].(map[string]any)
+		before, _ := events[len(events)-2].(map[string]any)
+		selective, _ := res.Meta["selective"].(map[string]any)
+		if last["error"] != "timeout" || selective["synthesized"] != true || before["event"] != "summary" || before["interrupted"] != true {
+			t.Errorf("last two events = %v, %v with meta %v, want the interrupted summary kept and a synthesized timeout last", before, last, selective)
+		}
+	}
 	if elapsed >= x14Bound {
 		t.Errorf("the call took %s, want under %s (timeout_s %d + localrun.ShutdownBudget %s)", elapsed, x14Bound, timeoutSeconds, localrun.ShutdownBudget)
 	}

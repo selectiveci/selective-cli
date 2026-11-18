@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -159,9 +160,26 @@ func TestMCPCommandStdoutCarriesOnlyJSONRPCFramesWhenAnUpdateCheckIsDue(t *testi
 		t.Fatalf("control: a due check made %d release requests (err %v): %s", due.requests.Load(), err, out)
 	}
 	due.seed()
+	serveToolCallsAndCheckStdout(t, due.binary)
+}
+
+func TestMCPCommandStdoutCarriesOnlyJSONRPCFramesWhenANewerReleaseIsKnown(t *testing.T) {
+	due := dueUpdateCheck(t)
+	cached := `{"latest_version":"2.0.0","checked_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
+	if err := os.WriteFile(filepath.Join(os.Getenv("SELECTIVE_CONFIG_DIR"), "update-check.json"), []byte(cached), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(due.binary, "version", "--json").Output(); err != nil || !strings.Contains(string(out), `"update_available":true`) {
+		t.Fatalf("control: version says %s (err %v), want an update available", out, err)
+	}
+	serveToolCallsAndCheckStdout(t, due.binary)
+}
+
+func serveToolCallsAndCheckStdout(t *testing.T, binary string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, due.binary, "mcp")
+	cmd := exec.CommandContext(ctx, binary, "mcp")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
