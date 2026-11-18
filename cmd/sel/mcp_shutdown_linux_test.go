@@ -182,15 +182,6 @@ func TestMCPShutdownSignalEndsTheInFlightChildsGroupWithinTheGrace(t *testing.T)
 	}
 }
 
-func TestMCPShutdownSignalWithNoCallInFlightExitsWithinTheBound(t *testing.T) {
-	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
-		t.Run(sig.String(), func(t *testing.T) {
-			rig := startSelMCP(t, "")
-			rig.signalAndWait(t, sig)
-		})
-	}
-}
-
 func TestMCPShutdownKeepsSelMCPsOwnWaitStatusAsTheSignalThatKilledIt(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
 		for _, midCall := range []bool{false, true} {

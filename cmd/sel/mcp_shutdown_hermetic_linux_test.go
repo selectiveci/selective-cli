@@ -36,6 +36,7 @@ func slowTermChild(ready string) int {
 	_ = os.WriteFile(ready, nil, 0o600)
 	<-terms
 	time.Sleep(slowTermDelay)
+	_ = os.WriteFile(ready+".finished", nil, 0o600)
 	return 0
 }
 
@@ -92,6 +93,9 @@ func TestMCPShutdownWaitsForAChildThatTakesTimeToExitBeforeSelMCPExits(t *testin
 	}
 	rig.signalAndWait(t, syscall.SIGTERM)
 	assertGroupGone(t, pgid)
+	if _, err := os.Stat(ready + ".finished"); err != nil {
+		t.Errorf("the slow child did not finish its exit before sel mcp exited: %v", err)
+	}
 }
 
 func startUnderTrap(t *testing.T, trap, call string) *shutdownRig {
