@@ -37,7 +37,7 @@ func newRoot() *cobra.Command {
 	}
 	root.PersistentFlags().Bool("json", false, "JSON output (the default when stdout isn't a terminal)")
 
-	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), failuresCmd(), buildsCmd(), buildCmd(), trendsCmd(), versionCmd(), doctorCmd(), flakesCmd(), transportCmd(), testCmd(), tokensCmd(), approvalsCmd())
+	root.AddCommand(authCmd(), orgsCmd(), reposCmd(), suitesCmd(), tailCmd(), failuresCmd(), buildsCmd(), buildCmd(), trendsCmd(), versionCmd(), doctorCmd(), flakesCmd(), transportCmd(), testCmd(), tokensCmd(), approvalsCmd(), rerunCmd())
 	installHelp(root)
 
 	root.SilenceUsage = true
@@ -257,7 +257,12 @@ func suitesCmd() *cobra.Command {
 
   sel suites create   Create a suite for a repository (needs --setup login)
   sel suites key        Hand a suite's API key to a secret store
-  sel suites configure  Change a suite's settings, such as test selection`,
+  sel suites configure  Change a suite's settings, such as test selection
+  sel suites archive    Archive a suite
+  sel suites restore    Bring an archived suite back
+  sel suites delete     Delete an archived suite for good
+  sel suites show       Show a suite and its settings
+  sel suites settings   Show or change a suite's settings`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
@@ -268,7 +273,7 @@ func suitesCmd() *cobra.Command {
 		},
 	}
 	f.bind(cmd, true)
-	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd())
+	cmd.AddCommand(suitesCreateCmd(), suitesKeyCmd(), suitesConfigureCmd(), suitesArchiveCmd(), suitesRestoreCmd(), suitesDeleteCmd(), suitesShowCmd(), suitesSettingsCmd())
 	return cmd
 }
 
@@ -276,8 +281,9 @@ func suitesCreateCmd() *cobra.Command {
 	var f setupFlags
 	var name, repo, framework string
 	cmd := &cobra.Command{
-		Use:   "create",
-		Short: "Create a suite for a repository",
+		Use:         "create",
+		Annotations: map[string]string{"mutates": "true"},
+		Short:       "Create a suite for a repository",
 		Long: `Create a test suite for a repository, or find the one already there:
 running it again with the same name returns the same suite. Names are
 unique within an organization, so with several repositories include the
@@ -310,8 +316,9 @@ func suitesKeyCmd() *cobra.Command {
 	var f setupFlags
 	var opts setup.KeyOptions
 	cmd := &cobra.Command{
-		Use:   "key SUITE",
-		Short: "Hand a suite's API key to a secret store without showing it",
+		Use:         "key SUITE",
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,9", "mutates": "true", "secret_flags": "stdout"},
+		Short:       "Hand a suite's API key to a secret store without showing it",
 		Long: `Send a suite's API key (by name or ID) where CI can read it, without it
 appearing on screen.
 
@@ -344,8 +351,9 @@ func suitesConfigureCmd() *cobra.Command {
 	var settings api.SuiteSettings
 	var defaultBranch string
 	cmd := &cobra.Command{
-		Use:   "configure SUITE",
-		Short: "Change a suite's settings, such as test selection",
+		Use:         "configure SUITE",
+		Annotations: map[string]string{"mutates": "true", "idempotent": "true"},
+		Short:       "Change a suite's settings, such as test selection",
 		Long: `Change a suite's settings (by name or ID). Needs a --setup login, as an
 owner or admin of the organization.
 

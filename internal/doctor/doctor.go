@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -16,15 +18,18 @@ import (
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
 	"github.com/selectiveci/selective-cli/internal/setup"
+	"github.com/selectiveci/selective-cli/internal/update"
+)
+
+var (
+	httpTimeout = 10 * time.Second
+	settleGrace = 250 * time.Millisecond
 )
 
 const (
-	httpTimeout = 10 * time.Second
-	loginFix    = "sel auth login --setup"
-	suiteFix    = "sel suites create --name <name> --framework <type>"
+	loginFix = "sel auth login --setup"
+	suiteFix = "sel suites create --name <name> --framework <type>"
 )
-
-var laterChecks = []string{"socket", "runner", "cli_version"}
 
 type Status string
 
@@ -55,9 +60,12 @@ type Options struct {
 	Org      string
 	Timeout  time.Duration
 	Repo     func() (string, error)
+	Root     func() (string, error)
+	OS       string
 }
 
 type state struct {
+	ctx     context.Context
 	opts    Options
 	cfg     *config.Config
 	host    string
@@ -68,6 +76,10 @@ type state struct {
 	me      *api.Me
 	meErr   error
 	orgSlug string
+
+	suiteTypes []string
+
+	advertised advertised
 }
 
 type step struct {
@@ -88,10 +100,16 @@ func Run(opts Options) *Report {
 	if opts.Repo == nil {
 		opts.Repo = gitctx.Repo
 	}
+	if opts.Root == nil {
+		opts.Root = os.Getwd
+	}
+	if opts.OS == "" {
+		opts.OS = runtime.GOOS
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
 
-	s := &state{opts: opts}
+	s := &state{ctx: ctx, opts: opts}
 	blockedBy := map[string]string{}
 	expired := false
 	report := &Report{Status: "pass"}
@@ -104,7 +122,7 @@ func Run(opts Options) *Report {
 		case expired:
 			c = Check{Name: st.name, Status: Skip, Message: "skipped because the run's timeout expired"}
 		case ctx.Err() != nil:
-			c = timedOut(st.name, opts.Timeout)
+			c = timedOut(st.name, opts.Timeout, Check{})
 			blockedBy[st.name], expired = st.name, true
 		default:
 			c = runWithin(ctx, s, st)
@@ -115,8 +133,22 @@ func Run(opts Options) *Report {
 		}
 		report.Checks = append(report.Checks, c)
 	}
-	for _, name := range laterChecks {
-		report.Checks = append(report.Checks, Check{Name: name, Status: Skip, Message: "added in a later release"})
+	report.Checks = append(report.Checks, Check{Name: "socket", Status: Skip, Message: "added in a later release"})
+	runner := Check{Name: "runner", Status: Skip, Message: "skipped because the run's timeout expired"}
+	if !expired && ctx.Err() == nil {
+		if c := runWithin(ctx, s, step{"runner", "", (*state).checkRunner}); c.Status != Fail {
+			runner = c
+		}
+	}
+	expired = expired || runner.Status == Skip
+	report.Checks = append(report.Checks, runner)
+	switch by := blockedBy["server"]; {
+	case expired:
+		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because the run's timeout expired"})
+	case by != "":
+		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because " + by + " failed"})
+	default:
+		report.Checks = append(report.Checks, s.checkCLIVersion())
 	}
 	report.Status = summarize(report.Checks)
 	return report
@@ -130,14 +162,45 @@ func runWithin(ctx context.Context, s *state, st step) Check {
 	}()
 	select {
 	case c := <-done:
+		if c.Status == Fail && ctx.Err() != nil {
+			return timedOut(st.name, s.opts.Timeout, c)
+		}
 		return c
 	case <-ctx.Done():
-		return timedOut(st.name, s.opts.Timeout)
+		select {
+		case c := <-done:
+			return timedOut(st.name, s.opts.Timeout, c)
+		case <-time.After(settleGrace):
+			return timedOut(st.name, s.opts.Timeout, Check{})
+		}
 	}
 }
 
-func timedOut(name string, limit time.Duration) Check {
-	return fail(name, contract.Timeout, fmt.Sprintf("did not finish within %s", limit), "")
+func timedOut(name string, limit time.Duration, attempted Check) Check {
+	c := fail(name, contract.Timeout, fmt.Sprintf("did not finish within %s", limit), "")
+	if n := attempted.attempts(); n > 1 {
+		c.Detail = map[string]any{"attempts": n}
+	}
+	return c
+}
+
+func (c Check) attempts() int {
+	switch n := c.Detail["attempts"].(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
+}
+
+func attemptsOf(err error) int {
+	var fielded contract.Fielded
+	if !errors.As(err, &fielded) {
+		return 0
+	}
+	n, _ := fielded.ErrorFields()["attempts"].(int)
+	return n
 }
 
 func (c Check) redact(secret string) Check {
@@ -182,7 +245,11 @@ func summarize(checks []Check) string {
 func (r *Report) Err() error {
 	for _, c := range r.Checks {
 		if c.Status == Fail {
-			return &contract.Error{Code: c.Code, Message: c.Message, Fields: map[string]any{"doctor": r}}
+			fields := map[string]any{"doctor": r}
+			if n := c.attempts(); n > 1 {
+				fields["attempts"] = n
+			}
+			return &contract.Error{Code: c.Code, Message: c.Message, Fields: fields}
 		}
 	}
 	return nil
@@ -249,7 +316,8 @@ func (s *state) checkServer() Check {
 		token = s.cred.Token
 	}
 	s.secret = token
-	s.client = api.New(s.host, token)
+	s.client = api.New(s.host, token).WithContext(s.ctx)
+	s.client.HTTP.Transport = recordingTransport{base: s.client.HTTP.Transport, seen: &s.advertised}
 	s.client.HTTP.Timeout = httpTimeout
 
 	began := time.Now()
@@ -258,6 +326,9 @@ func (s *state) checkServer() Check {
 
 	if code, down := unreachable(s.meErr); down {
 		c := fail("server", code, s.meErr.Error(), "")
+		if n := attemptsOf(s.meErr); n > 1 {
+			c.Detail = map[string]any{"attempts": n}
+		}
 		c.MS = &ms
 		return c
 	}
@@ -327,9 +398,12 @@ func (s *state) checkSuite() Check {
 		return failFrom("suite", err, "")
 	}
 	var matches []map[string]any
-	var names []string
+	var names, types []string
 	for _, su := range all {
 		if su.Repo != nil && strings.EqualFold(*su.Repo, repo) {
+			if su.Type != nil && *su.Type != "" {
+				types = append(types, *su.Type)
+			}
 			matches = append(matches, map[string]any{"name": su.Name, "type": su.Type, "last_run_at": su.LastRunAt})
 			names = append(names, su.Name)
 		}
@@ -337,10 +411,38 @@ func (s *state) checkSuite() Check {
 	if len(matches) == 0 {
 		return fail("suite", contract.SuiteNotFound, fmt.Sprintf("no suite for %s in %s", repo, s.orgSlug), suiteFix)
 	}
+	s.suiteTypes = types
 	return Check{
 		Name:    "suite",
 		Status:  OK,
 		Message: fmt.Sprintf("%s: %s", repo, strings.Join(names, ", ")),
 		Detail:  map[string]any{"repo": repo, "suites": matches},
 	}
+}
+
+func (s *state) checkCLIVersion() Check {
+	info := update.Status(update.Version, "", s.advertised.state())
+	if info.LatestVersion == "" && info.MinVersion == "" {
+		return Check{Name: "cli_version", Status: Skip, Message: "no version information: a dev build, or the server advertised none"}
+	}
+	detail := map[string]any{}
+	if info.LatestVersion != "" {
+		detail["latest_version"] = info.LatestVersion
+	}
+	if info.MinVersion != "" {
+		detail["min_version"] = info.MinVersion
+	}
+	belowMinimum := info.BelowMinimum != nil && *info.BelowMinimum
+	if info.BelowMinimum != nil {
+		detail["below_minimum"] = belowMinimum
+	}
+	switch {
+	case belowMinimum:
+		return Check{Name: "cli_version", Status: Warn, Message: fmt.Sprintf("sel %s is below the server's minimum %s", info.Version, info.MinVersion), Detail: detail, Fix: info.UpgradeCommand}
+	case info.UpdateAvailable != nil && *info.UpdateAvailable:
+		return Check{Name: "cli_version", Status: Warn, Message: fmt.Sprintf("sel %s can be upgraded to %s", info.Version, info.LatestVersion), Detail: detail, Fix: info.UpgradeCommand}
+	case info.LatestVersion == "":
+		return Check{Name: "cli_version", Status: OK, Message: fmt.Sprintf("sel %s meets the server's minimum %s", info.Version, info.MinVersion), Detail: detail}
+	}
+	return Check{Name: "cli_version", Status: OK, Message: fmt.Sprintf("sel %s is the latest release", info.Version), Detail: detail}
 }

@@ -32,12 +32,14 @@ const minRubyCore = "0.3.0"
 
 var goos = runtime.GOOS
 
-func refuseWindows() error {
-	if goos == "windows" {
+func UnsupportedOS(name string) error {
+	if name == "windows" {
 		return contract.Errorf(contract.UsageError, "sel test does not run on Windows yet")
 	}
 	return nil
 }
+
+func refuseWindows() error { return UnsupportedOS(goos) }
 
 type marker struct{ file, needle string }
 
@@ -172,6 +174,8 @@ const (
 	defaultGrace                = 5 * time.Second
 	noSignal     syscall.Signal = 0
 )
+
+const ShutdownBudget = closeGrace + 2*defaultGrace
 
 type Launch struct {
 	Root      string

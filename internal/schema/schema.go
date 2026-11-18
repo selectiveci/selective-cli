@@ -33,8 +33,10 @@ type Command struct {
 	WaitDefault string   `json:"wait_default,omitempty"`
 	SecretFlags []string `json:"secret_flags,omitempty"`
 	MCP         string   `json:"mcp,omitempty"`
-	SkipInMCP   []string `json:"mcp_skip_flags,omitempty"`
 	SendsPaths  bool     `json:"sends_paths,omitempty"`
+	LocalExec   bool     `json:"local_exec,omitempty"`
+	Idempotent  bool     `json:"idempotent,omitempty"`
+	SkipFlags   []string `json:"mcp_skip_flags,omitempty"`
 }
 
 type Arg struct {

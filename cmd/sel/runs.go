@@ -107,9 +107,10 @@ Exit codes:
   sel tail --wait=5s --json`,
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
-			"exit_codes":   "0,1,2,3,4,5,6,8",
-			"events":       "build_start,selection,progress,test_fail,summary,replay_truncated,waiting,heartbeat",
-			"wait_default": defaultTailWait,
+			"exit_codes":     "0,1,2,3,4,5,6,8",
+			"events":         "build_start,selection,progress,test_fail,summary,replay_truncated,waiting,heartbeat",
+			"wait_default":   defaultTailWait,
+			"mcp_skip_flags": "format",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			for _, name := range []string{"wait", "timeout"} {
