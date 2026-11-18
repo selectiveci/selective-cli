@@ -55,7 +55,11 @@ flags cannot be combined.`,
 			defer cancel()
 			runner := mcpserver.NewRunner(doc, exe, exposure).WithShutdown(shutdown)
 			signals := make(chan os.Signal, 1)
-			signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+			for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+				if !signal.Ignored(sig) {
+					signal.Notify(signals, sig)
+				}
+			}
 			defer signal.Stop(signals)
 			go func() {
 				sig := <-signals

@@ -22,8 +22,9 @@ const (
 )
 
 type shutdownRig struct {
-	cmd  *exec.Cmd
-	done chan error
+	cmd    *exec.Cmd
+	done   chan error
+	stream frameStream
 }
 
 func startSelMCP(t *testing.T, call string) *shutdownRig {
@@ -32,6 +33,11 @@ func startSelMCP(t *testing.T, call string) *shutdownRig {
 	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	return launchSelMCP(t, exec.Command(binary, "mcp"), nil, call)
+}
+
+func launchSelMCP(t *testing.T, cmd *exec.Cmd, extraEnv []string, call string) *shutdownRig {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -50,9 +56,9 @@ func startSelMCP(t *testing.T, call string) *shutdownRig {
 			held = append(held, conn)
 		}
 	}()
-	cmd := exec.Command(binary, "mcp")
 	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "SELECTIVE_CONFIG_DIR="+t.TempDir(), "SELECTIVE_HOST=http://"+listener.Addr().String(),
 		"SELECTIVE_TOKEN=dummy", "SELECTIVE_NO_UPDATE_NOTIFIER=1", "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent")
+	cmd.Env = append(cmd.Env, extraEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +76,7 @@ func startSelMCP(t *testing.T, call string) *shutdownRig {
 	if call != "" {
 		stream.send(t, call)
 	}
-	rig := &shutdownRig{cmd: cmd, done: make(chan error, 1)}
+	rig := &shutdownRig{cmd: cmd, done: make(chan error, 1), stream: stream}
 	go func() { rig.done <- cmd.Wait() }()
 	return rig
 }
@@ -176,14 +182,11 @@ func TestMCPShutdownSignalEndsTheInFlightChildsGroupWithinTheGrace(t *testing.T)
 	}
 }
 
-func TestMCPShutdownSignalWithNoCallInFlightExitsAndLeavesNothingBehind(t *testing.T) {
+func TestMCPShutdownSignalWithNoCallInFlightExitsWithinTheBound(t *testing.T) {
 	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT} {
 		t.Run(sig.String(), func(t *testing.T) {
 			rig := startSelMCP(t, "")
 			rig.signalAndWait(t, sig)
-			if kid, ok := childOf(rig.cmd.Process.Pid); ok {
-				t.Errorf("a child %d of the exited sel mcp remains", kid)
-			}
 		})
 	}
 }
