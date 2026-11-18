@@ -116,6 +116,7 @@ func TestMCPCommandServesTheToolsOfItsModeAndExitsZeroWhenStdinCloses(t *testing
 		go func() {
 			exit <- run(root, append([]string{"mcp"}, c.args...), stdoutWriter, io.Discard)
 			_ = stdoutWriter.Close()
+			_ = stdinReader.Close()
 		}()
 		stream := frameStream{in: stdinWriter, out: bufio.NewReader(stdoutReader)}
 		handshake(t, stream)
