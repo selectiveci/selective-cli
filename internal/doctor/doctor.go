@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -28,8 +30,6 @@ const (
 	loginFix = "sel auth login --setup"
 	suiteFix = "sel suites create --name <name> --framework <type>"
 )
-
-var laterChecks = []string{"socket", "runner"}
 
 type Status string
 
@@ -60,6 +60,8 @@ type Options struct {
 	Org      string
 	Timeout  time.Duration
 	Repo     func() (string, error)
+	Root     func() (string, error)
+	OS       string
 }
 
 type state struct {
@@ -74,6 +76,8 @@ type state struct {
 	me      *api.Me
 	meErr   error
 	orgSlug string
+
+	suiteTypes []string
 
 	advertised advertised
 }
@@ -95,6 +99,12 @@ var steps = []step{
 func Run(opts Options) *Report {
 	if opts.Repo == nil {
 		opts.Repo = gitctx.Repo
+	}
+	if opts.Root == nil {
+		opts.Root = os.Getwd
+	}
+	if opts.OS == "" {
+		opts.OS = runtime.GOOS
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
@@ -123,9 +133,15 @@ func Run(opts Options) *Report {
 		}
 		report.Checks = append(report.Checks, c)
 	}
-	for _, name := range laterChecks {
-		report.Checks = append(report.Checks, Check{Name: name, Status: Skip, Message: "added in a later release"})
+	report.Checks = append(report.Checks, Check{Name: "socket", Status: Skip, Message: "added in a later release"})
+	runner := Check{Name: "runner", Status: Skip, Message: "skipped because the run's timeout expired"}
+	if !expired && ctx.Err() == nil {
+		if c := runWithin(ctx, s, step{"runner", "", (*state).checkRunner}); c.Status != Fail {
+			runner = c
+		}
 	}
+	expired = expired || runner.Status == Skip
+	report.Checks = append(report.Checks, runner)
 	switch by := blockedBy["server"]; {
 	case expired:
 		report.Checks = append(report.Checks, Check{Name: "cli_version", Status: Skip, Message: "skipped because the run's timeout expired"})
@@ -382,9 +398,12 @@ func (s *state) checkSuite() Check {
 		return failFrom("suite", err, "")
 	}
 	var matches []map[string]any
-	var names []string
+	var names, types []string
 	for _, su := range all {
 		if su.Repo != nil && strings.EqualFold(*su.Repo, repo) {
+			if su.Type != nil && *su.Type != "" {
+				types = append(types, *su.Type)
+			}
 			matches = append(matches, map[string]any{"name": su.Name, "type": su.Type, "last_run_at": su.LastRunAt})
 			names = append(names, su.Name)
 		}
@@ -392,6 +411,7 @@ func (s *state) checkSuite() Check {
 	if len(matches) == 0 {
 		return fail("suite", contract.SuiteNotFound, fmt.Sprintf("no suite for %s in %s", repo, s.orgSlug), suiteFix)
 	}
+	s.suiteTypes = types
 	return Check{
 		Name:    "suite",
 		Status:  OK,

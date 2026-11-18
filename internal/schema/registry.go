@@ -50,6 +50,7 @@ var events = []Event{
 	{"done", "cli"},
 	{"approved", "cli"},
 	{"test_pass", "cli"},
+	{"iteration_end", "cli"},
 	{"authorize", "cli"},
 	{"logged_in", "cli"},
 }

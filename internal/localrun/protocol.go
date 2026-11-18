@@ -44,6 +44,7 @@ type Selector func(context.Context, Manifest) (Selection, error)
 type Options struct {
 	Selector       Selector
 	Passes         bool
+	Iteration      int
 	List           bool
 	Paths          []string
 	Timeout        time.Duration
@@ -149,8 +150,8 @@ func (r *run) handle(ctx context.Context, frame inbound) (bool, error) {
 			return false, contract.Errorf(contract.RunnerError, "the test runner reported its finish with %d selected tests still outstanding", len(r.outstanding))
 		}
 		r.sum.MS = time.Since(r.start).Milliseconds()
-		r.event("summary", summaryFields(r.sum))
-		r.sum.Reported = true
+		r.event(r.endEvent())
+		r.sum.Reported = r.opts.Iteration == 0
 		return true, nil
 	}
 	return false, nil

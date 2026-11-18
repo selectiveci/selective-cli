@@ -37,6 +37,8 @@ func ran(marker string) bool {
 	return err == nil
 }
 
+var neverListedTools = []string{"help", "mcp", "auth_login"}
+
 func TestMCPHiddenToolsCannotBeCalledAndRunNothingWhileListedOnesDo(t *testing.T) {
 	everyTool := slices.Concat(readTools, writeTools, destructiveTools, localExecTools)
 	calls := map[string]map[string]any{}
@@ -59,6 +61,29 @@ func TestMCPHiddenToolsCannotBeCalledAndRunNothingWhileListedOnesDo(t *testing.T
 				t.Errorf("%s: hidden %s: err = %v, ran = %v, want invalid params and no run", name, tool, err, ran(marker))
 			}
 			_ = os.Remove(marker)
+		}
+		for _, tool := range neverListedTools {
+			_, err := runner.Run(context.Background(), tool, json.RawMessage(`{}`))
+			if !isInvalidParams(err) || ran(marker) {
+				t.Errorf("%s: never-listed %s: err = %v, ran = %v, want invalid params and no run", name, tool, err, ran(marker))
+			}
+			_ = os.Remove(marker)
+		}
+	}
+}
+
+func TestMCPNeverListedToolsAreRealCommandsTheTestCanReach(t *testing.T) {
+	doc, err := schema.Build(newRoot(), version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := map[string]bool{}
+	for _, c := range doc.Commands {
+		present[c.Path] = c.Runnable
+	}
+	for _, path := range []string{"help", "auth login"} {
+		if !present[path] {
+			t.Errorf("%q is not a runnable command in the tree, so hiding it proves nothing", path)
 		}
 	}
 }
