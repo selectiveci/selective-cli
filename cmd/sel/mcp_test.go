@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -109,14 +110,19 @@ func TestMCPCommandServesTheToolsOfItsModeAndExitsZeroWhenStdinCloses(t *testing
 	}
 	for _, c := range cases {
 		root := newRoot()
-		stdinReader, stdinWriter := io.Pipe()
-		stdoutReader, stdoutWriter := io.Pipe()
+		stdinReader, stdinWriter, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdoutReader, stdoutWriter, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
 		root.SetIn(stdinReader)
 		exit := make(chan int, 1)
 		go func() {
 			exit <- run(root, append([]string{"mcp"}, c.args...), stdoutWriter, io.Discard)
 			_ = stdoutWriter.Close()
-			_ = stdinReader.Close()
 		}()
 		stream := frameStream{in: stdinWriter, out: bufio.NewReader(stdoutReader)}
 		handshake(t, stream)
