@@ -26,7 +26,7 @@ const (
 	e2eSeedVariable = "SELECTIVE_E2E_MCP_SEED"
 	e2eVenvVariable = "SELECTIVE_E2E_MCP_VENV"
 	timeoutSeconds  = 2
-	x14Bound        = timeoutSeconds*time.Second + localrun.ShutdownBudget + time.Second
+	x14Bound        = timeoutSeconds*time.Second + localrun.ShutdownBudget
 )
 
 type e2eSeed struct {
@@ -112,6 +112,9 @@ func toolCount(t *testing.T, session *mcp.ClientSession) int {
 
 func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) (*mcp.CallToolResult, error) {
 	t.Helper()
+	if args == nil {
+		args = map[string]any{}
+	}
 	return session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
 }
 
@@ -155,7 +158,7 @@ func TestMCPStdioE2EListsEachModeAndRelaysRealServerResults(t *testing.T) {
 	}
 
 	denied := startMCP(t, seed, binary, seed.ReadToken, cwd, nil)
-	created, err := callTool(t, denied, "suites_create", map[string]any{"name": "c3-denied-" + strconv.FormatInt(time.Now().UnixNano(), 36)})
+	created, err := callTool(t, denied, "suites_create", map[string]any{"name": "c3-denied-" + strconv.FormatInt(time.Now().UnixNano(), 36), "repo": "acme/sel285"})
 	if err != nil || !created.IsError || exitCodeOf(created) != float64(6) {
 		t.Errorf("read-only token on suites_create: err = %v, result = %+v, want isError with exit_code 6", err, created)
 	}
@@ -170,7 +173,7 @@ func TestMCPStdioE2EListsEachModeAndRelaysRealServerResults(t *testing.T) {
 	if err != nil || readOrgs.IsError || exitCodeOf(readOrgs) != float64(0) {
 		t.Errorf("read-only: orgs: err = %v, result = %+v, want it to run", err, readOrgs)
 	}
-	expectRefused(t, "read-only", readOnly, "suites_create", map[string]any{"name": "c3-hidden-" + strconv.FormatInt(time.Now().UnixNano(), 36)})
+	expectRefused(t, "read-only", readOnly, "suites_create", map[string]any{"name": "c3-hidden-" + strconv.FormatInt(time.Now().UnixNano(), 36), "repo": "acme/sel285"})
 	expectRefused(t, "read-only", readOnly, "suites_delete", map[string]any{"suite": seed.Keep, "yes": true})
 	expectRefused(t, "read-only", readOnly, "test", nil)
 	expectRefused(t, "allow-destructive", allowed, "help", nil)
@@ -264,12 +267,12 @@ func TestMCPStdioE2ETestToolTimeoutKillsARunnerThatIgnoresSignalsWithinTheBudget
 	if err != nil {
 		t.Fatalf("test tool: %v", err)
 	}
-	t.Logf("test tool returned after %s (bound %s): isError=%v meta=%v", elapsed, x14Bound, res.IsError, res.Meta)
+	t.Logf("test tool returned after %s (bound %s): isError=%v meta=%v structured=%v", elapsed, x14Bound, res.IsError, res.Meta, res.StructuredContent)
 	if !res.IsError || exitCodeOf(res) != float64(8) {
 		t.Errorf("result = %+v, want a timeout tool error with exit_code 8", res)
 	}
 	if elapsed >= x14Bound {
-		t.Errorf("the call took %s, want under %s (timeout_s %d + localrun.ShutdownBudget %s + 1s)", elapsed, x14Bound, timeoutSeconds, localrun.ShutdownBudget)
+		t.Errorf("the call took %s, want under %s (timeout_s %d + localrun.ShutdownBudget %s)", elapsed, x14Bound, timeoutSeconds, localrun.ShutdownBudget)
 	}
 	body, err := os.ReadFile(pidFile)
 	if err != nil {
