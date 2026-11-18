@@ -66,6 +66,15 @@ func summaryFields(s Summary) map[string]any {
 	}
 }
 
+func (r *run) endEvent() (string, map[string]any) {
+	if r.opts.Iteration == 0 {
+		return "summary", summaryFields(r.sum)
+	}
+	fields := summaryFields(r.sum)
+	fields["iteration"] = r.opts.Iteration
+	return "iteration_end", fields
+}
+
 func WriteInterruptedSummary(events io.Writer, sum Summary) error {
 	fields := summaryFields(sum)
 	fields["interrupted"] = true
