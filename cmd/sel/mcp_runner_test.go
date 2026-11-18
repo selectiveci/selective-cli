@@ -135,8 +135,15 @@ func TestMCPRunnerRejectsIntegerLexemesThatFloatRoundingWouldAccept(t *testing.T
 	}
 }
 
-func TestMCPToolsMakeNoReleaseRequestsWhenAnUpdateCheckIsDue(t *testing.T) {
-	var requests atomic.Int32
+type dueUpdate struct {
+	binary   string
+	requests *atomic.Int32
+	seed     func()
+}
+
+func dueUpdateCheck(t *testing.T) dueUpdate {
+	t.Helper()
+	requests := &atomic.Int32{}
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		http.NotFound(w, nil)
@@ -167,6 +174,12 @@ func TestMCPToolsMakeNoReleaseRequestsWhenAnUpdateCheckIsDue(t *testing.T) {
 	t.Setenv("SELECTIVE_HOST", "127.0.0.1:1")
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
 	seed()
+	return dueUpdate{binary: binary, requests: requests, seed: seed}
+}
+
+func TestMCPToolsMakeNoReleaseRequestsWhenAnUpdateCheckIsDue(t *testing.T) {
+	due := dueUpdateCheck(t)
+	binary, requests, seed := due.binary, due.requests, due.seed
 	if out, err := exec.Command(binary, "version", "--json").CombinedOutput(); err != nil || requests.Load() == 0 {
 		t.Fatalf("control: a due check made %d release requests (err %v): %s", requests.Load(), err, out)
 	}
