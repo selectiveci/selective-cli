@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -42,7 +43,8 @@ flags cannot be combined.`,
 			server := mcpserver.New(doc, exposure, mcpserver.NewRunner(doc, exe, exposure).Handler())
 			transport := &mcp.IOTransport{Reader: io.NopCloser(cmd.InOrStdin()), Writer: unclosable{cmd.OutOrStdout()}}
 			if err := server.Run(cmd.Context(), transport); err != nil && !errors.Is(err, io.EOF) {
-				return contract.Errorf(contract.InternalError, "mcp server stopped: %v", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Error: mcp server stopped: %v\n", err)
+				return exitCode(contract.ExitInternal)
 			}
 			return nil
 		},
