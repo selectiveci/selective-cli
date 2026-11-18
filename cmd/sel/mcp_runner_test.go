@@ -26,7 +26,7 @@ func realRunner(t *testing.T) (*mcpserver.Runner, schema.Document) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return mcpserver.NewRunner(doc, "/bin/sel"), doc
+	return mcpserver.NewRunner(doc, "/bin/sel", mcpserver.Exposure{AllowDestructive: true}), doc
 }
 
 func isInvalidParams(err error) bool {
@@ -171,7 +171,7 @@ func TestMCPToolsMakeNoReleaseRequestsWhenAnUpdateCheckIsDue(t *testing.T) {
 		t.Fatalf("control: a due check made %d release requests (err %v): %s", requests.Load(), err, out)
 	}
 	_, doc := realRunner(t)
-	runner := mcpserver.NewRunner(doc, binary)
+	runner := mcpserver.NewRunner(doc, binary, mcpserver.Exposure{AllowDestructive: true})
 
 	for _, tool := range []string{"version", "orgs"} {
 		seed()

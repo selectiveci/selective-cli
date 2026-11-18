@@ -15,7 +15,7 @@ import (
 
 func fixtureRunner(t *testing.T) *Runner {
 	t.Helper()
-	return NewRunner(fixtureDocument(t), "/bin/sel")
+	return NewRunner(fixtureDocument(t), "/bin/sel", Exposure{AllowDestructive: true})
 }
 
 func TestArgvOrdersCommandWordsJSONFlagsThenPositionals(t *testing.T) {

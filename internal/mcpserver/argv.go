@@ -29,7 +29,7 @@ type Runner struct {
 	commands map[string]schema.Command
 }
 
-func NewRunner(doc schema.Document, exe string) *Runner {
+func NewRunner(doc schema.Document, exe string, _ Exposure) *Runner {
 	commands := map[string]schema.Command{}
 	for _, c := range doc.Commands {
 		if exposed(c) {

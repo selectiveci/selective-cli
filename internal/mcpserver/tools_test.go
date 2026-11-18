@@ -45,7 +45,7 @@ func fixtureDocument(t *testing.T) schema.Document {
 func listed(t *testing.T) map[string]*mcp.Tool {
 	t.Helper()
 	tools := map[string]*mcp.Tool{}
-	for _, tool := range Tools(fixtureDocument(t)) {
+	for _, tool := range Tools(fixtureDocument(t), Exposure{AllowDestructive: true}) {
 		tools[tool.Name] = tool
 	}
 	return tools
@@ -132,7 +132,7 @@ func TestToolsLeaveOutTheFlagsNamedInSkipFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := properties(Tools(doc)[0])
+	got := properties(Tools(doc, Exposure{AllowDestructive: true})[0])
 
 	if _, ok := got["limit"]; !ok {
 		t.Errorf("show properties = %v, want limit", got)
