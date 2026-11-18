@@ -18,6 +18,7 @@ const (
 [ -n "$FAKE_OUT" ] && cat "$FAKE_OUT"
 [ -n "$FAKE_ERR" ] && cat "$FAKE_ERR" >&2
 [ -n "$FAKE_HOLD" ] && setsid sleep 5 &
+[ -n "$FAKE_TRAP" ] && { trap 'exit 130' TERM; sleep 30 & wait; }
 [ -n "$FAKE_HANG" ] && exec sleep 30
 exit "${FAKE_EXIT:-0}"
 `
@@ -33,6 +34,7 @@ type child struct {
 	exit     int
 	hang     bool
 	hold     bool
+	trap     bool
 }
 
 func errorLine(code string) string {
@@ -62,6 +64,7 @@ func callFake(t *testing.T, c child, timeoutSeconds int) *mcp.CallToolResult {
 	t.Setenv("FAKE_EXIT", strconv.Itoa(c.exit))
 	t.Setenv("FAKE_HANG", map[bool]string{true: "1"}[c.hang])
 	t.Setenv("FAKE_HOLD", map[bool]string{true: "1"}[c.hold])
+	t.Setenv("FAKE_TRAP", map[bool]string{true: "1"}[c.trap])
 	return callHandler(t, NewRunner(fakeDocument, exe, Exposure{}).Handler(), timeoutSeconds)
 }
 
