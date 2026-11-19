@@ -163,8 +163,35 @@ func TestEveryResultCarriesTheMetaIncludingErrorResults(t *testing.T) {
 	for _, tc := range resultCases {
 		m := meta(callFake(t, tc.c, 5))
 		_, isNumber := m["duration_ms"].(float64)
-		if m["command"] != "fake" || m["retryable"] != (tc.c.exit == 4) || !isNumber {
-			t.Errorf("%s: _meta.selective = %v, want command fake, retryable only for exit 4 and a duration", tc.name, m)
+		if m["command"] != "fake" || m["retryable"] != false || !isNumber {
+			t.Errorf("%s: _meta.selective = %v, want command fake, retryable false and a duration", tc.name, m)
+		}
+	}
+}
+
+func TestRetryableFollowsTheErrorCodeAndNotTheExit(t *testing.T) {
+	cases := []struct {
+		name string
+		c    child
+		want bool
+	}{
+		{"exit 4 with a real unauthorized", child{out: errorLine("unauthorized"), exit: 4}, false},
+		{"exit 4 with a real network_error", child{out: errorLine("network_error"), exit: 4}, true},
+		{"exit 4 with a real server_error", child{out: errorLine("server_error"), exit: 4}, true},
+		{"exit 4 with a real rate_limited", child{out: errorLine("rate_limited"), exit: 4}, true},
+		{"exit 4 with a real request_in_progress", child{out: errorLine("request_in_progress"), exit: 4}, true},
+		{"exit 4 with an empty stdout, synthesized network_error", child{exit: 4}, true},
+		{"exit 3 with a real not_found", child{out: errorLine("not_found"), exit: 3}, false},
+		{"exit 6 with a real forbidden", child{out: errorLine("forbidden"), exit: 6}, false},
+		{"exit 8 with a real timeout", child{out: errorLine("timeout"), exit: 8}, false},
+		{"exit 9 with an empty stdout, synthesized internal_error", child{exit: 9}, false},
+		{"exit 130 with an empty stdout, synthesized interrupted", child{exit: 130}, false},
+		{"exit 0 success", child{out: oneShot}, false},
+		{"exit 1 success ending with a summary", child{out: progress + summary, exit: 1}, false},
+	}
+	for _, tc := range cases {
+		if got := meta(callFake(t, tc.c, 5))["retryable"]; got != tc.want {
+			t.Errorf("%s: retryable = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

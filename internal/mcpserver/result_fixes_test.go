@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 const (
@@ -125,5 +126,43 @@ func TestATimeoutAlwaysEndsWithASynthesizedTimeoutAndKeepsWhatTheChildPrinted(t 
 		if !c.res.IsError || errorOf(c.res)["error"] != "timeout" || meta(c.res)["synthesized"] != true || meta(c.res)["exit_code"] != float64(8) || eventBeforeLast(c.res)[c.key] != c.value {
 			t.Errorf("%s: isError = %v, events = %v, meta = %v, want the child's line kept and a synthesized timeout last with exit_code 8", c.name, c.res.IsError, events, meta(c.res))
 		}
+	}
+}
+
+func TestASynthesizedMessageKeepsHTMLCharactersRawInTheContentText(t *testing.T) {
+	res := toolResult("orgs", Result{ExitCode: contract.ExitRetryable, Stderr: []byte("a<b>&c")}, 0)
+	if got := text(res); !strings.Contains(got, "a<b>&c") || strings.Contains(got, `\u00`) {
+		t.Errorf("content text = %s, want the characters < > & unescaped", got)
+	}
+}
+
+func selectiveMeta(res *mcp.CallToolResult) map[string]any {
+	return res.Meta["selective"].(map[string]any)
+}
+
+func TestAKilledChildWithOnlyAPartialLineEndsWithATimeoutNotTheCapOverflow(t *testing.T) {
+	res := toolResult("orgs", Result{Stdout: []byte(`{"v":1,"event":"prog`), Truncated: true, TimedOut: true}, 0)
+	var body struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(text(res)), &body); err != nil || len(body.Events) == 0 {
+		t.Fatalf("content text = %s (err %v), want an events body", text(res), err)
+	}
+	if last := body.Events[len(body.Events)-1]; last["error"] != "timeout" || selectiveMeta(res)["synthesized"] != true {
+		t.Errorf("last event = %v, want a synthesized timeout, not an internal_error naming the cap", last)
+	}
+}
+
+func TestExitSevenWithARealErrorThatDoesNotMapToSevenIsAToolError(t *testing.T) {
+	res := toolResult("orgs", Result{ExitCode: contract.ExitPending, Stdout: []byte(`{"v":1,"error":"network_error","message":"down"}` + "\n")}, 0)
+	if !res.IsError {
+		t.Errorf("exit 7 with a network_error object: isError = false, want true (%s)", text(res))
+	}
+}
+
+func TestAnExitZeroDocumentWithARetryableErrorStringIsNotRetryable(t *testing.T) {
+	res := toolResult("orgs", Result{Stdout: []byte(`{"v":1,"error":"network_error"}` + "\n")}, 0)
+	if res.IsError || selectiveMeta(res)["retryable"] != false {
+		t.Errorf("isError = %v, retryable = %v, want a plain result that is not retryable", res.IsError, selectiveMeta(res)["retryable"])
 	}
 }

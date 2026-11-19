@@ -38,7 +38,35 @@ func (r *Runner) Run(ctx context.Context, name string, raw json.RawMessage) (Res
 	if err != nil {
 		return Result{}, err
 	}
+	ctx, done, err := r.begin(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	defer done()
 	return execute(ctx, argv, timeout)
+}
+
+func (r *Runner) WithShutdown(ctx context.Context) *Runner {
+	r.shutdown = ctx
+	return r
+}
+
+func (r *Runner) Wait() {
+	r.gate.Lock()
+	defer r.gate.Unlock()
+	r.live.Wait()
+}
+
+func (r *Runner) begin(ctx context.Context) (context.Context, func(), error) {
+	r.gate.Lock()
+	defer r.gate.Unlock()
+	if err := r.shutdown.Err(); err != nil {
+		return nil, nil, err
+	}
+	r.live.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(r.shutdown, cancel)
+	return ctx, func() { stop(); cancel(); r.live.Done() }, nil
 }
 
 func execute(ctx context.Context, argv []string, timeout time.Duration) (Result, error) {

@@ -55,11 +55,3 @@ func TestDefaultCodesAreTheSevenErrorExitsAndEachCodeExitsWithItsOwnExit(t *test
 		t.Errorf("%d exits have a default code, want %d", found, len(want))
 	}
 }
-
-func TestOnlyExitFourIsRetryable(t *testing.T) {
-	for exit := -1; exit <= 255; exit++ {
-		if Retryable(exit) != (exit == 4) {
-			t.Errorf("Retryable(%d) = %v", exit, Retryable(exit))
-		}
-	}
-}

@@ -51,8 +51,11 @@ func toolResult(command string, res Result, elapsed time.Duration) *mcp.CallTool
 	overflow := len(lines) == 0 && res.Truncated && !res.TimedOut
 	isError := overflow || !isOutcome(exit, last)
 	synthesized := isError && (res.TimedOut || overflow || !isReal(last))
+	code, _ := last["error"].(string)
 	if synthesized {
-		lines = append(lines, synthesize(command, exit, res.Stderr, overflow))
+		var line json.RawMessage
+		line, code = synthesize(command, exit, res.Stderr, overflow)
+		lines = append(lines, line)
 	}
 	var body any = map[string]any{"events": lines, "truncated": res.Truncated}
 	if len(lines) == 1 && last["event"] == nil && !res.Truncated {
@@ -61,7 +64,7 @@ func toolResult(command string, res Result, elapsed time.Duration) *mcp.CallTool
 	text := encode(body)
 	selective := map[string]any{
 		"exit_code":   exit,
-		"retryable":   contract.Retryable(exit),
+		"retryable":   isError && contract.RetryableCode(contract.Code(code)),
 		"duration_ms": elapsed.Milliseconds(),
 		"command":     command,
 	}
@@ -121,7 +124,7 @@ func isReal(last map[string]any) bool {
 	return isError(last) || last["event"] == "summary"
 }
 
-func synthesize(command string, exit int, stderr []byte, overflow bool) json.RawMessage {
+func synthesize(command string, exit int, stderr []byte, overflow bool) (json.RawMessage, string) {
 	code, ok := contract.DefaultCode(exit)
 	if !ok || overflow {
 		code = contract.InternalError
@@ -133,6 +136,5 @@ func synthesize(command string, exit int, stderr []byte, overflow bool) json.Raw
 	if message == "" {
 		message = fmt.Sprintf("%s exited %d", command, exit)
 	}
-	line, _ := json.Marshal(map[string]any{"v": 1, "error": code, "message": message})
-	return line
+	return json.RawMessage(encode(map[string]any{"v": 1, "error": code, "message": message})), string(code)
 }

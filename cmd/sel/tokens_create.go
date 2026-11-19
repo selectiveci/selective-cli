@@ -63,7 +63,7 @@ the token's id and prefix and exits 9, so you can revoke it.`,
 		Example: "  sel tokens create --name ci --agent --org acme --repo acme/web --scope read --expires-in 90d --output ci.token\n" +
 			"  sel tokens create --name ci --stdout | pass insert -e selective/ci",
 		Args:        cobra.NoArgs,
-		Annotations: map[string]string{"exit_codes": "0,4,5,6,7,9", "mutates": "true", "secret_flags": "stdout"},
+		Annotations: map[string]string{"exit_codes": "0,4,5,6,7,9", "mutates": "true", "secret_flags": "stdout", "mcp_skip_flags": "no-approval,output"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, err := tokensEnv(cmd, &f)
 			if err != nil {
