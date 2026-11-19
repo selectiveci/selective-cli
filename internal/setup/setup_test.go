@@ -112,6 +112,37 @@ func TestKeyGoesDownAPipe(t *testing.T) {
 	}
 }
 
+func TestKeyDownAPipeSaysOnStderrItWasntDisplayedAndWhatItCanDo(t *testing.T) {
+	e, _ := env(t, oneOrg)
+	errOut := &bytes.Buffer{}
+	e.Stderr = errOut
+	if err := e.Key("acme", "rspec", KeyOptions{Stdout: true}); err != nil {
+		t.Fatal(err)
+	}
+	got := errOut.String()
+	if !strings.Contains(got, "without displaying it") || !strings.Contains(got, KeyScope) {
+		t.Errorf("stderr = %q", got)
+	}
+	if strings.Contains(got, secretKey) {
+		t.Fatal("key on stderr")
+	}
+}
+
+func TestKeyIntoGithubSecretSaysItWasntDisplayedAndWhatItCanDo(t *testing.T) {
+	e, out := env(t, oneOrg)
+	e.RunGh = func(string, ...string) error { return nil }
+	if err := e.Key("acme", "s-1", KeyOptions{GithubSecret: "SELECTIVE_API_KEY"}); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"without being displayed", "only lets test runners join this suite's runs",
+		"can't read your code", "rotate it on the suite's settings page"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout lacks %q: %q", want, got)
+		}
+	}
+}
+
 func TestKeyIntoGithubSecretOnlyOnStdin(t *testing.T) {
 	e, out := env(t, oneOrg)
 	e.StdoutIsTerminal = true
@@ -143,18 +174,21 @@ func TestKeyIntoGithubSecretReportsAnUpdateAsJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	var doc struct {
-		V      int    `json:"v"`
-		Result string `json:"result"`
-		DryRun *bool  `json:"dry_run"`
-		Secret string `json:"secret"`
-		Repo   string `json:"repo"`
-		Suite  string `json:"suite"`
+		V            int    `json:"v"`
+		Result       string `json:"result"`
+		DryRun       *bool  `json:"dry_run"`
+		Secret       string `json:"secret"`
+		Repo         string `json:"repo"`
+		Suite        string `json:"suite"`
+		KeyDisplayed *bool  `json:"key_displayed"`
+		KeyScope     string `json:"key_scope"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatalf("stdout = %q: %v", out.String(), err)
 	}
 	if doc.V != 1 || doc.Result != "updated" || doc.DryRun == nil || *doc.DryRun ||
-		doc.Secret != "SELECTIVE_API_KEY" || doc.Repo != "acme/web" || doc.Suite != "RSpec" {
+		doc.Secret != "SELECTIVE_API_KEY" || doc.Repo != "acme/web" || doc.Suite != "RSpec" ||
+		doc.KeyDisplayed == nil || *doc.KeyDisplayed || doc.KeyScope != KeyScope {
 		t.Errorf("stdout = %q", out.String())
 	}
 }

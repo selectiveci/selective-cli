@@ -266,6 +266,10 @@ func defaultBranch(selects *bool) string {
 	}
 }
 
+// KeyScope is what a suite API key can and can't do, shown wherever the key is handed on.
+const KeyScope = "A suite key only lets test runners join this suite's runs and report results: " +
+	"it can't read your code, your account, other suites or GitHub. If it leaks, rotate it on the suite's settings page."
+
 // KeyOptions say where `suites key` sends the key.
 type KeyOptions struct {
 	GithubSecret string // set this GitHub Actions secret, via gh
@@ -295,8 +299,11 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 		return err
 	}
 	if opts.Stdout {
-		_, err := io.WriteString(e.Stdout, key)
-		return err
+		if _, err := io.WriteString(e.Stdout, key); err != nil {
+			return err
+		}
+		fmt.Fprintf(e.Stderr, "✓ Wrote suite %q's API key to the pipe without displaying it.\n  %s\n", s.Name, KeyScope)
+		return nil
 	}
 
 	repo := opts.Repo
@@ -310,9 +317,11 @@ func (e *Env) Key(org, suite string, opts KeyOptions) error {
 		return fmt.Errorf("could not set the GitHub secret: %w", err)
 	}
 	if e.JSON {
-		return e.json(map[string]any{"secret": opts.GithubSecret, "repo": repo, "suite": s.Name, "result": "updated", "dry_run": false})
+		return e.json(map[string]any{"secret": opts.GithubSecret, "repo": repo, "suite": s.Name, "result": "updated", "dry_run": false,
+			"key_displayed": false, "key_scope": KeyScope})
 	}
 	fmt.Fprintf(e.Stdout, "✓ Set GitHub Actions secret %s on %s to suite %q's API key\n", opts.GithubSecret, repo, s.Name)
+	fmt.Fprintf(e.Stdout, "  The key went from Selective to GitHub without being displayed.\n  %s\n", KeyScope)
 	return nil
 }
 

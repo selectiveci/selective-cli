@@ -327,7 +327,11 @@ appearing on screen.
   --stdout               write the key to stdout, piped straight into a
                          secret store; never to a terminal
 
-One of the two is required.`,
+One of the two is required.
+
+A suite key only lets test runners join this suite's runs and report
+results: it can't read your code, your account, other suites or GitHub.
+If it leaks, rotate it on the suite's settings page.`,
 		Example: `  sel suites key rspec --github-secret SELECTIVE_API_KEY
   sel suites key rspec --stdout | rwx vaults secrets set SELECTIVE_API_KEY`,
 		Args: cobra.ExactArgs(1),

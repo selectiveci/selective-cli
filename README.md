@@ -85,7 +85,11 @@ sel suites key web-rspec --github-secret SELECTIVE_API_KEY
   Actions secret through `gh` (key on stdin) with `--github-secret NAME`, or
   `--stdout` piped into a secret store:
   `sel suites key web-rspec --stdout | <your CI's secret command>`.
-  `--stdout` refuses a terminal.
+  `--stdout` refuses a terminal. Either way it confirms the key wasn't
+  displayed.
+- **What a suite key can do.** It only lets test runners join that suite's
+  runs and report results. It can't read your code, your account, other
+  suites or GitHub. If one leaks, rotate it on the suite's settings page.
 - **Output.** JSON when piped or with `--json`, tables on a terminal.
 - `SELECTIVE_ORG` sets the organization for these commands.
 
