@@ -17,13 +17,18 @@ import (
 
 func listedTools(t *testing.T, root *cobra.Command) []*mcp.Tool {
 	t.Helper()
+	return listedToolsIn(t, root, mcpserver.Exposure{AllowDestructive: true})
+}
+
+func listedToolsIn(t *testing.T, root *cobra.Command, exposure mcpserver.Exposure) []*mcp.Tool {
+	t.Helper()
 	doc, err := schema.Build(root, version)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 	serverSide, clientSide := mcp.NewInMemoryTransports()
-	session, err := mcpserver.New(doc, nil).Connect(ctx, serverSide, nil)
+	session, err := mcpserver.New(doc, exposure, nil).Connect(ctx, serverSide, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

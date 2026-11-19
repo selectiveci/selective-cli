@@ -10,22 +10,37 @@ import (
 
 var neverExposed = []string{"json", "hostname"}
 
-func New(doc schema.Document, call mcp.ToolHandler) *mcp.Server {
+type Exposure struct {
+	ReadOnly         bool
+	AllowDestructive bool
+}
+
+func New(doc schema.Document, exposure Exposure, call mcp.ToolHandler) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "selective", Version: doc.Version}, nil)
-	for _, tool := range Tools(doc) {
+	for _, tool := range Tools(doc, exposure) {
 		server.AddTool(tool, call)
 	}
 	return server
 }
 
-func Tools(doc schema.Document) []*mcp.Tool {
+func Tools(doc schema.Document, exposure Exposure) []*mcp.Tool {
 	var tools []*mcp.Tool
 	for _, c := range doc.Commands {
-		if exposed(c) {
+		if exposure.lists(c) {
 			tools = append(tools, tool(c))
 		}
 	}
 	return tools
+}
+
+func (e Exposure) lists(c schema.Command) bool {
+	if !exposed(c) {
+		return false
+	}
+	if e.ReadOnly {
+		return !c.Mutates && !c.Destructive && !c.LocalExec
+	}
+	return e.AllowDestructive || !c.Destructive
 }
 
 func exposed(c schema.Command) bool {

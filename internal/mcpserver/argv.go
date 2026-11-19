@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,10 +30,10 @@ type Runner struct {
 	commands map[string]schema.Command
 }
 
-func NewRunner(doc schema.Document, exe string) *Runner {
+func NewRunner(doc schema.Document, exe string, exposure Exposure) *Runner {
 	commands := map[string]schema.Command{}
 	for _, c := range doc.Commands {
-		if exposed(c) {
+		if exposure.lists(c) {
 			commands[toolName(c.Path)] = c
 		}
 	}
@@ -161,6 +162,9 @@ func flagArgv(f schema.Flag, value any) ([]string, error) {
 		}
 		out := make([]string, len(items))
 		for i, item := range items {
+			if f.Type == "stringSlice" && !survivesStringSlice(item) {
+				return nil, invalidParams("%s element %q would be split or altered by the command's list parsing", key, item)
+			}
 			out[i] = flag + "=" + item
 		}
 		return out, nil
@@ -170,6 +174,11 @@ func flagArgv(f schema.Flag, value any) ([]string, error) {
 		return nil, invalidParams("%s must be a string", key)
 	}
 	return []string{flag + "=" + s}, nil
+}
+
+func survivesStringSlice(item string) bool {
+	record, err := csv.NewReader(strings.NewReader(item)).Read()
+	return err == nil && len(record) == 1 && record[0] == item
 }
 
 func positionalArgv(key string, a schema.Arg, value any) ([]string, error) {

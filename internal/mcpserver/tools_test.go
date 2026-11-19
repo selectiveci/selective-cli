@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"reflect"
 	"slices"
 	"testing"
@@ -45,7 +46,7 @@ func fixtureDocument(t *testing.T) schema.Document {
 func listed(t *testing.T) map[string]*mcp.Tool {
 	t.Helper()
 	tools := map[string]*mcp.Tool{}
-	for _, tool := range Tools(fixtureDocument(t)) {
+	for _, tool := range Tools(fixtureDocument(t), Exposure{AllowDestructive: true}) {
 		tools[tool.Name] = tool
 	}
 	return tools
@@ -132,7 +133,7 @@ func TestToolsLeaveOutTheFlagsNamedInSkipFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := properties(Tools(doc)[0])
+	got := properties(Tools(doc, Exposure{AllowDestructive: true})[0])
 
 	if _, ok := got["limit"]; !ok {
 		t.Errorf("show properties = %v, want limit", got)
@@ -140,6 +141,51 @@ func TestToolsLeaveOutTheFlagsNamedInSkipFlags(t *testing.T) {
 	for _, name := range []string{"text", "format"} {
 		if _, ok := got[name]; ok {
 			t.Errorf("show exposes %q", name)
+		}
+	}
+}
+
+func TestExposureListsEachAnnotationCombinationPerMode(t *testing.T) {
+	type flags struct{ mutates, destructive, localExec bool }
+	modes := []struct {
+		name     string
+		exposure Exposure
+	}{
+		{"default", Exposure{}},
+		{"allow-destructive", Exposure{AllowDestructive: true}},
+		{"read-only", Exposure{ReadOnly: true}},
+		{"read-only and allow-destructive", Exposure{ReadOnly: true, AllowDestructive: true}},
+	}
+	cases := []struct {
+		name string
+		f    flags
+		want [4]bool
+	}{
+		{"read", flags{}, [4]bool{true, true, true, true}},
+		{"mutates", flags{mutates: true}, [4]bool{true, true, false, false}},
+		{"destructive only", flags{destructive: true}, [4]bool{false, true, false, false}},
+		{"mutates and destructive", flags{mutates: true, destructive: true}, [4]bool{false, true, false, false}},
+		{"local exec", flags{localExec: true}, [4]bool{true, true, false, false}},
+		{"local exec and destructive", flags{localExec: true, destructive: true}, [4]bool{false, true, false, false}},
+	}
+	for _, c := range cases {
+		command := schema.Command{Path: "x", Runnable: true, Mutates: c.f.mutates, Destructive: c.f.destructive, LocalExec: c.f.localExec}
+		for i, m := range modes {
+			if got := m.exposure.lists(command); got != c.want[i] {
+				t.Errorf("%s in %s: listed = %v, want %v", c.name, m.name, got, c.want[i])
+			}
+		}
+	}
+}
+
+func TestRunnerRefusesHelpMcpAndSkippedCommandsInEveryMode(t *testing.T) {
+	doc := fixtureDocument(t)
+	for _, exposure := range []Exposure{{}, {AllowDestructive: true}, {ReadOnly: true}, {ReadOnly: true, AllowDestructive: true}} {
+		runner := NewRunner(doc, "/bin/sel", exposure)
+		for _, name := range []string{"help", "mcp", "login"} {
+			if argv, err := runner.Argv(name, json.RawMessage(`{}`)); err == nil {
+				t.Errorf("%+v: %s ran with argv %v, want it refused", exposure, name, argv)
+			}
 		}
 	}
 }

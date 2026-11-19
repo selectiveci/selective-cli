@@ -152,7 +152,7 @@ func helperRunner() *Runner {
 		command("whole"),
 		command("exit", schema.Flag{Name: "code", Type: "int"}),
 		command("flood", schema.Flag{Name: "lines", Type: "int"}, schema.Flag{Name: "width", Type: "int"}),
-	}}, os.Args[0])
+	}}, os.Args[0], Exposure{AllowDestructive: true})
 }
 
 func runHelper(t *testing.T, tool, args string, timeoutSeconds int) (Result, time.Duration) {
