@@ -34,7 +34,7 @@ var exitCodes = []ExitCode{
 	{contract.ExitPending, "Pending approval: a person must approve (pending_approval), or the approval expired and must be requested again (approval_expired).", false},
 	{contract.ExitTimeout, "Timeout: the thing exists but did not finish in time (timeout).", false},
 	{contract.ExitInternal, "Internal: an unclassified CLI failure (internal_error). Do not retry blindly.", false},
-	{contract.ExitInterrupted, "Interrupted (SIGINT).", false},
+	{contract.ExitInterrupted, "Interrupted (SIGINT): interrupted.", false},
 }
 
 var events = []Event{

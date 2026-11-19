@@ -27,6 +27,7 @@ var (
 
 type Result struct {
 	Stdout    []byte
+	Stderr    []byte
 	ExitCode  int
 	Truncated bool
 	TimedOut  bool
@@ -51,14 +52,27 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 		return Result{}, fmt.Errorf("run %s: %w", argv[0], err)
 	}
 	defer reader.Close()
+	errReader, errWriter, err := os.Pipe()
+	if err != nil {
+		_ = writer.Close()
+		return Result{}, fmt.Errorf("run %s: %w", argv[0], err)
+	}
+	defer errReader.Close()
 	cmd := exec.CommandContext(deadline, argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), update.OptOutVariable+"=1")
 	cmd.Stdout = writer
+	cmd.Stderr = errWriter
 	stdout := &capped{limit: stdoutCap}
 	drained := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(stdout, reader)
 		close(drained)
+	}()
+	stderr := &tail{}
+	errDrained := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(stderr, errReader)
+		close(errDrained)
 	}()
 	var cancelled, timedOut atomic.Bool
 	finished := make(chan struct{})
@@ -67,6 +81,7 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	isolate(cmd)
 	startErr := cmd.Start()
 	_ = writer.Close()
+	_ = errWriter.Close()
 	if startErr != nil {
 		return Result{}, fmt.Errorf("run %s: %w", argv[0], startErr)
 	}
@@ -75,25 +90,32 @@ func execute(ctx context.Context, argv []string, timeout time.Duration) (Result,
 	if cancelled.Load() {
 		_ = killTree(cmd)
 	}
-	held := false
-	select {
-	case <-drained:
-	case <-time.After(pipeDrainWindow):
-		held = true
-		_ = killTree(cmd)
-		_ = reader.Close()
-		<-drained
-	}
+	drainBy := time.Now().Add(pipeDrainWindow)
+	held := drain(drained, reader, cmd, drainBy)
+	drain(errDrained, errReader, cmd, drainBy)
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
 	out, truncated := stdout.result(held, timedOut.Load())
 	return Result{
 		Stdout:    out,
+		Stderr:    stderr.buf,
 		ExitCode:  cmd.ProcessState.ExitCode(),
 		Truncated: truncated,
 		TimedOut:  timedOut.Load(),
 	}, nil
+}
+
+func drain(done <-chan struct{}, r *os.File, cmd *exec.Cmd, by time.Time) bool {
+	select {
+	case <-done:
+		return false
+	case <-time.After(time.Until(by)):
+		_ = killTree(cmd)
+		_ = r.Close()
+		<-done
+		return true
+	}
 }
 
 func cancelGroup(cmd *exec.Cmd, ctx context.Context, cancelled, timedOut *atomic.Bool, finished <-chan struct{}) func() error {

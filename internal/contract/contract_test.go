@@ -15,7 +15,7 @@ func TestRegistryExitCodes(t *testing.T) {
 		"cannot_change_own_role": 5, "request_in_progress": 4, "rate_limited": 4,
 		"server_error": 4, "pending_approval": 7, "approval_expired": 7, "network_error": 4,
 		"usage_error": 5, "timeout": 8, "internal_error": 9,
-		"runner_error": 1, "no_framework": 5, "runner_missing": 5,
+		"runner_error": 1, "no_framework": 5, "runner_missing": 5, "interrupted": 130,
 	}
 	for code, exit := range want {
 		if got := ExitFor(code, 0); got != exit {
@@ -34,6 +34,32 @@ func TestUnknownCodeFallsBackToItsHTTPStatus(t *testing.T) {
 	for status, exit := range cases {
 		if got := ExitFor("a_code_nobody_registered", status); got != exit {
 			t.Errorf("status %d: exit %d, want %d", status, got, exit)
+		}
+	}
+}
+
+func TestDefaultCodesAreTheSevenErrorExitsAndEachCodeExitsWithItsOwnExit(t *testing.T) {
+	want := map[int]Code{3: "not_found", 4: "network_error", 5: "usage_error", 6: "forbidden", 8: "timeout", 9: "internal_error", 130: "interrupted"}
+	found := 0
+	for exit := 0; exit <= 255; exit++ {
+		code, ok := DefaultCode(exit)
+		if !ok {
+			continue
+		}
+		found++
+		if code != want[exit] || ExitFor(code, 0) != exit {
+			t.Errorf("DefaultCode(%d) = %q, ExitFor = %d, want %q", exit, code, ExitFor(code, 0), want[exit])
+		}
+	}
+	if found != len(want) {
+		t.Errorf("%d exits have a default code, want %d", found, len(want))
+	}
+}
+
+func TestOnlyExitFourIsRetryable(t *testing.T) {
+	for exit := -1; exit <= 255; exit++ {
+		if Retryable(exit) != (exit == 4) {
+			t.Errorf("Retryable(%d) = %v", exit, Retryable(exit))
 		}
 	}
 }
