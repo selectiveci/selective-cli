@@ -20,9 +20,12 @@ Or build from source with Go 1.23+: `go build -o sel ./cmd/sel`.
 sel auth login
 ```
 
-This prints a one-time code and opens your browser; approve the request there
-and you're logged in. When there's no browser (SSH, containers, remote boxes),
-it prints the URL to open on any machine where you're signed in to Selective.
+This prints a one-time code and the URL, and opens your browser to it; approve
+the request there and you're logged in. It opens the browser from an agent's
+shell too (Claude Code's `!`, a background command). It doesn't open one over
+SSH, in CI, or on Linux without a display; open the printed URL on any machine
+where you're signed in to Selective. `--no-browser` or `SELECTIVE_NO_BROWSER=1`
+turns it off, and `$BROWSER` picks the program (and opens over SSH).
 It's the OAuth 2.0 device authorization grant (RFC 8628), the same flow as
 `gh auth login`.
 
@@ -74,10 +77,12 @@ sel suites key web-rspec --github-secret SELECTIVE_API_KEY
 ```
 
 - **For agents.** `sel auth login --setup --json` writes
-  `{"event":"authorize","url":…,"user_code":…}` to stdout at once and
-  `{"event":"logged_in",…}` the moment the person approves. Run it in the
-  background, hand the person the URL, and wait for the second line. Without an
-  account, the page signs them up with GitHub first.
+  `{"event":"authorize","url":…,"user_code":…,"browser_opened":…}` to stdout
+  at once and `{"event":"logged_in",…}` the moment the person approves. Run it
+  in the background and wait for the second line. `browser_opened` says whether
+  a browser was launched; tell the person to look for the tab, and give them
+  the URL either way. Without an account, the page signs them up with GitHub
+  first.
 - **`suites create` is repeatable.** The same name returns the same suite.
   Names are unique within an organization, so include the repository in the
   name when the organization has several.

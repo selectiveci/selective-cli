@@ -53,8 +53,9 @@ func authLoginCmd() *cobra.Command {
 		Short: "Log in through your browser",
 		Long: `Log in to Selective.
 
-Prints a one-time code and opens your browser (or prints the URL when there
-isn't one: SSH, containers, CI). Without an account, the page signs you up
+Prints a one-time code and the URL, and opens your browser to it, also from
+an agent's shell. It doesn't open one over SSH, in CI, or without a display;
+--no-browser or SELECTIVE_NO_BROWSER=1 turns it off. Without an account, the page signs you up
 with GitHub first. Approve the request there and the CLI is logged in. The
 token is stored in your system keychain and appears on your API tokens
 page, where you can revoke it.
@@ -62,7 +63,7 @@ page, where you can revoke it.
 --setup also lets the CLI create suites and read their API keys, for
 setting a repository up. --write also lets it make changes: revoke tokens,
 and the write commands as they ship. --json writes events to stdout as they happen
-(first the URL to open, then the login), for an agent to read while the
+(first the URL to open and whether a browser was launched, then the login), for an agent to read while the
 command waits.
 
 For scripts, pass a token on stdin instead:
