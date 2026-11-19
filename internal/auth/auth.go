@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/mattn/go-isatty"
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/browser"
 	"github.com/selectiveci/selective-cli/internal/config"
@@ -115,24 +114,24 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	opts.emit(map[string]any{
-		"event":      "authorize",
-		"url":        code.VerificationURIComplete,
-		"user_code":  code.UserCode,
-		"expires_in": code.ExpiresIn,
-		"scope":      code.Scope,
-	})
-	fmt.Fprintf(opts.Stderr, "! First copy your one-time code: %s\n", code.UserCode)
-	opened := !opts.NoBrowser && isatty.IsTerminal(os.Stderr.Fd()) && browser.Open(code.VerificationURIComplete)
-	if opened {
-		fmt.Fprintf(opts.Stderr, "Opened %s in your browser.\n", code.VerificationURIComplete)
-	} else {
-		action := "sign in, or create an account,"
-		if opts.Signup {
-			action = "create your Selective account with GitHub"
-		}
-		fmt.Fprintf(opts.Stderr, "Open this URL in a browser to %s and authorize the CLI:\n  %s\n", action, code.VerificationURIComplete)
+	action := "sign in, or create an account,"
+	if opts.Signup {
+		action = "create your Selective account with GitHub"
 	}
+	fmt.Fprintf(opts.Stderr, "! First copy your one-time code: %s\n", code.UserCode)
+	fmt.Fprintf(opts.Stderr, "Open this URL in a browser to %s and authorize the CLI:\n  %s\n", action, code.VerificationURIComplete)
+	opened := !opts.NoBrowser && openBrowser(code.VerificationURIComplete)
+	if opened {
+		fmt.Fprintln(opts.Stderr, "Opened it in your browser. If no page appeared, open the URL above.")
+	}
+	opts.emit(map[string]any{
+		"event":          "authorize",
+		"url":            code.VerificationURIComplete,
+		"user_code":      code.UserCode,
+		"expires_in":     code.ExpiresIn,
+		"scope":          code.Scope,
+		"browser_opened": opened,
+	})
 	fmt.Fprintln(opts.Stderr, "Waiting for you to authorize the CLI… (Ctrl+C to cancel)")
 	grant, err := client.Wait(ctx, code)
 	if errors.Is(err, context.Canceled) {
@@ -151,6 +150,8 @@ func loginErrorCode(err error) string {
 	}
 	return "login_failed"
 }
+
+var openBrowser = browser.Open
 
 var errCancelled = errors.New("login cancelled")
 

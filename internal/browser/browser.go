@@ -7,37 +7,76 @@ import (
 	"runtime"
 )
 
+const OptOutVariable = "SELECTIVE_NO_BROWSER"
+
+// CODESPACES is not here: Codespaces sets $BROWSER to a helper that opens
+// the page on the person's own machine.
+var ciVariables = []string{"CI", "GITHUB_ACTIONS", "BUILD_NUMBER", "RUN_ID"}
+
+var sshVariables = []string{"SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"}
+
 // Open tries to open url and reports whether a browser was launched.
-// It never fails the caller: over SSH, in a container or in CI there is no
-// browser, and the URL printed alongside is the fallback.
+// The launch is decided by the environment, not by whether stdio is a
+// terminal: an agent's shell pipes both, yet a person is at the screen.
 func Open(url string) bool {
-	cmd := command(url)
-	if cmd == nil {
+	argv := Command(url, runtime.GOOS, os.Getenv, exec.LookPath)
+	if argv == nil {
 		return false
 	}
-	return cmd.Start() == nil
+	cmd := exec.Command(argv[0], argv[1:]...)
+	// Nil stdio is /dev/null, so the opener can't hold an agent's output
+	// pipe open after sel exits.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+	go func() { _ = cmd.Wait() }()
+	return true
 }
 
-func command(url string) *exec.Cmd {
-	if b := os.Getenv("BROWSER"); b != "" {
-		return exec.Command(b, url)
+// Command returns the argv that opens url on goos, or nil when there is no
+// browser to open: opted out, CI, SSH, or no display.
+func Command(url, goos string, getenv func(string) string, lookPath func(string) (string, error)) []string {
+	if getenv(OptOutVariable) != "" || anySet(getenv, ciVariables) {
+		return nil
 	}
-	switch runtime.GOOS {
-	case "darwin":
-		if os.Getenv("SSH_CONNECTION") != "" {
-			return nil
-		}
-		return exec.Command("open", url)
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		// No display, no browser.
-		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
-			return nil
-		}
-		if path, err := exec.LookPath("xdg-open"); err == nil {
-			return exec.Command(path, url)
+	if b := getenv("BROWSER"); b != "" {
+		if path, err := lookPath(b); err == nil {
+			return []string{path, url}
 		}
 		return nil
 	}
+	if anySet(getenv, sshVariables) {
+		return nil
+	}
+	switch goos {
+	case "darwin":
+		return []string{"open", url}
+	case "windows":
+		// Not `cmd /c start`: cmd treats the & between query parameters as
+		// a command separator.
+		return []string{"rundll32", "url.dll,FileProtocolHandler", url}
+	}
+	if getenv("WSL_DISTRO_NAME") != "" {
+		if path, err := lookPath("wslview"); err == nil {
+			return []string{path, url}
+		}
+	}
+	if getenv("DISPLAY") == "" && getenv("WAYLAND_DISPLAY") == "" {
+		return nil
+	}
+	if path, err := lookPath("xdg-open"); err == nil {
+		return []string{path, url}
+	}
+	return nil
+}
+
+func anySet(getenv func(string) string, names []string) bool {
+	for _, name := range names {
+		if getenv(name) != "" {
+			return true
+		}
+	}
+	return false
 }
