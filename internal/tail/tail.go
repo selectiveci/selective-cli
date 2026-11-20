@@ -30,6 +30,9 @@ type Options struct {
 	Wait    time.Duration
 	Timeout time.Duration
 	Started time.Time
+
+	Retries        int
+	IdempotencyKey string
 }
 
 func Run(client *api.Client, opts Options) (int, error) {
@@ -59,7 +62,25 @@ func Run(client *api.Client, opts Options) (int, error) {
 		}
 	}
 
+	if opts.Retries > 0 {
+		if err := setRetryBudget(ctx, client, buildID, opts); err != nil {
+			return refuse(deadlineCause(ctx, err))
+		}
+	}
+
 	return stream(ctx, opts.Started, client.Host, client.Token, buildID, opts.Format)
+}
+
+func setRetryBudget(ctx context.Context, client *api.Client, buildID string, opts Options) error {
+	written, err := client.WithContext(ctx).SetRetryBudget(buildID, opts.IdempotencyKey, opts.Retries)
+	if err != nil {
+		return err
+	}
+	if opts.Format == "ndjson" {
+		return format.Document(outWriter, written)
+	}
+	_, err = fmt.Fprintf(errWriter, "Set the retry budget of build %s to %d.\n", buildID, opts.Retries)
+	return err
 }
 
 func refuse(err error) (int, error) {

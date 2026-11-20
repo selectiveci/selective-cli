@@ -81,6 +81,15 @@ func tailCmd() *cobra.Command {
 		Long: `Connect to a live Selective CI build and stream test results as NDJSON.
 
 Run from inside a git repository: sel tail auto-detects the repo and HEAD commit.
+--run-id BUILD tails that build instead.
+
+--retries N first sets the live build's retry budget to N (1 to 10) through
+POST /api/v1/builds/:id/retry_budget, then tails as usual and exits with the
+tail's code. It is the only way tail writes: it needs a write token, and a
+build that is no longer live exits 5 with run_not_running. The write response
+is the first line of output. One random Idempotency-Key is sent and reused
+when the CLI retries; --idempotency-key K sets it yourself. Without --retries
+tail only reads.
 
 Without --wait, a commit with no build exits 3 at once. --wait[=DURATION]
 polls until the build exists (10m when given without a value; write
@@ -104,9 +113,11 @@ Exit codes:
   8  --timeout expired`,
 		Example: `  sel tail
   sel tail --wait --timeout 30m
-  sel tail --wait=5s --json`,
+  sel tail --wait=5s --json
+  sel tail --run-id 8f3c9a --retries 3`,
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
+			"mutates_with": "retries",
 			"exit_codes":   "0,1,2,3,4,5,6,8",
 			"events":       "build_start,selection,progress,test_fail,summary,replay_truncated,waiting,heartbeat",
 			"wait_default": defaultTailWait,
@@ -117,6 +128,9 @@ Exit codes:
 				if cmd.Flags().Changed(name) && d <= 0 {
 					return contract.Errorf(contract.UsageError, "--%s must be a positive duration", name)
 				}
+			}
+			if err := tailRetries(cmd, &opts); err != nil {
+				return err
 			}
 			asJSON, _ := cmd.Flags().GetBool("json")
 			var err error
@@ -145,6 +159,8 @@ Exit codes:
 	cmd.Flags().DurationVar(&opts.Wait, "wait", 0, "Wait for the build to exist, at most this long (default "+defaultTailWait+" when given without a value)")
 	cmd.Flags().Lookup("wait").NoOptDefVal = defaultTailWait
 	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 0, "Stop after this long in total and exit 8")
+	cmd.Flags().String("retries", "", "First set the live build's retry budget to N (1 to 10), then tail")
+	cmd.Flags().StringVar(&opts.IdempotencyKey, "idempotency-key", "", "With --retries: use this Idempotency-Key instead of a random one")
 	return cmd
 }
 
