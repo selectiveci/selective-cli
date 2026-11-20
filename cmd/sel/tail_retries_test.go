@@ -199,7 +199,7 @@ func TestTailDeclaresThatItMutatesOnlyWithRetries(t *testing.T) {
 }
 
 func TestTailRetriesNotesAnUnappliedRunOrADifferentBudgetOnStderrWithoutChangingTheExit(t *testing.T) {
-	body := `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","applied":false,"requeued_test_ids":[]},{"id":"r2","applied":true,"max_retries":5,"requeued_test_ids":[]}]},"result":"updated","dry_run":false}`
+	body := `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","applied":false,"max_retries":null,"requeued_test_ids":[]},{"id":"r2","applied":true,"max_retries":5,"requeued_test_ids":[]}]},"result":"updated","dry_run":false}`
 	s := &budgetServer{frames: []string{frameStart, summaryPass}, replies: []stubReply{{status: 200, body: body}}}
 
 	res := runBinary(t, gitRepo(t), s.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--json")
