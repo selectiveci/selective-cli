@@ -22,7 +22,7 @@ func authCmd() *cobra.Command {
 
 CI and agents can skip logging in: set SELECTIVE_TOKEN (and SELECTIVE_HOST
 for a server other than app.selective.ci).`,
-		Annotations: map[string]string{"help_unless_flag": "token", "mcp": "skip"},
+		Annotations: map[string]string{"help_unless_flag": "token"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if legacyToken != "" {
 				return auth.LegacyTokenLogin(legacyToken, legacyHost, version, os.Stderr)
@@ -48,7 +48,6 @@ func authLoginCmd() *cobra.Command {
 		Annotations: map[string]string{
 			"exit_codes": "0,3,4,5,6,7,9,130",
 			"events":     "authorize,logged_in",
-			"mcp":        "skip",
 		},
 		Short: "Log in through your browser",
 		Long: `Log in to Selective.
@@ -99,7 +98,6 @@ func authSignupCmd() *cobra.Command {
 		Annotations: map[string]string{
 			"exit_codes": "0,3,4,5,6,7,9,130",
 			"events":     "authorize,logged_in",
-			"mcp":        "skip",
 		},
 		Short: "Create a Selective account and log in",
 		Long: `Create a Selective account with GitHub and log the CLI in to it.
@@ -144,7 +142,7 @@ func authLogoutCmd() *cobra.Command {
 	var dryRun bool
 	cmd := &cobra.Command{
 		Use:         "logout",
-		Annotations: map[string]string{"exit_codes": "0,5,7,9", "mutates": "true", "mcp": "skip"},
+		Annotations: map[string]string{"exit_codes": "0,5,7,9", "mutates": "true"},
 		Short:       "Revoke this machine's token and forget it",
 		Args:        cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

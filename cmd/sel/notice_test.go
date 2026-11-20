@@ -135,7 +135,7 @@ func TestNoticeIsSilentWhenAGateIsClosed(t *testing.T) {
 }
 
 func TestSkippedCommandsCoverTheContractList(t *testing.T) {
-	for _, name := range []string{"version", "help", "completion", "mcp"} {
+	for _, name := range []string{"version", "help", "completion"} {
 		if !noNoticeCommands[name] {
 			t.Errorf("%q can print the notice", name)
 		}

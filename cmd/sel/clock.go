@@ -46,6 +46,7 @@ type clock struct {
 	start    time.Time
 	stderr   io.Writer
 	exit     func(int)
+	cleanup  func()
 	timer    *time.Timer
 	terminal atomic.Bool
 }
@@ -91,35 +92,50 @@ func (c *clock) finish() {
 }
 
 func (c *clock) expire(g *guard, asJSON bool, cause contract.Coded) {
+	c.awaitWindDown()
 	if c.terminal.Swap(true) {
 		return
 	}
+	c.cleanup()
 	lineSafe := false
 	if asJSON && g.mu.TryLock() {
-		if g.last == 0 || g.last == '\n' {
-			lineSafe = writeWithin(fallbackWriteWait, g.w, cause)
-		}
+		boundary := g.last == 0 || g.last == '\n'
 		g.closed = true
-		g.mu.Unlock()
+		finished := bounded(fallbackWriteWait, func() {
+			defer g.mu.Unlock()
+			if boundary {
+				_ = format.Error(g.w, cause)
+			}
+		})
+		lineSafe = boundary && finished
 	}
 	if lineSafe || !(asJSON && sameFile(g.w, c.stderr)) {
-		fmt.Fprintf(c.stderr, "Error: %s\n", cause.Error())
+		bounded(fallbackWriteWait, func() { fmt.Fprintf(c.stderr, "Error: %s\n", cause.Error()) })
 	}
-	localrun.KillRunners()
 	c.exit(contract.ExitTimeout)
 }
 
-func writeWithin(wait time.Duration, w io.Writer, cause contract.Coded) bool {
-	written := make(chan struct{})
+func bounded(wait time.Duration, fn func()) bool {
+	finished := make(chan struct{})
 	go func() {
-		_ = format.Error(w, cause)
-		close(written)
+		fn()
+		close(finished)
 	}()
 	select {
-	case <-written:
+	case <-finished:
 		return true
 	case <-time.After(wait):
 		return false
+	}
+}
+
+func (c *clock) awaitWindDown() {
+	for {
+		until, winding := localrun.WindDownUntil()
+		if !winding || !time.Now().Before(until) {
+			return
+		}
+		time.Sleep(time.Until(until))
 	}
 }
 
@@ -135,7 +151,7 @@ func sameFile(a, b io.Writer) bool {
 }
 
 func newClock(stderr io.Writer) *clock {
-	return &clock{start: time.Now(), stderr: stderr, exit: os.Exit}
+	return &clock{start: time.Now(), stderr: stderr, exit: os.Exit, cleanup: localrun.Cleanup}
 }
 
 func expiredOr(ctx context.Context, err error) error {

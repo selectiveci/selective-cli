@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -193,16 +194,25 @@ var running = struct {
 	clients map[*client]struct{}
 }{clients: map[*client]struct{}{}}
 
-func KillRunners() {
+func Cleanup() {
 	running.Lock()
 	defer running.Unlock()
 	for c := range running.clients {
-		select {
-		case <-c.exited:
-		default:
-			signalGroup(c.cmd, syscall.SIGKILL)
+		c.kill()
+		_ = c.seat.Close()
+	}
+}
+
+func WindDownUntil() (time.Time, bool) {
+	running.Lock()
+	defer running.Unlock()
+	var latest time.Time
+	for c := range running.clients {
+		if t := time.Unix(0, c.windDown.Load()); c.windDown.Load() != 0 && t.After(latest) {
+			latest = t
 		}
 	}
+	return latest, !latest.IsZero()
 }
 
 func (c *client) track() func() {
@@ -216,10 +226,20 @@ func (c *client) track() func() {
 	}
 }
 
+func (c *client) kill() {
+	select {
+	case <-c.exited:
+	default:
+		signalGroup(c.cmd, syscall.SIGKILL)
+	}
+}
+
 type client struct {
-	cmd    *exec.Cmd
-	exited chan struct{}
-	grace  time.Duration
+	cmd      *exec.Cmd
+	seat     *Seat
+	exited   chan struct{}
+	grace    time.Duration
+	windDown atomic.Int64
 }
 
 func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summary, error) {
@@ -243,7 +263,7 @@ func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summar
 	cmd.Env = childEnv(ctx, os.Environ(), seat.Env(), l.Root)
 	output := cmp.Or[io.Writer](l.Stderr, os.Stderr)
 	cmd.Stdout, cmd.Stderr = output, output
-	c := &client{cmd: cmd, exited: make(chan struct{}), grace: cmp.Or(l.Grace, defaultGrace)}
+	c := &client{cmd: cmd, seat: seat, exited: make(chan struct{}), grace: cmp.Or(l.Grace, defaultGrace)}
 	cmd.WaitDelay = c.grace
 	if err := cmd.Start(); err != nil {
 		return Summary{}, contract.Errorf(contract.RunnerMissing, "sel test could not start %s: %v", argv[0], err)
@@ -253,6 +273,7 @@ func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summar
 		close(c.exited)
 	}()
 	defer c.track()()
+	defer context.AfterFunc(ctx, func() { c.windDown.Store(time.Now().Add(ShutdownBudget).UnixNano()) })()
 	defer c.sweep()
 	return c.drive(ctx, seat, events, opts)
 }

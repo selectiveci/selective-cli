@@ -123,16 +123,15 @@ func TestSelTestWatchWithListIsAUsageError(t *testing.T) {
 	}
 }
 
-func TestHelpJSONDeclaresIterationEndAndKeepsWatchOutOfMCP(t *testing.T) {
+func TestHelpJSONDeclaresIterationEnd(t *testing.T) {
 	_, stdout, _ := execute("help", "--json")
 
 	var doc struct {
 		Help struct {
 			Events   []struct{ Name string } `json:"events"`
 			Commands []struct {
-				Path     string   `json:"path"`
-				Events   []string `json:"events"`
-				SkipFlag []string `json:"mcp_skip_flags"`
+				Path   string   `json:"path"`
+				Events []string `json:"events"`
 			} `json:"commands"`
 		} `json:"help"`
 	}
@@ -142,8 +141,8 @@ func TestHelpJSONDeclaresIterationEndAndKeepsWatchOutOfMCP(t *testing.T) {
 	registered := slices.ContainsFunc(doc.Help.Events, func(e struct{ Name string }) bool { return e.Name == "iteration_end" })
 	for _, c := range doc.Help.Commands {
 		if c.Path == "test" {
-			if !registered || !slices.Contains(c.Events, "iteration_end") || !slices.Contains(c.SkipFlag, "watch") {
-				t.Errorf("registered=%v events=%v mcp_skip_flags=%v, want iteration_end registered and declared, and watch skipped for MCP", registered, c.Events, c.SkipFlag)
+			if !registered || !slices.Contains(c.Events, "iteration_end") {
+				t.Errorf("registered=%v events=%v, want iteration_end registered and declared", registered, c.Events)
 			}
 			return
 		}
@@ -216,5 +215,21 @@ func TestSelTestWatchFirstIterationSelectsAgainstAnEditMadeWhileTheSuiteWasBeing
 	defer api.mu.Unlock()
 	if len(api.selections) == 0 || !slices.Contains(anyStrings(api.selections[0]["changed"]), "tests/test_calc.py") {
 		t.Errorf("selection requests %v, want the first to carry the file edited before the watcher started", api.selections)
+	}
+}
+
+func TestSelTestWatchGivesALaterIterationItsOwnTimeoutWindow(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	runnerEnv(t)
+	w := startWatch(t, api, "--timeout", "2s")
+	w.await("iteration_end", 1)
+	time.Sleep(2500 * time.Millisecond)
+	w.edit("tests/test_calc.py", "v2\n")
+
+	w.await("iteration_end", 2)
+
+	events, code := w.interrupt()
+	if code != 130 || slices.Contains(eventNames(events), "error") {
+		t.Errorf("exit %d, events %v; want the second iteration to run past the first window and Ctrl-C to end with 130", code, eventNames(events))
 	}
 }
