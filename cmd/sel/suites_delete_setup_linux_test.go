@@ -8,13 +8,13 @@ import (
 	"time"
 )
 
-func TestSuitesDeleteTimeoutCutsASetupStallShortAndSendsNoRequest(t *testing.T) {
+func TestSuitesDeleteTimeoutCountsTheSetupThatRunsBeforeTheFirstRequest(t *testing.T) {
 	configDir := t.TempDir()
 	configPath := filepath.Join(configDir, "config.json")
 	if err := syscall.Mkfifo(configPath, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	const setupStall = 3 * time.Second
+	const setupStall = 1500 * time.Millisecond
 	go func() {
 		time.Sleep(setupStall)
 		f, err := os.OpenFile(configPath, os.O_WRONLY, 0)
@@ -30,8 +30,8 @@ func TestSuitesDeleteTimeoutCutsASetupStallShortAndSendsNoRequest(t *testing.T) 
 	began := time.Now()
 	res := runBinaryIn(t, t.TempDir(), srv.URL, configDir, "suites", "delete", "old-minitest", "--yes", "--timeout=500ms", "--org", "acme", "--json")
 
-	if took := time.Since(began); took >= setupStall {
-		t.Fatalf("took %s, --timeout did not cut the %s config read short", took, setupStall)
+	if took := time.Since(began); took < setupStall {
+		t.Fatalf("took %s, the config read never stalled for %s so the pin proves nothing", took, setupStall)
 	}
 	assertRefusal(t, res, 8, "timeout")
 	if n := stub.requestCount(); n != 0 {

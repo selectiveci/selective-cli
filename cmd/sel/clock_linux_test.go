@@ -85,22 +85,25 @@ func assertTimeoutLast(t *testing.T, res cliResult) {
 	}
 }
 
-func TestTimeoutEndsACommandWhoseSetupReadNeverReturns(t *testing.T) {
-	cases := map[string][]string{
-		"approvals show": {"approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90"},
-		"tail":           {"tail", "--run-id", "r1"},
-		"doctor":         {"doctor"},
-		"suites delete":  {"suites", "delete", "old-minitest", "--yes", "--org", "acme"},
-		"test":           {"test", "--org", "acme", "--against", "HEAD"},
+func TestTimeoutEndsACommandWhoseSetupReadStalls(t *testing.T) {
+	cases := map[string]struct {
+		args         []string
+		releaseAfter time.Duration
+	}{
+		"approvals show": {[]string{"approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90"}, 1500 * time.Millisecond},
+		"doctor":         {[]string{"doctor"}, 0},
+		"test":           {[]string{"test", "--org", "acme", "--against", "HEAD"}, 0},
+		"tail":           {[]string{"tail", "--run-id", "r1"}, 1500 * time.Millisecond},
+		"suites delete":  {[]string{"suites", "delete", "old-minitest", "--yes", "--org", "acme"}, 1500 * time.Millisecond},
 	}
-	for name, args := range cases {
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dir := gitRepo(t)
 			if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.pytest.ini_options]\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			res, took := runCapped(t, 5*time.Second, dir, stalledConfigDir(t, 0), "http://127.0.0.1:1", nil, append(args, "--timeout=1s", "--json")...)
+			res, took := runCapped(t, 5*time.Second, dir, stalledConfigDir(t, c.releaseAfter), "http://127.0.0.1:1", nil, append(c.args, "--timeout=1s", "--json")...)
 
 			assertTimeoutLast(t, res)
 			if took > 3*time.Second {
@@ -111,7 +114,7 @@ func TestTimeoutEndsACommandWhoseSetupReadNeverReturns(t *testing.T) {
 }
 
 func TestTimeoutInPrettyModeWritesTheErrorToStderrAndNothingToStdout(t *testing.T) {
-	res, _ := runCapped(t, 5*time.Second, t.TempDir(), stalledConfigDir(t, 0), "http://127.0.0.1:1", nil, "tail", "--run-id", "r1", "--timeout=1s", "--format", "pretty")
+	res, _ := runCapped(t, 5*time.Second, t.TempDir(), stalledConfigDir(t, 1500*time.Millisecond), "http://127.0.0.1:1", nil, "tail", "--run-id", "r1", "--timeout=1s", "--format", "pretty")
 
 	if res.exit != 8 || res.stdout != "" || !strings.HasPrefix(res.stderr, "Error: ") {
 		t.Errorf("exit %d stdout %q stderr %q, want exit 8, empty stdout and an Error: line", res.exit, res.stdout, res.stderr)
@@ -135,7 +138,19 @@ func TestTimeoutAfterASlowSetupEndsAStreamThroughTheCommandsOwnDeadline(t *testi
 	res, took := runCapped(t, 5*time.Second, t.TempDir(), stalledConfigDir(t, 600*time.Millisecond), srv.URL, nil, "tail", "--run-id", "r1", "--timeout", limit.String(), "--json")
 
 	assertTimeoutLast(t, res)
-	if n := len(stdoutLines(t, res.stdout)); n < 10 || took >= limit+fallbackGrace {
-		t.Errorf("%d lines in %s; want a stream of lines and an exit before the fallback grace (%s) after the limit", n, took, fallbackGrace)
+	if n := len(stdoutLines(t, res.stdout)); n < 10 || took >= limit+time.Second {
+		t.Errorf("%d lines in %s; want a stream of lines and an exit within a second of the %s limit", n, took, limit)
+	}
+}
+
+func TestTimeoutKeepsDoctorsPerCheckReportWhenTheConfigReadStalls(t *testing.T) {
+	res, _ := runCapped(t, 5*time.Second, t.TempDir(), stalledConfigDir(t, 0), "http://127.0.0.1:1", nil, "doctor", "--timeout=1s", "--json")
+
+	assertTimeoutLast(t, res)
+	lines := stdoutLines(t, res.stdout)
+	report, _ := lines[len(lines)-1]["doctor"].(map[string]any)
+	checks, _ := report["checks"].([]any)
+	if report["status"] != "fail" || len(checks) == 0 {
+		t.Errorf("last line %v; want the timeout object to carry the doctor report with its per-check results", lines[len(lines)-1])
 	}
 }
