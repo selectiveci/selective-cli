@@ -51,7 +51,7 @@ and changes nothing. A change needs a token with the write scope, as an owner
 or admin of the organization. Without --set, the read scope is enough.`,
 		Example:     "  sel suites settings web-rspec\n  sel suites settings web-rspec --set selection.mode=shadow --set retries.max_retries=3\n  sel suites settings web-rspec --set selection.ignore_patterns=vendor,docs --dry-run --json",
 		Args:        cobra.ExactArgs(1),
-		Annotations: map[string]string{"exit_codes": "0,3,4,5,6", "mutates": "true"},
+		Annotations: map[string]string{"exit_codes": "0,3,4,5,6,7", "mutates": "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body, err := settingsBody(sets)
 			if err != nil {
