@@ -26,11 +26,11 @@ func transportCmd() *cobra.Command {
 		Use:                "__transport",
 		Hidden:             true,
 		DisableFlagParsing: true,
-		Run: func(_ *cobra.Command, args []string) {
+		Run: func(cmd *cobra.Command, args []string) {
 			if len(args) == 1 && args[0] == "--stdio" {
 				signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
 			}
-			os.Exit(localrun.RunSeat(args, os.Stdin, os.Stdout, os.Stderr))
+			os.Exit(localrun.RunSeat(cmd.Context(), args, os.Stdin, os.Stdout, os.Stderr))
 		},
 	}
 }

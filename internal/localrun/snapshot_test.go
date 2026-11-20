@@ -34,7 +34,7 @@ func TestSeatSnapshotEqualsTheRealTransportOnADirtyFixtureRepo(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out, errw bytes.Buffer
-		if code := RunSeat([]string{"--snapshot", dir}, strings.NewReader(""), &out, &errw); code != 0 {
+		if code := RunSeat(context.Background(), []string{"--snapshot", dir}, strings.NewReader(""), &out, &errw); code != 0 {
 			t.Fatalf("%s: exit %d stderr %q", golden, code, errw.String())
 		}
 		if got := decodeJSON(t, out.Bytes()); !reflect.DeepEqual(got, decodeJSON(t, want)) {
@@ -47,7 +47,7 @@ func TestSeatSnapshotOutsideAGitCheckoutFailsOnStderrOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
 	var out, errw bytes.Buffer
-	if code := RunSeat([]string{"--snapshot", dir}, strings.NewReader(""), &out, &errw); code != 1 || out.Len() != 0 || !strings.Contains(errw.String(), "not a git checkout") {
+	if code := RunSeat(context.Background(), []string{"--snapshot", dir}, strings.NewReader(""), &out, &errw); code != 1 || out.Len() != 0 || !strings.Contains(errw.String(), "not a git checkout") {
 		t.Errorf("exit %d stdout %q stderr %q, want exit 1 and a stderr message only", code, out.String(), errw.String())
 	}
 }
@@ -56,7 +56,7 @@ func TestSeatBuildEnvFillsTheNineVariablesWithoutARealCredential(t *testing.T) {
 	t.Setenv("SELECTIVE_API_KEY", "real-secret-key")
 	t.Setenv("SELECTIVE_TOKEN", "real-secret-token")
 	var out, errw bytes.Buffer
-	if code := RunSeat([]string{"--build-env"}, strings.NewReader(""), &out, &errw); code != 0 {
+	if code := RunSeat(context.Background(), []string{"--build-env"}, strings.NewReader(""), &out, &errw); code != 0 {
 		t.Fatalf("exit %d stderr %q", code, errw.String())
 	}
 	if strings.Contains(out.String(), "real-secret") {
@@ -138,7 +138,7 @@ func TestSeatSnapshotMatchesGitOnWorkingTreeEdgeCases(t *testing.T) {
 			}
 			repo := string(made)
 			var out, errw bytes.Buffer
-			code := RunSeat([]string{"--snapshot", repo}, strings.NewReader(""), &out, &errw)
+			code := RunSeat(context.Background(), []string{"--snapshot", repo}, strings.NewReader(""), &out, &errw)
 			var doc map[string]any
 			if out.Len() > 0 {
 				doc = decodeJSON(t, out.Bytes())
@@ -175,5 +175,30 @@ func TestTakeSnapshotStopsAGitCallThatHangsWhenItsContextEnds(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("takeSnapshot is still waiting on a hung git after its context ended")
+	}
+}
+
+func TestTransportSnapshotStopsAHungGitWhenTheCommandContextEnds(t *testing.T) {
+	shims := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shims, "git"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	exited := make(chan int, 1)
+
+	go func() {
+		var out, errw bytes.Buffer
+		exited <- RunSeat(ctx, []string{"--snapshot", t.TempDir()}, strings.NewReader(""), &out, &errw)
+	}()
+
+	select {
+	case code := <-exited:
+		if code != 1 {
+			t.Errorf("exit %d, want 1 once the context ended", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the snapshot is still waiting on a hung git after the command context ended")
 	}
 }

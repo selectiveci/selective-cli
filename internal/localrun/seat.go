@@ -20,7 +20,7 @@ const (
 	maxSocketLen = 100
 )
 
-func RunSeat(args []string, in io.Reader, out, errw io.Writer) int {
+func RunSeat(ctx context.Context, args []string, in io.Reader, out, errw io.Writer) int {
 	switch {
 	case len(args) == 1 && (args[0] == "--help" || args[0] == "-h"):
 		fmt.Fprint(errw, seatUsage)
@@ -30,16 +30,16 @@ func RunSeat(args []string, in io.Reader, out, errw io.Writer) int {
 	case len(args) == 1 && args[0] == "--build-env":
 		return emit(out, errw, localBuildEnv())
 	case len(args) == 1 && args[0] == "--snapshot":
-		return snapshotOf(".", out, errw)
+		return snapshotOf(ctx, ".", out, errw)
 	case len(args) == 2 && args[0] == "--snapshot":
-		return snapshotOf(args[1], out, errw)
+		return snapshotOf(ctx, args[1], out, errw)
 	}
 	fmt.Fprintf(errw, "unsupported arguments %q\n%s", args, seatUsage)
 	return 2
 }
 
-func snapshotOf(dir string, out, errw io.Writer) int {
-	snapshot, err := takeSnapshot(context.Background(), dir)
+func snapshotOf(ctx context.Context, dir string, out, errw io.Writer) int {
+	snapshot, err := takeSnapshot(ctx, dir)
 	if err != nil {
 		fmt.Fprintln(errw, err)
 		return 1

@@ -19,7 +19,7 @@ import (
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "__transport" {
-		os.Exit(RunSeat(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+		os.Exit(RunSeat(context.Background(), os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
 }
