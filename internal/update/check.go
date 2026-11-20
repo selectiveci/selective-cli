@@ -20,6 +20,7 @@ var (
 	releasesURL    = releasesPage
 	releasesAPIURL = "https://api.github.com/repos/selectiveci/selective-cli/releases/latest"
 	checkTimeout   = 2 * time.Second
+	stopGrace      = 200 * time.Millisecond
 	ciVariables    = []string{"CI", "GITHUB_ACTIONS", "BUILD_NUMBER", "RUN_ID", "CODESPACES"}
 )
 
@@ -125,7 +126,10 @@ func (c *Checker) Stop() {
 		return
 	}
 	c.cancel()
-	<-c.done
+	select {
+	case <-c.done:
+	case <-time.After(stopGrace):
+	}
 }
 
 func refresh(parent context.Context) {

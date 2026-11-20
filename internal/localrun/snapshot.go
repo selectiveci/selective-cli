@@ -1,12 +1,13 @@
 package localrun
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/selectiveci/selective-cli/internal/gitctx"
 )
 
 type treeSnapshot struct {
@@ -130,9 +131,6 @@ func prefixWithin(root, dir string) string {
 }
 
 func gitOutput(dir string, args ...string) (string, bool) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	err := cmd.Run()
-	return out.String(), err == nil
+	out, err := gitctx.Run("git", append([]string{"-C", dir}, args...)...)
+	return out, err == nil
 }

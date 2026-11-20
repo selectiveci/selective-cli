@@ -31,7 +31,7 @@ func Detect() (*Context, error) {
 func Repo() (string, error) { return gitRemoteSlug() }
 
 func gitRemoteSlug() (string, error) {
-	out, err := run("git", "remote", "get-url", "origin")
+	out, err := Run("git", "remote", "get-url", "origin")
 	if err != nil {
 		return "", err
 	}
@@ -39,7 +39,7 @@ func gitRemoteSlug() (string, error) {
 }
 
 func gitHEAD() (string, error) {
-	out, err := run("git", "rev-parse", "HEAD")
+	out, err := Run("git", "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
@@ -61,7 +61,7 @@ func Abandon() {
 	}
 }
 
-func run(name string, args ...string) (string, error) {
+func Run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr

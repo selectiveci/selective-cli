@@ -163,6 +163,8 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		plan = p.plan
 	case <-signalled.Done():
 		return interrupted(localrun.Summary{})
+	case <-time.After(f.timeout):
+		return 0, contract.Errorf(contract.Timeout, "--timeout %s expired before the test run started", f.timeout)
 	}
 	self, err := os.Executable()
 	if err != nil {

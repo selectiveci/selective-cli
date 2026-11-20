@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var timeoutCapGrace = time.Second
+var timeoutCapGrace = 500 * time.Millisecond
 
 var abandonChildren = gitctx.Abandon
 
@@ -30,6 +30,7 @@ func capTimeout(c *cobra.Command, argv []string, stdout, stderr io.Writer) {
 			}
 			abandonChildren()
 			expired := contract.Errorf(contract.Timeout, "--timeout %s expired", limit)
+			stdout, stderr = silence(stdout), silence(stderr)
 			if asJSON {
 				_ = format.Error(stdout, expired)
 			}
