@@ -92,7 +92,8 @@ mode a sentence goes to stderr instead. A build with no live run exits 5 with
 run_not_running. The budget reaches only the runs that are live at the moment
 of the POST; runs that start later (with --wait, or in a multi-suite build)
 keep the suite's own setting (SEL-367). A build ID found in several of your
-organizations needs --org (or SELECTIVE_ORG) for the write. A run that did not take it, or one
+organizations needs --org (or SELECTIVE_ORG) for the write; --org scopes only
+the write, and the stream still shows every run of that build ID you can see. A run that did not take it, or one
 retrying with another N, is noted on stderr and does not change the exit code.
 --dry-run sends the same request as a preview, prints it, changes nothing and
 does not tail. One random Idempotency-Key is sent and reused when the CLI

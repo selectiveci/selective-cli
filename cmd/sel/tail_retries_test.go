@@ -352,6 +352,13 @@ func TestTailRetriesSendsTheOrgFromTheFlagOrTheEnvironment(t *testing.T) {
 		t.Errorf("queries %v, want one POST with org=from-env", env.queries)
 	}
 
+	both := &budgetServer{frames: []string{summaryPass}, replies: []stubReply{{status: 200, body: budgetWritten}}}
+	res = runBinary(t, gitRepo(t), both.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--org", "acme", "--format", "pretty")
+	first, _, _ := strings.Cut(res.stderr, "\n")
+	if len(both.queries) != 1 || both.queries[0] != "org=acme" || first != "Set the retry budget of build b1 in org acme to 3." {
+		t.Errorf("queries %v first line %q, want --org to beat SELECTIVE_ORG and the headline to name acme", both.queries, first)
+	}
+
 	plain := &budgetServer{frames: []string{summaryPass}}
 	runBinary(t, gitRepo(t), plain.start(t).URL, "tail", "--run-id", "b1", "--json")
 	if got := plain.requests(); got != "tail" {

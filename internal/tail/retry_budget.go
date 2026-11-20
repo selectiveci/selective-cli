@@ -57,8 +57,12 @@ func budgetRuns(written json.RawMessage) []budgetRun {
 func taken(run budgetRun) bool { return run.Applied == nil || *run.Applied }
 
 func budgetHeadline(buildID string, opts Options, runs []budgetRun) string {
+	build := "build " + buildID
+	if opts.Org != "" {
+		build += " in org " + opts.Org
+	}
 	if opts.DryRun {
-		return fmt.Sprintf("Dry run: would set the retry budget of build %s to %d on %d live run(s); nothing changed.", buildID, opts.Retries, len(runs))
+		return fmt.Sprintf("Dry run: would set the retry budget of %s to %d on %d live run(s); nothing changed.", build, opts.Retries, len(runs))
 	}
 	var effective []int
 	for _, run := range runs {
@@ -69,15 +73,15 @@ func budgetHeadline(buildID string, opts Options, runs []budgetRun) string {
 	slices.Sort(effective)
 	switch {
 	case len(runs) > 0 && !slices.ContainsFunc(runs, taken):
-		return fmt.Sprintf("No run of build %s took the retry budget (not live).", buildID)
+		return fmt.Sprintf("No run of %s took the retry budget (not live).", build)
 	case len(effective) == 0, len(effective) == 1 && effective[0] == opts.Retries:
-		return fmt.Sprintf("Set the retry budget of build %s to %d.", buildID, opts.Retries)
+		return fmt.Sprintf("Set the retry budget of %s to %d.", build, opts.Retries)
 	}
 	values := make([]string, len(effective))
 	for i, n := range effective {
 		values[i] = strconv.Itoa(n)
 	}
-	return fmt.Sprintf("Set the retry budget of build %s to %s (you asked for %d).", buildID, strings.Join(values, " and "), opts.Retries)
+	return fmt.Sprintf("Set the retry budget of %s to %s (you asked for %d).", build, strings.Join(values, " and "), opts.Retries)
 }
 
 func budgetNotes(runs []budgetRun, requested int) []string {
