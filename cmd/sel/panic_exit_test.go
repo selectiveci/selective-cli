@@ -34,6 +34,7 @@ func TestPanicChildProcess(t *testing.T) {
 	}
 	boom.Flags().String("format", "", "")
 	boom.Flags().Bool("partial", false, "")
+	boom.Flags().Duration("timeout", 0, "")
 	root := newRoot()
 	root.AddCommand(boom)
 	os.Exit(run(root, strings.Fields(args), os.Stdout, os.Stderr))
@@ -90,6 +91,16 @@ func TestPanicInJSONModeEndsStdoutWithAnInternalErrorObject(t *testing.T) {
 			}
 			requireStack(t, stderr)
 		})
+	}
+}
+
+func TestPanicInsideACommandWithATimeoutStillEndsStdoutWithTheInternalErrorObject(t *testing.T) {
+	_, lines, _ := runPanicChild(t, "boom --json --partial --timeout 30s")
+
+	var last map[string]any
+	_ = json.Unmarshal([]byte(lines[len(lines)-1]), &last)
+	if last["error"] != "internal_error" {
+		t.Errorf("last stdout line %q, want error internal_error", lines[len(lines)-1])
 	}
 }
 
