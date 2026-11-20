@@ -205,8 +205,9 @@ func TestTimeoutLeavesNoHungGitBehind(t *testing.T) {
 				t.Fatalf("git never ran, so this proves nothing: %v", err)
 			}
 			pid, _ := strconv.Atoi(strings.TrimSpace(string(body)))
-			if res.exit != 8 || !processGone(pid) {
-				t.Errorf("exit %d, git pid %d gone=%t; want exit 8 and no live git", res.exit, pid, processGone(pid))
+			assertTimeoutLast(t, res)
+			if !processGone(pid) {
+				t.Errorf("git pid %d is still alive after the timeout exit", pid)
 			}
 		})
 	}

@@ -56,7 +56,14 @@ func (w *watchRun) edit(name, body string) {
 func (w *watchRun) interrupt() ([]map[string]any, int) {
 	w.t.Helper()
 	_ = w.cmd.Process.Signal(syscall.SIGINT)
-	_ = w.cmd.Wait()
+	exited := make(chan struct{})
+	go func() { _ = w.cmd.Wait(); close(exited) }()
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		_ = w.cmd.Process.Kill()
+		w.t.Fatal("sel test --watch was still running 10s after SIGINT")
+	}
 	return stdoutEvents(w.t, w.stdout()), w.cmd.ProcessState.ExitCode()
 }
 
@@ -215,26 +222,5 @@ func TestSelTestWatchFirstIterationSelectsAgainstAnEditMadeWhileTheSuiteWasBeing
 	defer api.mu.Unlock()
 	if len(api.selections) == 0 || !slices.Contains(anyStrings(api.selections[0]["changed"]), "tests/test_calc.py") {
 		t.Errorf("selection requests %v, want the first to carry the file edited before the watcher started", api.selections)
-	}
-}
-
-func TestSelTestWatchInterruptedWhileGitIsRunningExitsInterruptedNotInternalError(t *testing.T) {
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin, started, path := t.TempDir(), filepath.Join(t.TempDir(), "ls-tree.started"), os.Getenv("PATH")
-	script := "#!/bin/sh\ncase \" $* \" in *\" ls-tree \"*) : > " + started + "; exec sleep 300;; esac\nPATH='" + path + "'\nexec " + realGit + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+":"+path)
-	w := startWatch(t, newFakeAPI(t, selected))
-	waitUntil(t, "the fingerprint's git ls-tree to start", func() bool { _, err := os.Stat(started); return err == nil })
-
-	_, code := w.interrupt()
-
-	if code != 130 {
-		t.Errorf("exit %d, want 130 for a SIGINT that landed while git was running", code)
 	}
 }

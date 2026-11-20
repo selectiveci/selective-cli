@@ -178,7 +178,7 @@ func TestTakeSnapshotStopsAGitCallThatHangsWhenItsContextEnds(t *testing.T) {
 	}
 }
 
-func TestTransportSnapshotStopsAHungGitWhenTheCommandContextEnds(t *testing.T) {
+func TestRunSeatSnapshotHandsTheContextItIsGivenToGit(t *testing.T) {
 	shims := t.TempDir()
 	if err := os.WriteFile(filepath.Join(shims, "git"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
