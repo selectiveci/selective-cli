@@ -15,7 +15,7 @@ var (
 	isTerminal       = formatIsTerminal
 )
 
-var noNoticeCommands = map[string]bool{"version": true, "help": true, "completion": true, "mcp": true}
+var noNoticeCommands = map[string]bool{"version": true, "help": true, "completion": true}
 
 func skipsNotice(cmd *cobra.Command) bool {
 	if cmd == nil || !cmd.Runnable() {

@@ -183,11 +183,3 @@ func DefaultCode(exit int) (Code, bool) {
 	code, ok := defaultCodes[exit]
 	return code, ok
 }
-
-func RetryableCode(code Code) bool {
-	switch code {
-	case NetworkError, ServerError, RateLimited, RequestInProgress:
-		return true
-	}
-	return false
-}
