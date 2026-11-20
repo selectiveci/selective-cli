@@ -3,6 +3,7 @@ package gitctx
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -46,6 +47,7 @@ func gitHEAD(ctx context.Context) (string, error) {
 
 func Command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd
 }
