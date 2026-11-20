@@ -27,9 +27,6 @@ var (
 )
 
 func IsTerminal(w io.Writer) bool {
-	if wrapped, ok := w.(interface{ Unwrap() io.Writer }); ok {
-		w = wrapped.Unwrap()
-	}
 	f, ok := w.(*os.File)
 	return ok && (isTTY(f.Fd()) || isCygwinTTY(f.Fd()))
 }

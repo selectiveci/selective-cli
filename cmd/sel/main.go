@@ -71,11 +71,9 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	entered := false
 	markEntered(root, &entered)
-	clk := newClock(stderr)
-	clk.attach(root, args)
+	newClock().attach(root)
 
 	cmd, err := executeRecovering(root, args, stderr, &entered)
-	clk.finish()
 	if err == nil {
 		return cmd, contract.ExitOK
 	}

@@ -178,12 +178,8 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 			}
 		}
 		if f.watch {
-			deadline := time.Now().Add(f.timeout)
-			if iteration == 0 {
-				deadline = started.Add(f.timeout)
-			}
 			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, deadline)
+			ctx, cancel = context.WithTimeout(ctx, f.timeout)
 			defer cancel()
 		}
 		sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selectorFor(changed), Passes: f.passes, List: f.list, Paths: plan.paths, Timeout: f.timeout, Iteration: iteration})
