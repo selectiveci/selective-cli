@@ -22,7 +22,7 @@ type budgetServer struct {
 	frames  []string
 }
 
-const budgetWritten = `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","requeued_test_ids":[]}]},"result":"updated","dry_run":false}`
+const budgetWritten = `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","applied":true,"max_retries":3,"requeued_test_ids":[]}]},"result":"updated","dry_run":false}`
 
 func (s *budgetServer) start(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -195,5 +195,22 @@ func TestTailDeclaresThatItMutatesOnlyWithRetries(t *testing.T) {
 	}
 	if doc.Command.Mutates || doc.Command.MutatesWith != "retries" || !flags["retries"] || !flags["idempotency-key"] {
 		t.Errorf("tail = %+v, want mutates false, mutates_with retries, and the retries and idempotency-key flags", doc.Command)
+	}
+}
+
+func TestTailRetriesNotesAnUnappliedRunOrADifferentBudgetOnStderrWithoutChangingTheExit(t *testing.T) {
+	body := `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","applied":false,"requeued_test_ids":[]},{"id":"r2","applied":true,"max_retries":5,"requeued_test_ids":[]}]},"result":"updated","dry_run":false}`
+	s := &budgetServer{frames: []string{frameStart, summaryPass}, replies: []stubReply{{status: 200, body: body}}}
+
+	res := runBinary(t, gitRepo(t), s.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--json")
+
+	first, _, _ := strings.Cut(res.stdout, "\n")
+	if res.exit != 0 || first != `{"v":1,`+strings.TrimPrefix(body, "{") {
+		t.Errorf("exit %d first line %q, want exit 0 and the server's body relayed", res.exit, first)
+	}
+	for _, want := range []string{"Run r1 did not take the retry budget", "Run r2 is retrying up to 5 times, not the 3 you asked for"} {
+		if !strings.Contains(res.stderr, want) {
+			t.Errorf("stderr %q lacks %q", res.stderr, want)
+		}
 	}
 }
