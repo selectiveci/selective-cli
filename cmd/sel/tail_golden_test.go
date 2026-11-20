@@ -96,8 +96,16 @@ func runBinary(t *testing.T, dir, host string, args ...string) cliResult {
 
 func runBinaryIn(t *testing.T, dir, host, configDir string, args ...string) cliResult {
 	t.Helper()
+	return runBinaryStdin(t, dir, host, configDir, "", args...)
+}
+
+func runBinaryStdin(t *testing.T, dir, host, configDir, stdin string, args ...string) cliResult {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Dir = dir
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	cmd.Env = append(os.Environ(),
 		"SELECTIVE_TEST_RUN_MAIN=1",
 		"SELECTIVE_HOST="+host,

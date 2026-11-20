@@ -32,6 +32,11 @@ type Options struct {
 	Timeout time.Duration
 	Started time.Time
 	Ctx     context.Context
+
+	Retries        int
+	Org            string
+	DryRun         bool
+	IdempotencyKey string
 }
 
 func Run(client *api.Client, opts Options) (int, error) {
@@ -55,9 +60,22 @@ func Run(client *api.Client, opts Options) (int, error) {
 		if err != nil {
 			return refuse(deadlineCause(ctx, err))
 		}
-		buildID, err = findBuild(ctx, client, repo, sha, waitOptions(opts))
+		lookup := waitOptions(opts)
+		if opts.DryRun {
+			lookup.Limit = 0
+		}
+		buildID, err = findBuild(ctx, client, repo, sha, lookup)
 		if err != nil {
 			return refuse(deadlineCause(ctx, err))
+		}
+	}
+
+	if opts.Retries > 0 {
+		if err := setRetryBudget(ctx, client, buildID, opts); err != nil {
+			return refuse(deadlineCause(ctx, err))
+		}
+		if opts.DryRun {
+			return contract.ExitOK, nil
 		}
 	}
 
