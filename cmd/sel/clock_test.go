@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,4 +116,40 @@ func TestEveryCommandWithATimeoutFlagHasARunEForTheClockToWrap(t *testing.T) {
 		}
 	}
 	walk(newRoot())
+}
+
+func TestExpireOnMergedStreamsWritesTheErrorTextOnlyAtALineBoundary(t *testing.T) {
+	object := "{\"v\":1,\"error\":\"timeout\",\"message\":\"--timeout 1s expired\"}\n"
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, g *guard)
+		want  string
+	}{
+		{"after a complete line", func(t *testing.T, g *guard) { _, _ = g.Write([]byte("{\"v\":1}\n")) }, "{\"v\":1}\n" + object + "Error: --timeout 1s expired\n"},
+		{"after a partial line", func(t *testing.T, g *guard) { _, _ = g.Write([]byte("{\"v\":1,\"pa")) }, "{\"v\":1,\"pa"},
+		{"while the commands own write is in flight", func(t *testing.T, g *guard) {
+			g.mu.Lock()
+			t.Cleanup(g.mu.Unlock)
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &guard{w: w}
+			tc.setup(t, g)
+			exited := make(chan int, 1)
+			c := &clock{stderr: w, exit: func(code int) { exited <- code }}
+
+			c.expire(g, true, contract.Errorf(contract.Timeout, "--timeout 1s expired"))
+			_ = w.Close()
+			got, _ := io.ReadAll(r)
+
+			if string(got) != tc.want || <-exited != 8 {
+				t.Errorf("the shared pipe got %q, want %q and exit 8", got, tc.want)
+			}
+		})
+	}
 }

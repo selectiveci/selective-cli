@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -187,6 +188,34 @@ type Launch struct {
 	Grace     time.Duration
 }
 
+var running = struct {
+	sync.Mutex
+	clients map[*client]struct{}
+}{clients: map[*client]struct{}{}}
+
+func KillRunners() {
+	running.Lock()
+	defer running.Unlock()
+	for c := range running.clients {
+		select {
+		case <-c.exited:
+		default:
+			signalGroup(c.cmd, syscall.SIGKILL)
+		}
+	}
+}
+
+func (c *client) track() func() {
+	running.Lock()
+	running.clients[c] = struct{}{}
+	running.Unlock()
+	return func() {
+		running.Lock()
+		delete(running.clients, c)
+		running.Unlock()
+	}
+}
+
 type client struct {
 	cmd    *exec.Cmd
 	exited chan struct{}
@@ -223,6 +252,7 @@ func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summar
 		_ = cmd.Wait()
 		close(c.exited)
 	}()
+	defer c.track()()
 	defer c.sweep()
 	return c.drive(ctx, seat, events, opts)
 }
