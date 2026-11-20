@@ -25,6 +25,7 @@ func TestMain(m *testing.M) {
 	case os.Getenv("FAKE_RUNNER") == "1":
 		os.Exit(fakeRunner())
 	}
+	abandonChildren = func() {}
 	os.Exit(m.Run())
 }
 

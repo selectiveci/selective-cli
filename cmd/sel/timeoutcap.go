@@ -17,21 +17,18 @@ var timeoutCapGrace = time.Second
 var abandonChildren = gitctx.Abandon
 
 func capTimeout(c *cobra.Command, argv []string, stdout, stderr io.Writer) {
-	if run := c.RunE; run != nil && c.Flags().Lookup("timeout") != nil && c.Annotations["timeout_cap"] != "own" {
+	if run := c.RunE; run != nil && c.Flags().Lookup("timeout") != nil {
 		c.RunE = func(cmd *cobra.Command, args []string) error {
 			limit, _ := cmd.Flags().GetDuration("timeout")
-			if !cmd.Flags().Changed("timeout") || limit <= 0 {
-				return run(cmd, args)
+			if !cmd.Flags().Changed("timeout") || limit <= 0 || cmd.Annotations["timeout_cap"] == "own" {
+				return abandonOnTimeout(run(cmd, args))
 			}
 			asJSON := errorObjectOnStdout(cmd, argv, stdout)
 			finished, err := runWithin(limit+timeoutCapGrace, func() error { return run(cmd, args) })
-			var coded contract.Coded
-			if !finished || errors.As(err, &coded) && coded.ErrorCode() == contract.Timeout {
-				abandonChildren()
-			}
 			if finished {
-				return err
+				return abandonOnTimeout(err)
 			}
+			abandonChildren()
 			expired := contract.Errorf(contract.Timeout, "--timeout %s expired", limit)
 			if asJSON {
 				_ = format.Error(stdout, expired)
@@ -43,6 +40,15 @@ func capTimeout(c *cobra.Command, argv []string, stdout, stderr io.Writer) {
 	for _, sub := range c.Commands() {
 		capTimeout(sub, argv, stdout, stderr)
 	}
+}
+
+func abandonOnTimeout(err error) error {
+	var coded contract.Coded
+	var exit exitCode
+	if errors.As(err, &coded) && coded.ErrorCode() == contract.Timeout || errors.As(err, &exit) && int(exit) == contract.ExitTimeout {
+		abandonChildren()
+	}
+	return err
 }
 
 type capped struct {

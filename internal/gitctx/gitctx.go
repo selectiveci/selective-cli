@@ -57,7 +57,7 @@ func Abandon() {
 	defer live.Unlock()
 	live.abandoned = true
 	for p := range live.procs {
-		_ = p.Kill()
+		kill(p)
 	}
 }
 
@@ -65,6 +65,7 @@ func run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
+	isolate(cmd)
 	if err := start(cmd); err != nil {
 		return "", err
 	}

@@ -151,3 +151,27 @@ func TestTimeoutCapRepanicsOnTheCallerSoTheRecoveryInRunSeesIt(t *testing.T) {
 	}()
 	runCommand(cappedRoot(nil, func(*cobra.Command) error { panic("boom") }), []string{"slow", "--timeout=5s"}, &bytes.Buffer{}, &bytes.Buffer{})
 }
+
+func TestAnyWrappedCommandThatEndsOnATimeoutAbandonsItsChildren(t *testing.T) {
+	fastCap(t)
+	cases := map[string]struct {
+		args      []string
+		result    error
+		abandoned bool
+	}{
+		"no --timeout, timeout error":    {[]string{"slow"}, contract.Errorf(contract.Timeout, "did not finish"), true},
+		"no --timeout, exit 8":           {[]string{"slow"}, exitCode(contract.ExitTimeout), true},
+		"no --timeout, other error":      {[]string{"slow"}, contract.Errorf(contract.NotFound, "no"), false},
+		"--timeout given, timeout error": {[]string{"slow", "--timeout=5s"}, contract.Errorf(contract.Timeout, "did not finish"), true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			abandoned := false
+			abandonChildren = func() { abandoned = true }
+			runWithinFiveSeconds(t, cappedRoot(nil, func(*cobra.Command) error { return tc.result }), tc.args...)
+			if abandoned != tc.abandoned {
+				t.Errorf("abandoned = %t, want %t", abandoned, tc.abandoned)
+			}
+		})
+	}
+}
