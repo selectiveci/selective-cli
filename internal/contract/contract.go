@@ -114,16 +114,6 @@ var exits = map[Code]int{
 	Interrupted:          ExitInterrupted,
 }
 
-var defaultCodes = map[int]Code{
-	ExitNotFound:    NotFound,
-	ExitRetryable:   NetworkError,
-	ExitUsage:       UsageError,
-	ExitForbidden:   Forbidden,
-	ExitTimeout:     Timeout,
-	ExitInternal:    InternalError,
-	ExitInterrupted: Interrupted,
-}
-
 func Registered(code Code) bool {
 	_, ok := exits[code]
 	return ok
@@ -177,9 +167,4 @@ func (e *Error) ErrorFields() map[string]any { return e.Fields }
 
 func Errorf(code Code, format string, args ...any) *Error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...)}
-}
-
-func DefaultCode(exit int) (Code, bool) {
-	code, ok := defaultCodes[exit]
-	return code, ok
 }
