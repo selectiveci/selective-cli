@@ -1,9 +1,13 @@
 package gitctx
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 type Context struct {
@@ -42,16 +46,62 @@ func gitHEAD() (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+var live = struct {
+	sync.Mutex
+	procs     map[*os.Process]struct{}
+	abandoned bool
+}{procs: map[*os.Process]struct{}{}}
+
+func Abandon() {
+	live.Lock()
+	defer live.Unlock()
+	live.abandoned = true
+	for p := range live.procs {
+		_ = p.Kill()
+	}
+}
+
 func run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
-	out, err := cmd.Output()
+	var out, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	if err := start(cmd); err != nil {
+		return "", err
+	}
+	err := cmd.Wait()
+	stop(cmd.Process)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%s %v: %s", name, args, exitErr.Stderr)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("%s %v: %s", name, args, stderr.Bytes())
 		}
 		return "", err
 	}
-	return string(out), nil
+	return out.String(), nil
+}
+
+func start(cmd *exec.Cmd) error {
+	live.Lock()
+	if live.abandoned {
+		live.Unlock()
+		select {}
+	}
+	defer live.Unlock()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	live.procs[cmd.Process] = struct{}{}
+	return nil
+}
+
+func stop(p *os.Process) {
+	live.Lock()
+	delete(live.procs, p)
+	abandoned := live.abandoned
+	live.Unlock()
+	if abandoned {
+		select {}
+	}
 }
 
 // parseSlug extracts "owner/repo" from HTTPS or SSH remote URLs.

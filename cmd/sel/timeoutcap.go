@@ -7,6 +7,7 @@ import (
 
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/gitctx"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +25,7 @@ func capTimeout(c *cobra.Command, argv []string, stdout, stderr io.Writer) {
 			if finished {
 				return err
 			}
+			gitctx.Abandon()
 			expired := contract.Errorf(contract.Timeout, "--timeout %s expired", limit)
 			if asJSON {
 				_ = format.Error(stdout, expired)
