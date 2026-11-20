@@ -30,7 +30,10 @@ func timedOutSelTest(t *testing.T) (res cliResult, took time.Duration, runnerPid
 	if err != nil {
 		t.Fatalf("the runner never started, so this proves nothing: %v", err)
 	}
-	runnerPid, _ = strconv.Atoi(strings.TrimSpace(string(body)))
+	runnerPid, err = strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil || runnerPid <= 0 {
+		t.Fatalf("the runner's pid file holds %q, not a pid: %v", body, err)
+	}
 	t.Cleanup(func() { _ = syscall.Kill(-runnerPid, syscall.SIGKILL) })
 	return res, took, runnerPid, tmp
 }

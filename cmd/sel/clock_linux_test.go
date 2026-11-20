@@ -86,16 +86,29 @@ func assertTimeoutLast(t *testing.T, res cliResult) {
 }
 
 func TestTimeoutEndsACommandWhoseSetupReadStalls(t *testing.T) {
-	cases := map[string]struct {
-		args         []string
-		releaseAfter time.Duration
-	}{
+	cases := map[string]stalledSetupCase{
+		"test": {[]string{"test", "--org", "acme", "--against", "HEAD"}, 0},
+		"tail": {[]string{"tail", "--run-id", "r1"}, 1500 * time.Millisecond},
+	}
+	runStalledSetupCases(t, cases)
+}
+
+func TestTimeoutAfterASlowSetupStillExitsEightAsOnMain(t *testing.T) {
+	cases := map[string]stalledSetupCase{
 		"approvals show": {[]string{"approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90"}, 1500 * time.Millisecond},
 		"doctor":         {[]string{"doctor"}, 0},
-		"test":           {[]string{"test", "--org", "acme", "--against", "HEAD"}, 0},
-		"tail":           {[]string{"tail", "--run-id", "r1"}, 1500 * time.Millisecond},
 		"suites delete":  {[]string{"suites", "delete", "old-minitest", "--yes", "--org", "acme"}, 1500 * time.Millisecond},
 	}
+	runStalledSetupCases(t, cases)
+}
+
+type stalledSetupCase struct {
+	args         []string
+	releaseAfter time.Duration
+}
+
+func runStalledSetupCases(t *testing.T, cases map[string]stalledSetupCase) {
+	t.Helper()
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
