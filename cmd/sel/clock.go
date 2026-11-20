@@ -11,6 +11,7 @@ import (
 
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/localrun"
 	"github.com/spf13/cobra"
 )
 
@@ -93,23 +94,44 @@ func (c *clock) expire(g *guard, asJSON bool, cause contract.Coded) {
 	if c.terminal.Swap(true) {
 		return
 	}
+	lineSafe := false
 	if asJSON && g.mu.TryLock() {
 		if g.last == 0 || g.last == '\n' {
-			written := make(chan struct{})
-			go func() {
-				_ = format.Error(g.w, cause)
-				close(written)
-			}()
-			select {
-			case <-written:
-			case <-time.After(fallbackWriteWait):
-			}
+			lineSafe = writeWithin(fallbackWriteWait, g.w, cause)
 		}
 		g.closed = true
 		g.mu.Unlock()
 	}
-	fmt.Fprintf(c.stderr, "Error: %s\n", cause.Error())
+	if lineSafe || !(asJSON && sameFile(g.w, c.stderr)) {
+		fmt.Fprintf(c.stderr, "Error: %s\n", cause.Error())
+	}
+	localrun.KillRunners()
 	c.exit(contract.ExitTimeout)
+}
+
+func writeWithin(wait time.Duration, w io.Writer, cause contract.Coded) bool {
+	written := make(chan struct{})
+	go func() {
+		_ = format.Error(w, cause)
+		close(written)
+	}()
+	select {
+	case <-written:
+		return true
+	case <-time.After(wait):
+		return false
+	}
+}
+
+func sameFile(a, b io.Writer) bool {
+	fa, okA := a.(*os.File)
+	fb, okB := b.(*os.File)
+	if !okA || !okB {
+		return false
+	}
+	ia, errA := fa.Stat()
+	ib, errB := fb.Stat()
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
 }
 
 func newClock(stderr io.Writer) *clock {
