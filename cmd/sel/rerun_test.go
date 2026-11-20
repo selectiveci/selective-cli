@@ -160,10 +160,12 @@ func TestHelpDeclaresRerunAsANonDestructiveWrite(t *testing.T) {
 	var doc struct {
 		Help struct {
 			Commands []struct {
-				Path        string `json:"path"`
-				ExitCodes   []int  `json:"exit_codes"`
-				Mutates     bool   `json:"mutates"`
-				Destructive bool   `json:"destructive"`
+				Path        string   `json:"path"`
+				ExitCodes   []int    `json:"exit_codes"`
+				Events      []string `json:"events"`
+				WaitDefault string   `json:"wait_default"`
+				Mutates     bool     `json:"mutates"`
+				Destructive bool     `json:"destructive"`
 			} `json:"commands"`
 		} `json:"help"`
 	}
@@ -172,8 +174,8 @@ func TestHelpDeclaresRerunAsANonDestructiveWrite(t *testing.T) {
 	}
 	for _, c := range doc.Help.Commands {
 		if c.Path == "rerun" {
-			if !c.Mutates || c.Destructive || len(c.ExitCodes) != 6 {
-				t.Errorf("rerun = %+v, want mutates, not destructive, exit codes 0,3,4,5,6,7", c)
+			if !c.Mutates || c.Destructive || len(c.ExitCodes) != 9 || c.ExitCodes[8] != 8 || c.WaitDefault != "10m" || !strings.Contains(strings.Join(c.Events, ","), "test_fail,summary") {
+				t.Errorf("rerun = %+v, want mutates, not destructive, exit codes 0-8, wait_default 10m and the tail events", c)
 			}
 			return
 		}

@@ -1,6 +1,7 @@
 package tail
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,21 +31,25 @@ type Options struct {
 	Wait    time.Duration
 	Timeout time.Duration
 	Started time.Time
+
+	NoReplay  bool
+	LimitFlag string
 }
 
 func Run(client *api.Client, opts Options) (int, error) {
 	ctx := context.Background()
+	if opts.Started.IsZero() {
+		opts.Started = time.Now()
+	}
 	if opts.Timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeoutCause(ctx, opts.Timeout,
-			contract.Errorf(contract.Timeout, "--timeout %s expired before the build finished", opts.Timeout))
+		limitFlag := cmp.Or(opts.LimitFlag, "--timeout")
+		ctx, cancel = context.WithTimeoutCause(ctx, opts.Timeout-time.Since(opts.Started),
+			contract.Errorf(contract.Timeout, "%s %s expired before the build finished", limitFlag, opts.Timeout))
 		defer cancel()
 	}
 	if opts.Format == "" {
 		opts.Format = format.DefaultFormat()
-	}
-	if opts.Started.IsZero() {
-		opts.Started = time.Now()
 	}
 
 	buildID := opts.RunID
@@ -59,7 +64,7 @@ func Run(client *api.Client, opts Options) (int, error) {
 		}
 	}
 
-	return stream(ctx, opts.Started, client.Host, client.Token, buildID, opts.Format)
+	return stream(ctx, opts.Started, client.Host, client.Token, buildID, opts.Format, !opts.NoReplay)
 }
 
 func refuse(err error) (int, error) {
@@ -262,12 +267,16 @@ func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.C
 	}
 }
 
-func stream(parent context.Context, commandStart time.Time, host, token, buildID, fmtFlag string) (int, error) {
+func stream(parent context.Context, commandStart time.Time, host, token, buildID, fmtFlag string, replay bool) (int, error) {
+	replayParam := ""
+	if replay {
+		replayParam = "&replay=1"
+	}
 	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	// Phoenix serves a socket mounted at /api/v1/tail on /api/v1/tail/websocket;
 	// the bare path is a 404, so tail never connected before this.
-	wsURL = fmt.Sprintf("%s/api/v1/tail/websocket?build_id=%s&replay=1&v=1", wsURL, url.QueryEscape(buildID))
+	wsURL = fmt.Sprintf("%s/api/v1/tail/websocket?build_id=%s%s&v=1", wsURL, url.QueryEscape(buildID), replayParam)
 
 	// The token goes in a header, not the URL: URLs end up in proxy and
 	// access logs.

@@ -61,9 +61,20 @@ func TestStreamAsksTheServerToReplayFailuresAtVersionOne(t *testing.T) {
 	capture(t)
 	srv, query := recordingTailServer(t, []string{summaryOneFailed})
 
-	_, _ = stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+	_, _ = stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 
 	if want := "build_id=b&replay=1&v=1"; query() != want {
+		t.Errorf("query = %q, want %q", query(), want)
+	}
+}
+
+func TestStreamOmitsTheReplayRequestWhenAskedNotToReplay(t *testing.T) {
+	capture(t)
+	srv, query := recordingTailServer(t, []string{summaryOneFailed})
+
+	_, _ = stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", false)
+
+	if want := "build_id=b&v=1"; query() != want {
 		t.Errorf("query = %q, want %q", query(), want)
 	}
 }
@@ -83,7 +94,7 @@ func TestStreamPassesReplayedFramesThroughAndExitsFromTheSummary(t *testing.T) {
 			out, _ := capture(t)
 			srv, _ := recordingTailServer(t, tc.frames)
 
-			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 
 			if want := strings.Join(tc.frames, "\n") + "\n"; code != tc.want || err != nil || out.String() != want {
 				t.Errorf("exit %d err %v stdout %q, want exit %d and %q", code, err, out.String(), tc.want, want)
@@ -98,7 +109,7 @@ func TestStreamWritesAHeartbeatLineForEveryQuietInterval(t *testing.T) {
 	t.Cleanup(func() { heartbeatInterval = 30 * time.Second })
 	srv := quietTailServer(t, true, 2500*time.Millisecond, summaryOneFailed)
 
-	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 
 	want := buildStart + "\n" +
 		`{"v":1,"event":"heartbeat","elapsed_s":1}` + "\n" +
@@ -115,7 +126,7 @@ func TestStreamKeepsHeartbeatsOffStdoutInPrettyMode(t *testing.T) {
 	t.Cleanup(func() { heartbeatInterval = 30 * time.Second })
 	srv := quietTailServer(t, true, 1500*time.Millisecond, summaryOneFailed)
 
-	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "pretty")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "pretty", true)
 
 	if code != 1 || err != nil || strings.Contains(out.String(), "heartbeat") || strings.Count(errOut.String(), "still running") != 1 {
 		t.Errorf("exit %d err %v stdout %q stderr %q, want exit 1, one stderr note and no heartbeat on stdout", code, err, out.String(), errOut.String())
@@ -141,7 +152,7 @@ func TestStreamStaysSilentWhileFramesKeepArriving(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 
 	if code != 1 || err != nil || strings.Contains(out.String(), "heartbeat") {
 		t.Errorf("exit %d err %v stdout %q, want exit 1 and no heartbeat while a frame arrives every 600ms", code, err, out.String())

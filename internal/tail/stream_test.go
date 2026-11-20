@@ -115,7 +115,7 @@ func TestStreamExitCodes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, connects := fakeTailServer(t, tc.frames, tc.drop)
 
-			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 
 			if got := atomic.LoadInt32(connects); got != 1 {
 				t.Fatalf("server saw %d connections, want 1", got)
@@ -170,7 +170,7 @@ func TestStreamMapsATokenClosedStreamToUnauthorizedWithoutReconnecting(t *testin
 		t.Run(tc.name, func(t *testing.T) {
 			srv, connects := closingTailServer(t, tc.code, tc.reason)
 
-			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+			code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 
 			if got := atomic.LoadInt32(connects); got != 1 {
 				t.Fatalf("server saw %d connections, want 1", got)
@@ -240,7 +240,7 @@ func streamWithin(t *testing.T, srv *httptest.Server, limit time.Duration) strea
 	t.Helper()
 	done := make(chan streamResult, 1)
 	go func() {
-		code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+		code, err := stream(context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson", true)
 		done <- streamResult{code, err}
 	}()
 	select {
@@ -281,7 +281,7 @@ func TestStreamStaysConnectedToAQuietServer(t *testing.T) {
 func TestStreamRejectedToken(t *testing.T) {
 	srv, connects := fakeTailServer(t, nil, false)
 
-	code, err := stream(context.Background(), time.Now(), srv.URL, "wrong", "b", "ndjson")
+	code, err := stream(context.Background(), time.Now(), srv.URL, "wrong", "b", "ndjson", true)
 
 	if got := atomic.LoadInt32(connects); got != 0 {
 		t.Fatalf("server accepted %d connections with a bad token", got)

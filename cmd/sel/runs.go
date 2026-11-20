@@ -113,11 +113,8 @@ Exit codes:
 			"mcp_skip_flags": "format",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			for _, name := range []string{"wait", "timeout"} {
-				d, _ := cmd.Flags().GetDuration(name)
-				if cmd.Flags().Changed(name) && d <= 0 {
-					return contract.Errorf(contract.UsageError, "--%s must be a positive duration", name)
-				}
+			if err := requirePositiveDurations(cmd, "wait", "timeout"); err != nil {
+				return err
 			}
 			asJSON, _ := cmd.Flags().GetBool("json")
 			var err error
@@ -147,6 +144,16 @@ Exit codes:
 	cmd.Flags().Lookup("wait").NoOptDefVal = defaultTailWait
 	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 0, "Stop after this long in total and exit 8")
 	return cmd
+}
+
+func requirePositiveDurations(cmd *cobra.Command, names ...string) error {
+	for _, name := range names {
+		d, _ := cmd.Flags().GetDuration(name)
+		if cmd.Flags().Changed(name) && d <= 0 {
+			return contract.Errorf(contract.UsageError, "--%s must be a positive duration", name)
+		}
+	}
+	return nil
 }
 
 func tailFormat(asJSON bool, requested string) (string, error) {
