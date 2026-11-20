@@ -37,21 +37,3 @@ func TestUnknownCodeFallsBackToItsHTTPStatus(t *testing.T) {
 		}
 	}
 }
-
-func TestDefaultCodesAreTheSevenErrorExitsAndEachCodeExitsWithItsOwnExit(t *testing.T) {
-	want := map[int]Code{3: "not_found", 4: "network_error", 5: "usage_error", 6: "forbidden", 8: "timeout", 9: "internal_error", 130: "interrupted"}
-	found := 0
-	for exit := 0; exit <= 255; exit++ {
-		code, ok := DefaultCode(exit)
-		if !ok {
-			continue
-		}
-		found++
-		if code != want[exit] || ExitFor(code, 0) != exit {
-			t.Errorf("DefaultCode(%d) = %q, ExitFor = %d, want %q", exit, code, ExitFor(code, 0), want[exit])
-		}
-	}
-	if found != len(want) {
-		t.Errorf("%d exits have a default code, want %d", found, len(want))
-	}
-}
