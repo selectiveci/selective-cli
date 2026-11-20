@@ -183,12 +183,3 @@ func TestTimeoutLeavesNoHungGitBehind(t *testing.T) {
 		})
 	}
 }
-
-func processGone(pid int) bool {
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
-			return true
-		}
-	}
-	return false
-}
