@@ -19,7 +19,7 @@ type budgetRun struct {
 }
 
 func setRetryBudget(ctx context.Context, client *api.Client, buildID string, opts Options) error {
-	written, err := client.WithContext(ctx).SetRetryBudget(buildID, opts.IdempotencyKey, opts.Retries, opts.DryRun)
+	written, err := client.WithContext(ctx).SetRetryBudget(buildID, opts.Org, opts.IdempotencyKey, opts.Retries, opts.DryRun)
 	if err != nil {
 		return err
 	}

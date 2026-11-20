@@ -32,6 +32,7 @@ type Options struct {
 	Started time.Time
 
 	Retries        int
+	Org            string
 	DryRun         bool
 	IdempotencyKey string
 }

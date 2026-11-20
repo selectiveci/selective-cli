@@ -91,7 +91,8 @@ comes before any run event, and after any waiting lines under --wait. In text
 mode a sentence goes to stderr instead. A build with no live run exits 5 with
 run_not_running. The budget reaches only the runs that are live at the moment
 of the POST; runs that start later (with --wait, or in a multi-suite build)
-keep the suite's own setting (SEL-367). A run that did not take it, or one
+keep the suite's own setting (SEL-367). A build ID found in several of your
+organizations needs --org (or SELECTIVE_ORG) for the write. A run that did not take it, or one
 retrying with another N, is noted on stderr and does not change the exit code.
 --dry-run sends the same request as a preview, prints it, changes nothing and
 does not tail. One random Idempotency-Key is sent and reused when the CLI
@@ -168,6 +169,7 @@ Exit codes:
 	cmd.Flags().Lookup("wait").NoOptDefVal = defaultTailWait
 	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 0, "Stop after this long in total and exit 8")
 	cmd.Flags().String("retries", "", "First set the live build's retry budget to this integer from 1 to 10, then tail")
+	cmd.Flags().StringVar(&opts.Org, "org", "", "With --retries: organization slug, for a build ID found in several (default: SELECTIVE_ORG)")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "With --retries: preview the budget change and exit without tailing")
 	cmd.Flags().StringVar(&opts.IdempotencyKey, "idempotency-key", "", "With --retries: use this Idempotency-Key instead of a random one")
 	return cmd

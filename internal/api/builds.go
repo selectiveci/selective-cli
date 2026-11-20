@@ -168,10 +168,13 @@ func (c *Client) RerunFailed(build, org, key string, dryRun bool) (*Rerun, error
 	return &out, nil
 }
 
-func (c *Client) SetRetryBudget(build, key string, maxRetries int, dryRun bool) (json.RawMessage, error) {
+func (c *Client) SetRetryBudget(build, org, key string, maxRetries int, dryRun bool) (json.RawMessage, error) {
 	var out json.RawMessage
 	header := http.Header{"Idempotency-Key": {key}}
 	params := url.Values{}
+	if org != "" {
+		params.Set("org", org)
+	}
 	if dryRun {
 		params.Set("dry_run", "true")
 	}

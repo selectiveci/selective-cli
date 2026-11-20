@@ -337,3 +337,26 @@ func TestTailRetriesDryRunDoesNotWaitForTheBuild(t *testing.T) {
 		t.Errorf("exit %d requests %q, want exit 0 after one lookup and the dry POST", res.exit, got)
 	}
 }
+
+func TestTailRetriesSendsTheOrgFromTheFlagOrTheEnvironment(t *testing.T) {
+	flagged := &budgetServer{frames: []string{summaryPass}, replies: []stubReply{{status: 200, body: budgetWritten}}}
+	res := runBinary(t, gitRepo(t), flagged.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--org", "acme", "--json")
+	if res.exit != 0 || len(flagged.queries) != 1 || flagged.queries[0] != "org=acme" {
+		t.Errorf("exit %d queries %v stderr %q, want exit 0 and one POST with org=acme", res.exit, flagged.queries, res.stderr)
+	}
+
+	t.Setenv("SELECTIVE_ORG", "from-env")
+	env := &budgetServer{frames: []string{summaryPass}, replies: []stubReply{{status: 200, body: budgetWritten}}}
+	runBinary(t, gitRepo(t), env.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--json")
+	if len(env.queries) != 1 || env.queries[0] != "org=from-env" {
+		t.Errorf("queries %v, want one POST with org=from-env", env.queries)
+	}
+
+	plain := &budgetServer{frames: []string{summaryPass}}
+	runBinary(t, gitRepo(t), plain.start(t).URL, "tail", "--run-id", "b1", "--json")
+	if got := plain.requests(); got != "tail" {
+		t.Errorf("requests = %q, want a plain tail to ignore SELECTIVE_ORG", got)
+	}
+	orgOnly := runBinary(t, gitRepo(t), plain.start(t).URL, "tail", "--run-id", "b1", "--org", "acme", "--json")
+	assertRefusal(t, orgOnly, 5, "usage_error")
+}
