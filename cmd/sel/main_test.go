@@ -333,7 +333,16 @@ func TestJSONFlagGivenAcceptsBooleanSpellings(t *testing.T) {
 }
 
 func TestUnreadableConfigIsAUsageErrorObjectFromEveryCommandThatReadsIt(t *testing.T) {
-	for _, args := range [][]string{{"orgs"}, {"auth", "status", "--json"}, {"auth", "logout", "--json"}} {
+	for _, args := range [][]string{
+		{"orgs"}, {"auth", "status", "--json"}, {"auth", "logout", "--json"},
+		{"repos"}, {"builds"}, {"build", "1"}, {"failures", "1"}, {"rerun", "1", "--failed"}, {"trends"},
+		{"flakes", "list"}, {"flakes", "show", "1"}, {"flakes", "prompt", "1"},
+		{"flakes", "quarantine", "1"}, {"flakes", "unquarantine", "1"}, {"flakes", "mark-fixed", "1", "--yes"},
+		{"suites"}, {"suites", "create", "--name", "x"}, {"suites", "key", "s"}, {"suites", "configure", "s"},
+		{"suites", "show", "s"}, {"suites", "settings", "s"}, {"suites", "archive", "s"}, {"suites", "restore", "s"}, {"suites", "delete", "s", "--yes"},
+		{"tokens", "list"}, {"tokens", "show"}, {"tokens", "create", "--name", "x"}, {"tokens", "revoke", "00000000-0000-4000-8000-000000000001", "--yes"},
+		{"approvals", "list"}, {"approvals", "show", "00000000-0000-4000-8000-000000000001"},
+	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			dir := t.TempDir()
 			t.Setenv("SELECTIVE_CONFIG_DIR", dir)
