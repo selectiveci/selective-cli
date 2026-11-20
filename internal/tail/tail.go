@@ -32,6 +32,7 @@ type Options struct {
 	Started time.Time
 
 	Retries        int
+	DryRun         bool
 	IdempotencyKey string
 }
 
@@ -66,52 +67,12 @@ func Run(client *api.Client, opts Options) (int, error) {
 		if err := setRetryBudget(ctx, client, buildID, opts); err != nil {
 			return refuse(deadlineCause(ctx, err))
 		}
+		if opts.DryRun {
+			return contract.ExitOK, nil
+		}
 	}
 
 	return stream(ctx, opts.Started, client.Host, client.Token, buildID, opts.Format)
-}
-
-func setRetryBudget(ctx context.Context, client *api.Client, buildID string, opts Options) error {
-	written, err := client.WithContext(ctx).SetRetryBudget(buildID, opts.IdempotencyKey, opts.Retries)
-	if err != nil {
-		return err
-	}
-	if opts.Format == "ndjson" {
-		if err := format.Document(outWriter, written); err != nil {
-			return err
-		}
-	} else {
-		fmt.Fprintf(errWriter, "Set the retry budget of build %s to %d.\n", buildID, opts.Retries)
-	}
-	for _, note := range budgetNotes(written, opts.Retries) {
-		fmt.Fprintln(errWriter, note)
-	}
-	return nil
-}
-
-func budgetNotes(written json.RawMessage, requested int) []string {
-	var body struct {
-		RetryBudget struct {
-			Runs []struct {
-				ID         string `json:"id"`
-				Applied    *bool  `json:"applied"`
-				MaxRetries *int   `json:"max_retries"`
-			} `json:"runs"`
-		} `json:"retry_budget"`
-	}
-	if json.Unmarshal(written, &body) != nil {
-		return nil
-	}
-	var notes []string
-	for _, run := range body.RetryBudget.Runs {
-		switch {
-		case run.Applied != nil && !*run.Applied:
-			notes = append(notes, fmt.Sprintf("Run %s did not take the retry budget: its process had gone.", run.ID))
-		case run.MaxRetries != nil && *run.MaxRetries != requested:
-			notes = append(notes, fmt.Sprintf("Run %s is retrying up to %d times, not the %d you asked for.", run.ID, *run.MaxRetries, requested))
-		}
-	}
-	return notes
 }
 
 func refuse(err error) (int, error) {

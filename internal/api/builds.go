@@ -168,10 +168,14 @@ func (c *Client) RerunFailed(build, org, key string, dryRun bool) (*Rerun, error
 	return &out, nil
 }
 
-func (c *Client) SetRetryBudget(build, key string, maxRetries int) (json.RawMessage, error) {
+func (c *Client) SetRetryBudget(build, key string, maxRetries int, dryRun bool) (json.RawMessage, error) {
 	var out json.RawMessage
 	header := http.Header{"Idempotency-Key": {key}}
-	path := "/api/v1/builds/" + url.PathEscape(build) + "/retry_budget"
+	params := url.Values{}
+	if dryRun {
+		params.Set("dry_run", "true")
+	}
+	path := withQuery("/api/v1/builds/"+url.PathEscape(build)+"/retry_budget", params)
 	if err := c.doWith(header, "POST", path, map[string]int{"max_retries": maxRetries}, http.StatusOK, &out); err != nil {
 		return nil, err
 	}

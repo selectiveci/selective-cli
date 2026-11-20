@@ -83,13 +83,20 @@ func tailCmd() *cobra.Command {
 Run from inside a git repository: sel tail auto-detects the repo and HEAD commit.
 --run-id BUILD tails that build instead.
 
---retries N first sets the live build's retry budget to N (1 to 10) through
-POST /api/v1/builds/:id/retry_budget, then tails as usual and exits with the
-tail's code. It is the only way tail writes: it needs a write token, and a
-build that is no longer live exits 5 with run_not_running. The write response
-is the first line of output. One random Idempotency-Key is sent and reused
-when the CLI retries; --idempotency-key K sets it yourself. Without --retries
-tail only reads.
+--retries N first sets the retry budget of the live build to N (1 to 10)
+through POST /api/v1/builds/:id/retry_budget, then tails as usual and exits
+with the tail's code. It is the only way tail writes: it needs a write token.
+In NDJSON the write response is the first line with a retry_budget key: it
+comes before any run event, and after any waiting lines under --wait. In text
+mode a sentence goes to stderr instead. A build with no live run exits 5 with
+run_not_running. The budget reaches only the runs that are live at the moment
+of the POST; runs that start later (with --wait, or in a multi-suite build)
+keep the suite's own setting (SEL-367). A run that did not take it, or one
+retrying with another N, is noted on stderr and does not change the exit code.
+--dry-run sends the same request as a preview, prints it, changes nothing and
+does not tail. One random Idempotency-Key is sent and reused when the CLI
+retries; --idempotency-key K sets it yourself. Without --retries tail only
+reads.
 
 Without --wait, a commit with no build exits 3 at once. --wait[=DURATION]
 polls until the build exists (10m when given without a value; write
@@ -109,12 +116,13 @@ Exit codes:
   3  no build found for this commit (--wait ran out), or not inside a git repository
   4  authentication or network error, or --wait ran out after a failed lookup
   5  usage error
-  6  the token can't read this build (forbidden or insufficient scope)
+  6  the token can't read this build, or with --retries can't write to it
   8  --timeout expired`,
 		Example: `  sel tail
   sel tail --wait --timeout 30m
   sel tail --wait=5s --json
-  sel tail --run-id 8f3c9a --retries 3`,
+  sel tail --run-id 8f3c9a --retries 3
+  sel tail --run-id 8f3c9a --retries 3 --dry-run --json`,
 		Args: cobra.NoArgs,
 		Annotations: map[string]string{
 			"mutates_with": "retries",
@@ -159,7 +167,8 @@ Exit codes:
 	cmd.Flags().DurationVar(&opts.Wait, "wait", 0, "Wait for the build to exist, at most this long (default "+defaultTailWait+" when given without a value)")
 	cmd.Flags().Lookup("wait").NoOptDefVal = defaultTailWait
 	cmd.Flags().DurationVar(&opts.Timeout, "timeout", 0, "Stop after this long in total and exit 8")
-	cmd.Flags().String("retries", "", "First set the live build's retry budget to N (1 to 10), then tail")
+	cmd.Flags().String("retries", "", "First set the live build's retry budget to this integer from 1 to 10, then tail")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "With --retries: preview the budget change and exit without tailing")
 	cmd.Flags().StringVar(&opts.IdempotencyKey, "idempotency-key", "", "With --retries: use this Idempotency-Key instead of a random one")
 	return cmd
 }

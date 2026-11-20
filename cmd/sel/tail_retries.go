@@ -14,8 +14,10 @@ const maxTailRetries = 10
 func tailRetries(cmd *cobra.Command, opts *tail.Options) error {
 	flags := cmd.Flags()
 	if !flags.Changed("retries") {
-		if flags.Changed("idempotency-key") {
-			return contract.Errorf(contract.UsageError, "--idempotency-key needs --retries")
+		for _, name := range []string{"idempotency-key", "dry-run"} {
+			if flags.Changed(name) {
+				return contract.Errorf(contract.UsageError, "--%s needs --retries", name)
+			}
 		}
 		return nil
 	}

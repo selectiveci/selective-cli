@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
@@ -9,17 +10,21 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"nhooyr.io/websocket"
 )
 
 type budgetServer struct {
-	mu      sync.Mutex
-	log     []string
-	keys    []string
-	bodies  []string
-	replies []stubReply
-	frames  []string
+	mu       sync.Mutex
+	log      []string
+	keys     []string
+	bodies   []string
+	queries  []string
+	replies  []stubReply
+	frames   []string
+	lookups  []int
+	postHang time.Duration
 }
 
 const budgetWritten = `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","applied":true,"max_retries":3,"requeued_test_ids":[]}]},"result":"updated","dry_run":false}`
@@ -31,13 +36,27 @@ func (s *budgetServer) start(t *testing.T) *httptest.Server {
 		defer s.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/v1/builds/lookup":
+			status := http.StatusOK
+			if len(s.log) < len(s.lookups) {
+				status = s.lookups[len(s.log)]
+			}
 			s.log = append(s.log, "lookup")
+			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"build_id":"b1","status":"running"}`))
 		case "/api/v1/builds/b1/retry_budget":
 			body, _ := io.ReadAll(r.Body)
 			s.log = append(s.log, r.Method+" retry_budget")
 			s.keys = append(s.keys, r.Header.Get("Idempotency-Key"))
 			s.bodies = append(s.bodies, string(body))
+			s.queries = append(s.queries, r.URL.RawQuery)
+			if s.postHang > 0 {
+				s.mu.Unlock()
+				select {
+				case <-time.After(s.postHang):
+				case <-r.Context().Done():
+				}
+				s.mu.Lock()
+			}
 			reply := s.replies[min(len(s.keys), len(s.replies))-1]
 			w.WriteHeader(reply.status)
 			_, _ = w.Write([]byte(reply.body))
@@ -173,7 +192,9 @@ func TestTailWithoutRetriesSendsNoWriteAndRejectsAnIdempotencyKey(t *testing.T) 
 	if got := s.requests(); res.exit != 0 || got != "tail" {
 		t.Errorf("exit %d requests %q, want exit 0 and only the stream", res.exit, got)
 	}
+	dry := runBinary(t, gitRepo(t), srv.URL, "tail", "--run-id", "b1", "--dry-run", "--json")
 	assertRefusal(t, keyed, 5, "usage_error")
+	assertRefusal(t, dry, 5, "usage_error")
 }
 
 func TestTailDeclaresThatItMutatesOnlyWithRetries(t *testing.T) {
@@ -212,5 +233,92 @@ func TestTailRetriesNotesAnUnappliedRunOrADifferentBudgetOnStderrWithoutChanging
 		if !strings.Contains(res.stderr, want) {
 			t.Errorf("stderr %q lacks %q", res.stderr, want)
 		}
+	}
+}
+
+func TestTailRetriesAcceptsTheBoundsOneAndTen(t *testing.T) {
+	for _, value := range []string{"1", "10"} {
+		t.Run(value, func(t *testing.T) {
+			s := &budgetServer{frames: []string{summaryPass}, replies: []stubReply{{status: 200, body: budgetWritten}}}
+
+			res := runBinary(t, gitRepo(t), s.start(t).URL, "tail", "--run-id", "b1", "--retries="+value, "--json")
+
+			if res.exit != 0 || len(s.bodies) != 1 || s.bodies[0] != `{"max_retries":`+value+`}` {
+				t.Errorf("exit %d bodies %v, want exit 0 and one POST of %s", res.exit, s.bodies, value)
+			}
+		})
+	}
+}
+
+func TestTailTimeoutCoversTheRetryBudgetPost(t *testing.T) {
+	s := &budgetServer{postHang: 10 * time.Second, replies: []stubReply{{status: 200, body: budgetWritten}}, frames: []string{summaryPass}}
+	srv := s.start(t)
+
+	started := time.Now()
+	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--run-id", "b1", "--retries", "3", "--timeout", "500ms", "--json")
+
+	assertRefusal(t, res, 8, "timeout")
+	if got := s.requests(); got != "POST retry_budget" || time.Since(started) > 5*time.Second {
+		t.Errorf("requests %q after %s, want only the POST, cut off by --timeout", got, time.Since(started))
+	}
+}
+
+func TestTailRetriesUnderWaitWritesAfterTheWaitingLinesAndBeforeTheStream(t *testing.T) {
+	s := &budgetServer{lookups: []int{404}, frames: []string{frameStart, summaryPass}, replies: []stubReply{{status: 200, body: budgetWritten}}}
+	srv := s.start(t)
+
+	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--wait=30s", "--retries", "3", "--json")
+
+	var kinds []string
+	for _, line := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
+		var l struct {
+			Event       string          `json:"event"`
+			RetryBudget json.RawMessage `json:"retry_budget"`
+		}
+		_ = json.Unmarshal([]byte(line), &l)
+		kinds = append(kinds, cmp.Or(l.Event, map[bool]string{true: "write"}[len(l.RetryBudget) > 0]))
+	}
+	want := "waiting,write,build_start,summary"
+	if res.exit != 0 || strings.Join(kinds, ",") != want || s.requests() != "lookup,lookup,POST retry_budget,tail" {
+		t.Errorf("exit %d lines %v requests %q, want %s", res.exit, kinds, s.requests(), want)
+	}
+}
+
+func TestTailRetriesTextModeReportsTheBudgetInForce(t *testing.T) {
+	cases := []struct{ name, runs, want string }{
+		{"differs", `{"id":"r1","applied":false,"max_retries":null},{"id":"r2","applied":true,"max_retries":5}`, "Set the retry budget of build b1 to 5 (you asked for 3)."},
+		{"none applied", `{"id":"r1","applied":false,"max_retries":null}`, "No run of build b1 took the retry budget (not live)."},
+		{"as asked", `{"id":"r1","applied":true,"max_retries":3}`, "Set the retry budget of build b1 to 3."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[` + tc.runs + `]},"result":"updated","dry_run":false}`
+			s := &budgetServer{frames: []string{summaryPass}, replies: []stubReply{{status: 200, body: body}}}
+
+			res := runBinary(t, gitRepo(t), s.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--format", "pretty")
+
+			if first, _, _ := strings.Cut(res.stderr, "\n"); res.exit != 0 || first != tc.want {
+				t.Errorf("exit %d stderr %q, want first line %q", res.exit, res.stderr, tc.want)
+			}
+		})
+	}
+}
+
+func TestTailRetriesDryRunPreviewsAndDoesNotTail(t *testing.T) {
+	preview := `{"build_id":"b1","retry_budget":{"max_retries":3,"runs":[{"id":"r1","applied":false,"max_retries":2,"requeued_test_ids":[]}]},"result":"updated","dry_run":true}`
+	for _, mode := range []string{"--json", "--format=pretty"} {
+		t.Run(mode, func(t *testing.T) {
+			s := &budgetServer{frames: []string{summaryPass}, replies: []stubReply{{status: 200, body: preview}}}
+
+			res := runBinary(t, gitRepo(t), s.start(t).URL, "tail", "--run-id", "b1", "--retries", "3", "--dry-run", mode)
+
+			want := `{"v":1,` + strings.TrimPrefix(preview, "{") + "\n"
+			if mode != "--json" {
+				want = "Dry run: would set the retry budget of build b1 to 3 on 1 live run(s); nothing changed.\n"
+			}
+			if res.exit != 0 || res.stdout != want || res.stderr != "" || s.requests() != "POST retry_budget" || s.queries[0] != "dry_run=true" {
+				t.Errorf("exit %d stdout %q stderr %q requests %q queries %v, want %q and only the dry POST", res.exit, res.stdout, res.stderr, s.requests(), s.queries, want)
+			}
+		})
 	}
 }
