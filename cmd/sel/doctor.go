@@ -48,7 +48,7 @@ document as its doctor field.`,
 			if timeout <= 0 {
 				return contract.Errorf(contract.UsageError, "--timeout must be longer than zero")
 			}
-			report := doctor.Run(doctor.Options{Hostname: f.hostname, Org: f.org, Timeout: timeout})
+			report := doctor.Run(doctor.Options{Hostname: f.hostname, Org: f.org, Timeout: timeout, Ctx: cmd.Context()})
 			err := report.Err()
 			out := cmd.OutOrStdout()
 			if format.JSONMode(cmd.Flags(), out) {

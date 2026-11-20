@@ -1,6 +1,7 @@
 package tail
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,10 +31,14 @@ type Options struct {
 	Wait    time.Duration
 	Timeout time.Duration
 	Started time.Time
+	Ctx     context.Context
+	Out     io.Writer
 }
 
+func (o Options) stdout() io.Writer { return cmp.Or[io.Writer](o.Out, outWriter) }
+
 func Run(client *api.Client, opts Options) (int, error) {
-	ctx := context.Background()
+	ctx := cmp.Or(opts.Ctx, context.Background())
 	if opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeoutCause(ctx, opts.Timeout,
@@ -59,7 +64,7 @@ func Run(client *api.Client, opts Options) (int, error) {
 		}
 	}
 
-	return stream(ctx, opts.Started, client.Host, client.Token, buildID, opts.Format)
+	return streamTo(opts.stdout(), ctx, opts.Started, client.Host, client.Token, buildID, opts.Format)
 }
 
 func refuse(err error) (int, error) {
@@ -75,14 +80,14 @@ func waitOptions(opts Options) wait.Options {
 		For:    "build",
 		Limit:  opts.Wait,
 		Origin: opts.Started,
-		Out:    waitingOutput(opts.Format),
+		Out:    waitingOutput(opts),
 		Pretty: opts.Format != "ndjson",
 	}
 }
 
-func waitingOutput(format string) io.Writer {
-	if format == "ndjson" {
-		return outWriter
+func waitingOutput(opts Options) io.Writer {
+	if opts.Format == "ndjson" {
+		return opts.stdout()
 	}
 	return errWriter
 }
@@ -263,6 +268,10 @@ func keepAlive(ctx context.Context, cancel context.CancelFunc, conn *websocket.C
 }
 
 func stream(parent context.Context, commandStart time.Time, host, token, buildID, fmtFlag string) (int, error) {
+	return streamTo(outWriter, parent, commandStart, host, token, buildID, fmtFlag)
+}
+
+func streamTo(stdout io.Writer, parent context.Context, commandStart time.Time, host, token, buildID, fmtFlag string) (int, error) {
 	wsURL := strings.Replace(host, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	// Phoenix serves a socket mounted at /api/v1/tail on /api/v1/tail/websocket;
@@ -290,7 +299,7 @@ func stream(parent context.Context, commandStart time.Time, host, token, buildID
 	var timedOut atomic.Bool
 	go keepAlive(ctx, cancel, conn, interval, &timedOut)
 
-	out := &syncWriter{w: outWriter}
+	out := &syncWriter{w: stdout}
 	fw := format.NewWriter(out, fmtFlag)
 
 	var lastLine atomic.Int64

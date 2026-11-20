@@ -157,10 +157,13 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	select {
 	case p := <-planned:
 		if p.err != nil {
-			return 0, p.err
+			return 0, expiredOr(cmd.Context(), p.err)
 		}
 		plan = p.plan
 	case <-signalled.Done():
+		if err := expiredOr(cmd.Context(), nil); err != nil {
+			return 0, err
+		}
 		return interrupted(localrun.Summary{})
 	}
 	self, err := os.Executable()
@@ -176,8 +179,15 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 				return localrun.Summary{}, err
 			}
 		}
-		ctx, cancel := context.WithTimeout(ctx, f.timeout)
-		defer cancel()
+		if f.watch {
+			deadline := time.Now().Add(f.timeout)
+			if iteration == 0 {
+				deadline = started.Add(f.timeout)
+			}
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, deadline)
+			defer cancel()
+		}
 		sum, err := launch.Run(ctx, events, localrun.Options{Selector: plan.selectorFor(changed), Passes: f.passes, List: f.list, Paths: plan.paths, Timeout: f.timeout, Iteration: iteration})
 		if errors.Is(err, localrun.ErrInterrupted) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return sum, contract.Errorf(contract.Timeout, "the test run did not finish within %s", f.timeout)

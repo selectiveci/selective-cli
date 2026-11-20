@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -76,6 +77,7 @@ exist, or that this token may not see, exits 3 (not_found) with the same body.`,
 			if err != nil {
 				return err
 			}
+			opts.ctx = cmd.Context()
 			return approvalsShow(env, args[0], opts)
 		},
 	}
@@ -93,10 +95,11 @@ var approvalsClock wait.Clock
 type showOptions struct {
 	wait, timeout time.Duration
 	started       time.Time
+	ctx           context.Context
 }
 
 func approvalsShow(env *setup.Env, id string, opts showOptions) error {
-	ctx := context.Background()
+	ctx := cmp.Or(opts.ctx, context.Background())
 	if opts.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadlineCause(ctx, opts.started.Add(opts.timeout), contract.Errorf(contract.Timeout, "--timeout %s expired", opts.timeout))

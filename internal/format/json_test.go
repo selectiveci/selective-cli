@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -112,7 +113,14 @@ func TestIsTerminalCountsAnMSYSTerminal(t *testing.T) {
 	if IsTerminal(&bytes.Buffer{}) {
 		t.Error("IsTerminal = true for a buffer, want false")
 	}
+	if !IsTerminal(wrapped{os.Stdout}) || IsTerminal(wrapped{&bytes.Buffer{}}) {
+		t.Error("IsTerminal does not look through a wrapper's Unwrap")
+	}
 }
+
+type wrapped struct{ io.Writer }
+
+func (w wrapped) Unwrap() io.Writer { return w.Writer }
 
 func TestErrorDropsExtraFieldsThatReuseReservedKeys(t *testing.T) {
 	extras := map[string]any{"v": 2, "error": "other", "message": "other", "retry_after_s": 7}

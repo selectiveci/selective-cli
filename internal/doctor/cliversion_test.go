@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/update"
 )
 
@@ -216,5 +218,23 @@ func TestTheVersionCheckDoesNotRunOnceALaterStepHasUsedUpTheTimeout(t *testing.T
 	}
 	if elapsed > 300*time.Millisecond+settleGrace+time.Second {
 		t.Errorf("took %s with a 300ms timeout", elapsed)
+	}
+}
+
+func TestDoctorStopsAtTheCallersDeadlineEvenWithALongerOwnTimeout(t *testing.T) {
+	asVersion(t, "1.0.0")
+	release := make(chan struct{})
+	routes := healthy()
+	routes["/api/v1/orgs"] = func(w http.ResponseWriter, r *http.Request) { <-release }
+	host := serve(t, routes)
+	t.Cleanup(func() { close(release) })
+	clock, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	began := time.Now()
+	report := run(t, host, Options{Timeout: 5 * time.Second, Ctx: clock})
+
+	if got := check(t, report, "org"); got.Code != contract.Timeout || time.Since(began) > 300*time.Millisecond+settleGrace+time.Second {
+		t.Errorf("org check %+v after %s, want a timeout at the caller's 300ms, not the 5s of Options.Timeout", got, time.Since(began))
 	}
 }

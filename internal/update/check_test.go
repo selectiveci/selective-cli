@@ -162,6 +162,22 @@ func TestStopCancelsTheFetchWithoutRecordingAFailure(t *testing.T) {
 	}
 }
 
+func TestStopGivesUpOnACheckStuckInAFileRead(t *testing.T) {
+	stuck := &Checker{cancel: func() {}, done: make(chan struct{})}
+
+	stopped := make(chan struct{})
+	go func() {
+		stuck.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Errorf("Stop still waiting after 1s on a check that never finishes, want it bounded by %v", stopGrace)
+	}
+}
+
 func TestDue(t *testing.T) {
 	at := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
 	ago := func(d time.Duration) *time.Time { v := at.Add(-d); return &v }
