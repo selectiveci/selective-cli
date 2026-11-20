@@ -15,7 +15,6 @@ func helpCmd() *cobra.Command {
 		Short: "Help about any command; with --json, the machine-readable description of the CLI",
 		Annotations: map[string]string{
 			"exit_codes": "0,5",
-			"mcp":        "skip",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := cmd.Root()

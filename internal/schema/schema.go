@@ -32,11 +32,9 @@ type Command struct {
 	Destructive bool     `json:"destructive,omitempty"`
 	WaitDefault string   `json:"wait_default,omitempty"`
 	SecretFlags []string `json:"secret_flags,omitempty"`
-	MCP         string   `json:"mcp,omitempty"`
 	SendsPaths  bool     `json:"sends_paths,omitempty"`
 	LocalExec   bool     `json:"local_exec,omitempty"`
 	Idempotent  bool     `json:"idempotent,omitempty"`
-	SkipFlags   []string `json:"mcp_skip_flags,omitempty"`
 }
 
 type Arg struct {
@@ -107,7 +105,6 @@ func describe(root, c *cobra.Command) (Command, error) {
 		Runnable: c.Runnable(),
 		Args:     positionals(c.Use),
 		Flags:    flags(c),
-		MCP:      c.Annotations["mcp"],
 	}
 	return node, annotate(&node, c)
 }
