@@ -1,6 +1,7 @@
 package localrun
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,7 +65,7 @@ func TestChangedFilesAreTheCommitsSinceTheMergeBasePlusTrackedEditsWithoutUntrac
 	gitRun(t, dir, "rm", "-q", "lib/gone.rb")
 	write(t, dir, "app/untracked.rb", "never added\n")
 
-	got, err := ChangedFiles(dir, "")
+	got, err := ChangedFiles(context.Background(), dir, "")
 
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +80,7 @@ func TestChangedFilesIsAnEmptyListWhenNothingChanged(t *testing.T) {
 	dir := branchedRepo(t)
 	gitRun(t, dir, "reset", "-q", "--hard", "origin/main")
 
-	got, err := ChangedFiles(dir, "")
+	got, err := ChangedFiles(context.Background(), dir, "")
 
 	if err != nil || got == nil || len(got) != 0 {
 		t.Errorf("changed = %#v err %v, want an empty, non-nil list", got, err)
@@ -93,7 +94,7 @@ func TestChangedFilesAgainstAnExplicitRefUsesItsMergeBase(t *testing.T) {
 	write(t, dir, "app/b.rb", "committed on more\n")
 	gitRun(t, dir, "commit", "-q", "-am", "more")
 
-	got, err := ChangedFiles(dir, "feature")
+	got, err := ChangedFiles(context.Background(), dir, "feature")
 
 	if err != nil || !reflect.DeepEqual(got, []string{"app/b.rb"}) {
 		t.Errorf("changed = %v err %v, want only the commit on top of feature", got, err)
@@ -103,12 +104,12 @@ func TestChangedFilesAgainstAnExplicitRefUsesItsMergeBase(t *testing.T) {
 func TestChangedFilesDefaultBranchFallsBackToOriginMainThenFailsAsUsage(t *testing.T) {
 	dir := branchedRepo(t)
 	gitRun(t, dir, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
-	if got, err := ChangedFiles(dir, ""); err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/new.rb"}) {
+	if got, err := ChangedFiles(context.Background(), dir, ""); err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/new.rb"}) {
 		t.Errorf("with only origin/main: changed = %v err %v", got, err)
 	}
 	gitRun(t, dir, "update-ref", "-d", "refs/remotes/origin/main")
 
-	_, err := ChangedFiles(dir, "")
+	_, err := ChangedFiles(context.Background(), dir, "")
 
 	coded, ok := err.(contract.Coded)
 	if !ok || coded.ErrorCode() != contract.UsageError || !strings.Contains(err.Error(), "--against") {
@@ -118,12 +119,12 @@ func TestChangedFilesDefaultBranchFallsBackToOriginMainThenFailsAsUsage(t *testi
 
 func TestChangedFilesRefusesAnUnknownRefAsUsageAndANonCheckoutAsGitRepoNotFound(t *testing.T) {
 	dir := branchedRepo(t)
-	if _, err := ChangedFiles(dir, "no-such-ref"); contractCode(err) != contract.UsageError {
+	if _, err := ChangedFiles(context.Background(), dir, "no-such-ref"); contractCode(err) != contract.UsageError {
 		t.Errorf("unknown ref: err = %v, want usage_error", err)
 	}
 	outside := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
-	if _, err := ChangedFiles(outside, ""); contractCode(err) != contract.GitRepoNotFound {
+	if _, err := ChangedFiles(context.Background(), outside, ""); contractCode(err) != contract.GitRepoNotFound {
 		t.Errorf("outside a checkout: err = %v, want git_repo_not_found", err)
 	}
 }
@@ -139,7 +140,7 @@ func TestChangedFilesFallsBackWhenOriginHeadPointsAtAMissingBranch(t *testing.T)
 	dir := branchedRepo(t)
 	gitRun(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/renamed-away")
 
-	got, err := ChangedFiles(dir, "")
+	got, err := ChangedFiles(context.Background(), dir, "")
 
 	if err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/new.rb"}) {
 		t.Errorf("changed = %v err %v, want the diff against origin/main", got, err)
@@ -151,7 +152,7 @@ func TestChangedFilesAreRepoRootPathsEvenFromASubdirectoryWithDiffRelativeSet(t 
 	gitRun(t, dir, "config", "diff.relative", "true")
 	write(t, dir, "lib/gone.rb", "edited\n")
 
-	got, err := ChangedFiles(filepath.Join(dir, "app"), "")
+	got, err := ChangedFiles(context.Background(), filepath.Join(dir, "app"), "")
 
 	want := []string{"app/a.rb", "app/new.rb", "lib/gone.rb"}
 	if err != nil || !reflect.DeepEqual(got, want) {
@@ -170,7 +171,7 @@ func TestChangedFilesIncludesASubmoduleChangeEvenWhenGitConfigIgnoresSubmodules(
 	gitRun(t, dir, "commit", "-q", "-m", "add the submodule")
 	gitRun(t, dir, "config", "diff.ignoreSubmodules", "all")
 
-	got, err := ChangedFiles(dir, "")
+	got, err := ChangedFiles(context.Background(), dir, "")
 
 	if err != nil || !slices.Contains(got, "vendored") {
 		t.Errorf("changed = %v err %v, want the submodule path among them", got, err)
@@ -182,7 +183,7 @@ func TestChangedFilesDefaultBaseIsNotShadowedByALocalBranchNamedOriginMain(t *te
 	gitRun(t, dir, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
 	gitRun(t, dir, "branch", "origin/main", "HEAD")
 
-	got, err := ChangedFiles(dir, "")
+	got, err := ChangedFiles(context.Background(), dir, "")
 
 	if err != nil || !reflect.DeepEqual(got, []string{"app/a.rb", "app/new.rb"}) {
 		t.Errorf("changed = %v err %v, want the diff against the remote-tracking origin/main", got, err)
@@ -193,7 +194,7 @@ func TestChangedFilesRefusesAnAgainstValueThatGitWouldReadAsAnOption(t *testing.
 	dir := branchedRepo(t)
 
 	for _, against := range []string{"--octopus", "-h", "--"} {
-		got, err := ChangedFiles(dir, against)
+		got, err := ChangedFiles(context.Background(), dir, against)
 		if contractCode(err) != contract.UsageError || got != nil {
 			t.Errorf("against %q: changed %v err %v, want a usage_error", against, got, err)
 		}

@@ -2,11 +2,14 @@ package localrun
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/selectiveci/selective-cli/internal/gitctx"
 )
 
 type treeSnapshot struct {
@@ -18,16 +21,16 @@ type treeSnapshot struct {
 }
 
 func takeSnapshot(dir string) (treeSnapshot, error) {
-	toplevel, ok := gitOutput(dir, "rev-parse", "--show-toplevel")
+	toplevel, ok := gitOutput(context.Background(), dir, "rev-parse", "--show-toplevel")
 	root := strings.TrimSuffix(toplevel, "\n")
 	if !ok || root == "" {
 		return treeSnapshot{}, errors.New("not a git checkout")
 	}
-	listing, ok := gitOutput(root, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+	listing, ok := gitOutput(context.Background(), root, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
 	if !ok {
 		return treeSnapshot{}, errors.New("not a git checkout")
 	}
-	sha, _ := gitOutput(root, "rev-parse", "HEAD")
+	sha, _ := gitOutput(context.Background(), root, "rev-parse", "HEAD")
 	snapshot := treeSnapshot{SHA: strings.TrimSpace(sha), Prefix: prefixWithin(root, dir), Files: map[string]string{}, modes: map[string]string{}}
 	for _, entry := range strings.Split(listing, "\x00") {
 		meta, path, found := strings.Cut(entry, "\t")
@@ -44,7 +47,7 @@ func takeSnapshot(dir string) (treeSnapshot, error) {
 }
 
 func foldWorkingTree(root string, files, modes map[string]string) ([]string, error) {
-	status, ok := gitOutput(root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
+	status, ok := gitOutput(context.Background(), root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
 	if !ok {
 		return nil, errors.New("git status failed; cannot tell which files are dirty")
 	}
@@ -129,8 +132,8 @@ func prefixWithin(root, dir string) string {
 	return filepath.ToSlash(rel) + "/"
 }
 
-func gitOutput(dir string, args ...string) (string, bool) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+func gitOutput(ctx context.Context, dir string, args ...string) (string, bool) {
+	cmd := gitctx.Command(ctx, append([]string{"-C", dir}, args...)...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()

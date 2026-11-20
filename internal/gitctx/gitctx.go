@@ -1,9 +1,11 @@
 package gitctx
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type Context struct {
@@ -11,12 +13,12 @@ type Context struct {
 	Commit string // 40-char SHA
 }
 
-func Detect() (*Context, error) {
-	repo, err := gitRemoteSlug()
+func Detect(ctx context.Context) (*Context, error) {
+	repo, err := gitRemoteSlug(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not detect git repo: %w", err)
 	}
-	commit, err := gitHEAD()
+	commit, err := gitHEAD(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("could not detect HEAD commit: %w", err)
 	}
@@ -24,30 +26,36 @@ func Detect() (*Context, error) {
 }
 
 // Repo is "owner/name" of this checkout's origin remote.
-func Repo() (string, error) { return gitRemoteSlug() }
+func Repo(ctx context.Context) (string, error) { return gitRemoteSlug(ctx) }
 
-func gitRemoteSlug() (string, error) {
-	out, err := run("git", "remote", "get-url", "origin")
+func gitRemoteSlug(ctx context.Context) (string, error) {
+	out, err := run(ctx, "remote", "get-url", "origin")
 	if err != nil {
 		return "", err
 	}
 	return parseSlug(strings.TrimSpace(out))
 }
 
-func gitHEAD() (string, error) {
-	out, err := run("git", "rev-parse", "HEAD")
+func gitHEAD(ctx context.Context) (string, error) {
+	out, err := run(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
 }
 
-func run(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+func Command(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = 100 * time.Millisecond
+	return cmd
+}
+
+func run(ctx context.Context, args ...string) (string, error) {
+	cmd := Command(ctx, args...)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("%s %v: %s", name, args, exitErr.Stderr)
+			return "", fmt.Errorf("git %v: %s", args, exitErr.Stderr)
 		}
 		return "", err
 	}

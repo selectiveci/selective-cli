@@ -75,7 +75,7 @@ func gone(pid int) bool {
 func TestChildEnvReplacesEverySelectiveVariableAndKeepsTheRest(t *testing.T) {
 	parent := []string{"HOME=/h", "SELECTIVE_API_KEY=sk_live_PARENT", "SELECTIVE_TOKEN=tok_PARENT", "SELECTIVE_HOST=wss://app", "SELECTIVE_TRANSPORT=/real", "PATH=/bin"}
 	seat := []string{"SELECTIVE_TRANSPORT=/seat/transport", "SELECTIVE_SEAT_SOCKET=/seat/s.sock"}
-	env := childEnv(parent, seat, t.TempDir())
+	env := childEnv(context.Background(), parent, seat, t.TempDir())
 	counts := map[string]int{}
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
@@ -97,7 +97,7 @@ func TestChildEnvReplacesEverySelectiveVariableAndKeepsTheRest(t *testing.T) {
 	if counts["SELECTIVE_TOKEN"] != 0 {
 		t.Error("SELECTIVE_TOKEN reached the child")
 	}
-	if a, b := envValue(childEnv(nil, nil, t.TempDir()), "SELECTIVE_RUN_ID"), envValue(env, "SELECTIVE_RUN_ID"); !strings.HasPrefix(a, "local-") || a == b {
+	if a, b := envValue(childEnv(context.Background(), nil, nil, t.TempDir()), "SELECTIVE_RUN_ID"), envValue(env, "SELECTIVE_RUN_ID"); !strings.HasPrefix(a, "local-") || a == b {
 		t.Errorf("run ids %q and %q must start with local- and differ per launch", a, b)
 	}
 }

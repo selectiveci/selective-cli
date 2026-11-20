@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/gitctx"
 )
 
 type Framework string
@@ -210,7 +211,7 @@ func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summar
 	}
 	defer seat.Close()
 	cmd.Dir = l.Root
-	cmd.Env = childEnv(os.Environ(), seat.Env(), l.Root)
+	cmd.Env = childEnv(ctx, os.Environ(), seat.Env(), l.Root)
 	output := cmp.Or[io.Writer](l.Stderr, os.Stderr)
 	cmd.Stdout, cmd.Stderr = output, output
 	c := &client{cmd: cmd, exited: make(chan struct{}), grace: cmp.Or(l.Grace, defaultGrace)}
@@ -297,7 +298,7 @@ func (c *client) sweep() {
 	<-c.exited
 }
 
-func childEnv(parent, seat []string, root string) []string {
+func childEnv(ctx context.Context, parent, seat []string, root string) []string {
 	env := make([]string, 0, len(parent)+16)
 	for _, kv := range parent {
 		if !strings.HasPrefix(kv, "SELECTIVE_") {
@@ -310,8 +311,8 @@ func childEnv(parent, seat []string, root string) []string {
 		"SELECTIVE_PLATFORM=sel-local",
 		"SELECTIVE_RUN_ID=local-"+randomHex(),
 		"SELECTIVE_RUN_ATTEMPT=1",
-		"SELECTIVE_BRANCH="+gitValue(root, "symbolic-ref", "--short", "-q", "HEAD"),
-		"SELECTIVE_SHA="+gitValue(root, "rev-parse", "HEAD"),
+		"SELECTIVE_BRANCH="+gitValue(ctx, root, "symbolic-ref", "--short", "-q", "HEAD"),
+		"SELECTIVE_SHA="+gitValue(ctx, root, "rev-parse", "HEAD"),
 		"SELECTIVE_GIT_REPO=local/local",
 		"SELECTIVE_GIT_PROVIDER=github",
 	)
@@ -324,8 +325,9 @@ func randomHex() string {
 	return hex.EncodeToString(b)
 }
 
-func gitValue(root string, args ...string) string {
-	out, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
+func gitValue(ctx context.Context, root string, args ...string) string {
+	cmd := gitctx.Command(ctx, append([]string{"-C", root}, args...)...)
+	out, err := cmd.Output()
 	if value := strings.TrimSpace(string(out)); err == nil && value != "" {
 		return value
 	}

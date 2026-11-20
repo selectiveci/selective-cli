@@ -150,7 +150,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	}
 	planned := make(chan plannedTest, 1)
 	go func() {
-		plan, err := planTest(paths, f)
+		plan, err := planTest(cmd.Context(), paths, f)
 		planned <- plannedTest{plan, err}
 	}()
 	var plan testPlan
@@ -175,7 +175,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		changed := plan.changed
 		if f.watch {
 			var err error
-			if changed, err = localrun.ChangedFiles(plan.root, f.against); err != nil {
+			if changed, err = localrun.ChangedFiles(ctx, plan.root, f.against); err != nil {
 				return localrun.Summary{}, err
 			}
 		}
@@ -214,7 +214,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	return 0, nil
 }
 
-func planTest(paths []string, f testFlags) (testPlan, error) {
+func planTest(ctx context.Context, paths []string, f testFlags) (testPlan, error) {
 	root, err := os.Getwd()
 	if err != nil {
 		return testPlan{}, contract.Errorf(contract.InternalError, "%v", err)
@@ -227,7 +227,7 @@ func planTest(paths []string, f testFlags) (testPlan, error) {
 	if err != nil {
 		return testPlan{}, err
 	}
-	changed, err := localrun.ChangedFiles(root, f.against)
+	changed, err := localrun.ChangedFiles(ctx, root, f.against)
 	if err != nil {
 		return testPlan{}, err
 	}
@@ -239,7 +239,7 @@ func planTest(paths []string, f testFlags) (testPlan, error) {
 	if err != nil {
 		return testPlan{}, err
 	}
-	suite, err := resolveSuite(env.Client, org, f.suite)
+	suite, err := resolveSuite(ctx, env.Client, org, f.suite)
 	if err != nil {
 		return testPlan{}, err
 	}
@@ -248,11 +248,11 @@ func planTest(paths []string, f testFlags) (testPlan, error) {
 	}}, nil
 }
 
-func resolveSuite(client *api.Client, org, flag string) (string, error) {
+func resolveSuite(ctx context.Context, client *api.Client, org, flag string) (string, error) {
 	if flag != "" {
 		return flag, nil
 	}
-	repo, err := gitctx.Repo()
+	repo, err := gitctx.Repo(ctx)
 	if err != nil {
 		return "", contract.Errorf(contract.UsageError, "pass --suite ID (could not read this checkout's origin: %v)", err)
 	}

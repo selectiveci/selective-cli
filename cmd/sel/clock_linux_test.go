@@ -139,3 +139,56 @@ func TestTimeoutAfterASlowSetupEndsAStreamThroughTheCommandsOwnDeadline(t *testi
 		t.Errorf("%d lines in %s; want a stream of lines and an exit before the fallback grace (%s) after the limit", n, took, fallbackGrace)
 	}
 }
+
+func hungGit(t *testing.T) (env []string, pidFile string) {
+	t.Helper()
+	bin, pidFile := t.TempDir(), filepath.Join(t.TempDir(), "git.pid")
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nexec sleep 300\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"PATH=" + bin + ":" + os.Getenv("PATH")}, pidFile
+}
+
+func TestTimeoutLeavesNoHungGitBehind(t *testing.T) {
+	cases := map[string][]string{
+		"tail": {"tail"},
+		"test": {"test", "--org", "acme"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.pytest.ini_options]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			env, pidFile := hungGit(t)
+			t.Cleanup(func() {
+				if body, err := os.ReadFile(pidFile); err == nil {
+					if pid, err := strconv.Atoi(strings.TrimSpace(string(body))); err == nil {
+						_ = syscall.Kill(pid, syscall.SIGKILL)
+					}
+				}
+			})
+
+			res, _ := runCapped(t, 5*time.Second, dir, t.TempDir(), "http://127.0.0.1:1", env, append(args, "--timeout=1s", "--json")...)
+
+			body, err := os.ReadFile(pidFile)
+			if err != nil {
+				t.Fatalf("git never ran, so this proves nothing: %v", err)
+			}
+			pid, _ := strconv.Atoi(strings.TrimSpace(string(body)))
+			if res.exit != 8 || !processGone(pid) {
+				t.Errorf("exit %d, git pid %d gone=%t; want exit 8 and no live git", res.exit, pid, processGone(pid))
+			}
+		})
+	}
+}
+
+func processGone(pid int) bool {
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+	}
+	return false
+}
