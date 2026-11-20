@@ -43,6 +43,16 @@ func annotate(node *Command, c *cobra.Command) error {
 	if node.Idempotent && !node.Mutates && !node.Destructive {
 		fail("idempotent needs mutates or destructive")
 	}
+	if name := c.Annotations["mutates_with"]; name != "" {
+		switch {
+		case c.Flags().Lookup(name) == nil:
+			fail("mutates_with names --%s, which the command does not have", name)
+		case node.Mutates:
+			fail("mutates_with is for a command that only sometimes mutates; it already declares mutates")
+		default:
+			node.MutatesWith = name
+		}
+	}
 	if v, ok := c.Annotations["wait_default"]; ok {
 		if _, err := time.ParseDuration(v); err != nil || c.Flags().Lookup("wait") == nil {
 			fail("wait_default %q needs a duration and a --wait flag", v)

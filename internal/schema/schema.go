@@ -29,6 +29,7 @@ type Command struct {
 	ExitCodes   []int    `json:"exit_codes,omitempty"`
 	Events      []string `json:"events,omitempty"`
 	Mutates     bool     `json:"mutates,omitempty"`
+	MutatesWith string   `json:"mutates_with,omitempty"`
 	Destructive bool     `json:"destructive,omitempty"`
 	WaitDefault string   `json:"wait_default,omitempty"`
 	SecretFlags []string `json:"secret_flags,omitempty"`

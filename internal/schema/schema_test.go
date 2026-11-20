@@ -115,3 +115,25 @@ func TestBuildAcceptsIdempotentOnMutatingAndDestructiveCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildRejectsMutatesWithoutItsFlagOrBesideMutates(t *testing.T) {
+	cmd := func(annotations map[string]string) *cobra.Command {
+		c := &cobra.Command{Use: "go", Annotations: annotations, Run: func(*cobra.Command, []string) {}}
+		c.Flags().String("retries", "", "")
+		root := &cobra.Command{Use: "tool"}
+		root.AddCommand(c)
+		return root
+	}
+	for _, annotations := range []map[string]string{
+		{"mutates_with": "missing"},
+		{"mutates_with": "retries", "mutates": "true"},
+	} {
+		if _, err := Build(cmd(annotations), "v"); err == nil {
+			t.Errorf("%v was accepted", annotations)
+		}
+	}
+	doc, err := Build(cmd(map[string]string{"mutates_with": "retries"}), "v")
+	if node, _ := Lookup(doc, []string{"go"}); err != nil || node.MutatesWith != "retries" || node.Mutates {
+		t.Errorf("err %v node %+v, want mutates_with retries and mutates false", err, node)
+	}
+}
