@@ -224,7 +224,7 @@ func TestSelTestWatchInterruptedWhileGitIsRunningExitsInterruptedNotInternalErro
 		t.Fatal(err)
 	}
 	bin, started := t.TempDir(), filepath.Join(t.TempDir(), "ls-tree.started")
-	script := "#!/bin/sh\nif [ \"$1\" = ls-tree ]; then : > " + started + "; exec sleep 300; fi\nexec " + realGit + " \"$@\"\n"
+	script := "#!/bin/sh\ncase \" $* \" in *\" ls-tree \"*) : > " + started + "; exec sleep 300;; esac\nexec " + realGit + " \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
