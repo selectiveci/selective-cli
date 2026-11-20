@@ -23,3 +23,23 @@ func TestTimeoutCapLeavesNoGitChildBehindWhenDetectionHangs(t *testing.T) {
 		t.Errorf("exit %d stdout %q, git pid %d gone=%t; want exit 8, one timeout line and no live git", res.exit, res.stdout, pid, processGone(pid))
 	}
 }
+
+func TestTimeoutLeavesNoGitChildWhenDoctorsOwnDeadlineFiresFirst(t *testing.T) {
+	cleanDoctorEnv(t)
+	srv := doctorServer(t, 200, meGreen)
+	dir := checkoutOfAcmeWeb(t)
+	bin, pidFile := t.TempDir(), filepath.Join(t.TempDir(), "git.pid")
+	killRecordedPidAtCleanup(t, pidFile)
+	script := "#!/bin/sh\necho $$ > " + pidFile + "\nexec sleep 300\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	res := runBinary(t, dir, srv.URL, "doctor", "--timeout", "2s", "--json")
+
+	pid := recordedPid(t, pidFile)
+	if res.exit != 8 || !processGone(pid) {
+		t.Errorf("exit %d, git pid %d gone=%t; want exit 8 and no live git", res.exit, pid, processGone(pid))
+	}
+}

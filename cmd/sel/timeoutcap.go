@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -13,6 +14,8 @@ import (
 
 var timeoutCapGrace = time.Second
 
+var abandonChildren = gitctx.Abandon
+
 func capTimeout(c *cobra.Command, argv []string, stdout, stderr io.Writer) {
 	if run := c.RunE; run != nil && c.Flags().Lookup("timeout") != nil && c.Annotations["timeout_cap"] != "own" {
 		c.RunE = func(cmd *cobra.Command, args []string) error {
@@ -22,10 +25,13 @@ func capTimeout(c *cobra.Command, argv []string, stdout, stderr io.Writer) {
 			}
 			asJSON := errorObjectOnStdout(cmd, argv, stdout)
 			finished, err := runWithin(limit+timeoutCapGrace, func() error { return run(cmd, args) })
+			var coded contract.Coded
+			if !finished || errors.As(err, &coded) && coded.ErrorCode() == contract.Timeout {
+				abandonChildren()
+			}
 			if finished {
 				return err
 			}
-			gitctx.Abandon()
 			expired := contract.Errorf(contract.Timeout, "--timeout %s expired", limit)
 			if asJSON {
 				_ = format.Error(stdout, expired)

@@ -27,7 +27,9 @@ func fastCap(t *testing.T) {
 	t.Helper()
 	was := timeoutCapGrace
 	timeoutCapGrace = 50 * time.Millisecond
-	t.Cleanup(func() { timeoutCapGrace = was })
+	abandonWas := abandonChildren
+	abandonChildren = func() {}
+	t.Cleanup(func() { timeoutCapGrace, abandonChildren = was, abandonWas })
 }
 
 type lockedBuffer struct {
