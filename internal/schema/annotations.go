@@ -57,16 +57,6 @@ func annotate(node *Command, c *cobra.Command) error {
 		}
 		node.SecretFlags = append(node.SecretFlags, name)
 	}
-	for _, name := range splitList(c.Annotations["mcp_skip_flags"]) {
-		if c.Flags().Lookup(name) == nil {
-			fail("mcp_skip_flags names --%s, which the command does not have", name)
-			continue
-		}
-		node.SkipFlags = append(node.SkipFlags, name)
-	}
-	if v, ok := c.Annotations["mcp"]; ok && v != "skip" {
-		fail("mcp must be \"skip\" or absent, got %q", v)
-	}
 	return errors.Join(problems...)
 }
 

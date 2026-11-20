@@ -26,7 +26,6 @@ func transportCmd() *cobra.Command {
 		Use:                "__transport",
 		Hidden:             true,
 		DisableFlagParsing: true,
-		Annotations:        map[string]string{"mcp": "skip"},
 		Run: func(_ *cobra.Command, args []string) {
 			if len(args) == 1 && args[0] == "--stdio" {
 				signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
@@ -78,11 +77,10 @@ and exits 130. --watch cannot be combined with --list.`,
   sel test --suite 3f9c -- -k slow`,
 		Args: cobra.ArbitraryArgs,
 		Annotations: map[string]string{
-			"exit_codes":     "0,1,3,4,5,6,8,130",
-			"events":         "build_start,selection,test_pass,test_fail,progress,heartbeat,iteration_end,summary",
-			"sends_paths":    "true",
-			"local_exec":     "true",
-			"mcp_skip_flags": "watch",
+			"exit_codes":  "0,1,3,4,5,6,8,130",
+			"events":      "build_start,selection,test_pass,test_fail,progress,heartbeat,iteration_end,summary",
+			"sends_paths": "true",
+			"local_exec":  "true",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := runTest(cmd, args, f)
