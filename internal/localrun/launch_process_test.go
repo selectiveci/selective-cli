@@ -48,6 +48,16 @@ func (l *launched) run(ctx context.Context) (Summary, error) {
 	return l.launch.Run(ctx, l.events, Options{Selector: selecting("a"), Timeout: 5 * time.Second})
 }
 
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func awaitFile(t *testing.T, path string) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -202,7 +212,7 @@ func TestLaunchEscalatesToKillWhenTheClientIgnoresInterruptAndTerminate(t *testi
 func TestCleanupKillsAClientAndRemovesItsSeatWhileLaunchIsStillWindingDown(t *testing.T) {
 	l := scriptedClient(t, "trap '' INT TERM\necho $$ > \"$PIDF\"\nwhile :; do sleep 0.05; done\n")
 	l.launch.Grace = time.Minute
-	tmp := t.TempDir()
+	tmp := shortTempDir(t)
 	t.Setenv("TMPDIR", tmp)
 	pidf := filepath.Join(l.dir, "pid")
 	t.Setenv("PIDF", pidf)
@@ -222,6 +232,10 @@ func TestCleanupKillsAClientAndRemovesItsSeatWhileLaunchIsStillWindingDown(t *te
 	}
 	if !winding || time.Until(until) > ShutdownBudget {
 		t.Fatalf("wind-down registered=%t until %s; want a bound no later than the shutdown budget", winding, time.Until(until))
+	}
+
+	if entries, _ := os.ReadDir(tmp); len(entries) != 1 {
+		t.Fatalf("%d entries in the temp dir while the launch runs, want exactly its seat dir, or the check below proves nothing", len(entries))
 	}
 
 	Cleanup()

@@ -17,7 +17,11 @@ func timedOutSelTest(t *testing.T) (res cliResult, took time.Duration, runnerPid
 	t.Setenv("FAKE_HANG", "1")
 	pidFile := filepath.Join(t.TempDir(), "runner.pid")
 	t.Setenv("FAKE_PID_FILE", pidFile)
-	tmp = t.TempDir()
+	tmp, err := os.MkdirTemp("/tmp", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
 	api := newFakeAPI(t, selected)
 
 	res, took = runCapped(t, 20*time.Second, pytestProject(t), t.TempDir(), api.srv.URL, []string{"TMPDIR=" + tmp}, "test", "--org", "acme", "--timeout=1s", "--json")
