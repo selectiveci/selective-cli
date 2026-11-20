@@ -106,8 +106,8 @@ func TestTimeoutEndsACommandWhoseSetupReadStalls(t *testing.T) {
 			res, took := runCapped(t, 5*time.Second, dir, stalledConfigDir(t, c.releaseAfter), "http://127.0.0.1:1", nil, append(c.args, "--timeout=1s", "--json")...)
 
 			assertTimeoutLast(t, res)
-			if took > 3*time.Second {
-				t.Errorf("exited after %s, want within 3s", took)
+			if took > 2*time.Second {
+				t.Errorf("exited after %s, want within 2s of a --timeout=1s", took)
 			}
 		})
 	}
@@ -138,8 +138,8 @@ func TestTimeoutAfterASlowSetupEndsAStreamThroughTheCommandsOwnDeadline(t *testi
 	res, took := runCapped(t, 5*time.Second, t.TempDir(), stalledConfigDir(t, 600*time.Millisecond), srv.URL, nil, "tail", "--run-id", "r1", "--timeout", limit.String(), "--json")
 
 	assertTimeoutLast(t, res)
-	if n := len(stdoutLines(t, res.stdout)); n < 10 || took >= limit+time.Second {
-		t.Errorf("%d lines in %s; want a stream of lines and an exit within a second of the %s limit", n, took, limit)
+	if n := len(stdoutLines(t, res.stdout)); n < 10 || took >= limit+300*time.Millisecond {
+		t.Errorf("%d lines in %s; want a stream of lines and an exit within 300ms of the %s limit", n, took, limit)
 	}
 }
 
