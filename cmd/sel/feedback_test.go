@@ -100,6 +100,22 @@ func TestFeedbackRetriesATransientFailureWithTheSameKey(t *testing.T) {
 	}
 }
 
+func TestFeedbackIdempotencyKeyFlagSendsThatKey(t *testing.T) {
+	_, calls := feedbackOnce(t, []stubReply{{status: 201, body: feedbackCreated}}, "", "hi", "--org", "acme", "--idempotency-key", "agent-key-1", "--json")
+
+	if len(calls) != 1 || calls[0].key != "agent-key-1" {
+		t.Errorf("requests = %+v, want one with key agent-key-1", calls)
+	}
+}
+
+func TestFeedbackRefusesAnEmptyIdempotencyKeyBeforeSending(t *testing.T) {
+	res, calls := feedbackOnce(t, []stubReply{{status: 201, body: feedbackCreated}}, "", "hi", "--org", "acme", "--idempotency-key", "", "--json")
+
+	if res.exit != 5 || !strings.Contains(res.stdout, `"error":"usage_error"`) || len(calls) != 0 {
+		t.Errorf("exit %d stdout %q with %d requests, want exit 5 usage_error and none", res.exit, res.stdout, len(calls))
+	}
+}
+
 func TestFeedbackMapsServerAnswersToExitCodesAndALastLineErrorObject(t *testing.T) {
 	cases := []struct {
 		status, exit int
