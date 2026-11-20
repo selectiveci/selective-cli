@@ -322,3 +322,18 @@ func TestTailRetriesDryRunPreviewsAndDoesNotTail(t *testing.T) {
 		})
 	}
 }
+
+func TestTailRetriesDryRunDoesNotWaitForTheBuild(t *testing.T) {
+	missing := &budgetServer{lookups: []int{404, 404, 404, 404}, replies: []stubReply{{status: 200, body: budgetWritten}}}
+	res := runBinary(t, gitRepo(t), missing.start(t).URL, "tail", "--wait=5s", "--retries", "3", "--dry-run", "--json")
+	assertRefusal(t, res, 3, "no_build")
+	if got := missing.requests(); got != "lookup" {
+		t.Errorf("requests = %q, want one lookup and no polling", got)
+	}
+
+	found := &budgetServer{replies: []stubReply{{status: 200, body: budgetWritten}}}
+	res = runBinary(t, gitRepo(t), found.start(t).URL, "tail", "--wait=5s", "--retries", "3", "--dry-run", "--json")
+	if got := found.requests(); res.exit != 0 || got != "lookup,POST retry_budget" {
+		t.Errorf("exit %d requests %q, want exit 0 after one lookup and the dry POST", res.exit, got)
+	}
+}

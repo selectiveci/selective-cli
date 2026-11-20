@@ -57,7 +57,11 @@ func Run(client *api.Client, opts Options) (int, error) {
 		if err != nil {
 			return refuse(err)
 		}
-		buildID, err = findBuild(ctx, client, repo, sha, waitOptions(opts))
+		lookup := waitOptions(opts)
+		if opts.DryRun {
+			lookup.Limit = 0
+		}
+		buildID, err = findBuild(ctx, client, repo, sha, lookup)
 		if err != nil {
 			return refuse(deadlineCause(ctx, err))
 		}
