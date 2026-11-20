@@ -39,7 +39,7 @@ func RunSeat(args []string, in io.Reader, out, errw io.Writer) int {
 }
 
 func snapshotOf(dir string, out, errw io.Writer) int {
-	snapshot, err := takeSnapshot(dir)
+	snapshot, err := takeSnapshot(context.Background(), dir)
 	if err != nil {
 		fmt.Fprintln(errw, err)
 		return 1

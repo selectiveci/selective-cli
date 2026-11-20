@@ -2,6 +2,7 @@ package localrun
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func decodeJSON(t *testing.T, raw []byte) map[string]any {
@@ -152,4 +154,26 @@ func toStrings(v any) []string {
 		out = append(out, item.(string))
 	}
 	return out
+}
+
+func TestTakeSnapshotStopsAGitCallThatHangsWhenItsContextEnds(t *testing.T) {
+	shims := t.TempDir()
+	if err := os.WriteFile(filepath.Join(shims, "git"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shims+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	returned := make(chan error, 1)
+
+	go func() { _, err := takeSnapshot(ctx, t.TempDir()); returned <- err }()
+
+	select {
+	case err := <-returned:
+		if err == nil {
+			t.Error("takeSnapshot succeeded against a git that never answers")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("takeSnapshot is still waiting on a hung git after its context ended")
+	}
 }

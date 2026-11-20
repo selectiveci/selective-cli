@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -20,17 +19,17 @@ type treeSnapshot struct {
 	modes  map[string]string
 }
 
-func takeSnapshot(dir string) (treeSnapshot, error) {
-	toplevel, ok := gitOutput(context.Background(), dir, "rev-parse", "--show-toplevel")
+func takeSnapshot(ctx context.Context, dir string) (treeSnapshot, error) {
+	toplevel, ok := gitOutput(ctx, dir, "rev-parse", "--show-toplevel")
 	root := strings.TrimSuffix(toplevel, "\n")
 	if !ok || root == "" {
 		return treeSnapshot{}, errors.New("not a git checkout")
 	}
-	listing, ok := gitOutput(context.Background(), root, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
+	listing, ok := gitOutput(ctx, root, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
 	if !ok {
 		return treeSnapshot{}, errors.New("not a git checkout")
 	}
-	sha, _ := gitOutput(context.Background(), root, "rev-parse", "HEAD")
+	sha, _ := gitOutput(ctx, root, "rev-parse", "HEAD")
 	snapshot := treeSnapshot{SHA: strings.TrimSpace(sha), Prefix: prefixWithin(root, dir), Files: map[string]string{}, modes: map[string]string{}}
 	for _, entry := range strings.Split(listing, "\x00") {
 		meta, path, found := strings.Cut(entry, "\t")
@@ -40,14 +39,14 @@ func takeSnapshot(dir string) (treeSnapshot, error) {
 		}
 	}
 	var err error
-	if snapshot.Dirty, err = foldWorkingTree(root, snapshot.Files, snapshot.modes); err != nil {
+	if snapshot.Dirty, err = foldWorkingTree(ctx, root, snapshot.Files, snapshot.modes); err != nil {
 		return treeSnapshot{}, err
 	}
 	return snapshot, nil
 }
 
-func foldWorkingTree(root string, files, modes map[string]string) ([]string, error) {
-	status, ok := gitOutput(context.Background(), root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
+func foldWorkingTree(ctx context.Context, root string, files, modes map[string]string) ([]string, error) {
+	status, ok := gitOutput(ctx, root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
 	if !ok {
 		return nil, errors.New("git status failed; cannot tell which files are dirty")
 	}
@@ -71,15 +70,15 @@ func foldWorkingTree(root string, files, modes map[string]string) ([]string, err
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			if target, err := os.Readlink(filepath.Join(root, path)); err == nil {
-				hashInto(files, path, root, target, "--stdin")
+				hashInto(ctx, files, path, root, target, "--stdin")
 			}
 		case info.Mode().IsRegular() && strings.Contains(path, "\n"):
-			hashInto(files, path, root, "", "--", path)
+			hashInto(ctx, files, path, root, "", "--", path)
 		case info.Mode().IsRegular():
 			batched = append(batched, path)
 		}
 	}
-	for path, blob := range hashObjects(root, batched) {
+	for path, blob := range hashObjects(ctx, root, batched) {
 		files[path] = blob
 	}
 	return append(append([]string{}, changed...), deleted...), nil
@@ -95,20 +94,20 @@ func gitMode(info os.FileInfo) string {
 	return "100644"
 }
 
-func hashInto(files map[string]string, path, root, stdin string, args ...string) {
-	cmd := exec.Command("git", append([]string{"-C", root, "hash-object"}, args...)...)
+func hashInto(ctx context.Context, files map[string]string, path, root, stdin string, args ...string) {
+	cmd := gitctx.Command(ctx, append([]string{"-C", root, "hash-object"}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	if out, err := cmd.Output(); err == nil {
 		files[path] = strings.TrimSpace(string(out))
 	}
 }
 
-func hashObjects(root string, paths []string) map[string]string {
+func hashObjects(ctx context.Context, root string, paths []string) map[string]string {
 	hashed := map[string]string{}
 	if len(paths) == 0 {
 		return hashed
 	}
-	cmd := exec.Command("git", "-C", root, "hash-object", "--stdin-paths")
+	cmd := gitctx.Command(ctx, "-C", root, "hash-object", "--stdin-paths")
 	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
 	out, err := cmd.Output()
 	if err != nil {
