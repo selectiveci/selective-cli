@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/selectiveci/selective-cli/internal/schema"
 )
 
 func TestHelpDeclaresExitCodesAndEventsForTheAuthOrgsAndReposCommands(t *testing.T) {
@@ -53,5 +56,42 @@ func TestSuitesWritesDeclareMutates(t *testing.T) {
 		if !commandDoc(t, path...).Command.Mutates {
 			t.Errorf("%v does not declare mutates", path)
 		}
+	}
+}
+
+func helpCommands(t *testing.T) []schema.Command {
+	t.Helper()
+	code, stdout, stderr := execute("help", "--json")
+	var doc struct {
+		Help schema.Document `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil || code != 0 || len(doc.Help.Commands) == 0 {
+		t.Fatalf("help --json: exit %d, %d commands, err %v, stderr %q", code, len(doc.Help.Commands), err, stderr)
+	}
+	return doc.Help.Commands
+}
+
+func TestOnlyTestIsMarkedLocalExecAndStaysAnOrdinaryCommand(t *testing.T) {
+	for _, c := range helpCommands(t) {
+		if c.LocalExec != (c.Path == "test") {
+			t.Errorf("%s local_exec = %v", c.Path, c.LocalExec)
+		}
+		if c.Path == "test" && (c.Mutates || c.Destructive) {
+			t.Errorf("test mutates = %v destructive = %v, want neither", c.Mutates, c.Destructive)
+		}
+	}
+}
+
+func TestOnlyStateSettingCommandsAreIdempotent(t *testing.T) {
+	var got []string
+	for _, c := range helpCommands(t) {
+		if c.Idempotent {
+			got = append(got, c.Path)
+		}
+	}
+	slices.Sort(got)
+
+	if want := []string{"flakes mark-fixed", "flakes quarantine", "flakes unquarantine", "suites archive", "suites configure", "suites restore", "tokens revoke"}; !slices.Equal(got, want) {
+		t.Errorf("idempotent commands = %v, want %v", got, want)
 	}
 }
