@@ -217,3 +217,19 @@ func TestSelTestWatchFirstIterationSelectsAgainstAnEditMadeWhileTheSuiteWasBeing
 		t.Errorf("selection requests %v, want the first to carry the file edited before the watcher started", api.selections)
 	}
 }
+
+func TestSelTestWatchGivesALaterIterationItsOwnTimeoutWindow(t *testing.T) {
+	api := newFakeAPI(t, selected)
+	runnerEnv(t)
+	w := startWatch(t, api, "--timeout", "2s")
+	w.await("iteration_end", 1)
+	time.Sleep(2500 * time.Millisecond)
+	w.edit("tests/test_calc.py", "v2\n")
+
+	w.await("iteration_end", 2)
+
+	events, code := w.interrupt()
+	if code != 130 || slices.Contains(eventNames(events), "error") {
+		t.Errorf("exit %d, events %v; want the second iteration to run past the first window and Ctrl-C to end with 130", code, eventNames(events))
+	}
+}

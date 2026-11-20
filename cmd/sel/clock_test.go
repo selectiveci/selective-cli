@@ -30,7 +30,7 @@ func expireWith(t *testing.T, g *guard) (stderr string, code int) {
 	t.Helper()
 	var errOut bytes.Buffer
 	exited := make(chan int, 2)
-	c := &clock{stderr: &errOut, exit: func(code int) { exited <- code }}
+	c := &clock{stderr: &errOut, exit: func(code int) { exited <- code }, cleanup: func() {}}
 	cause := contract.Errorf(contract.Timeout, "--timeout 1s expired")
 	c.expire(g, true, cause)
 	c.expire(g, true, cause)
@@ -81,7 +81,7 @@ func TestFallbackWritesNothingToStdoutWhileTheCommandsOwnWriteIsInFlight(t *test
 	root.Commands()[0].Flags().Duration("timeout", 0, "")
 	root.SetOut(w)
 	root.SetArgs(args)
-	(&clock{start: time.Now(), stderr: &errOut, exit: func(code int) { exited <- code }}).attach(root, args)
+	(&clock{start: time.Now(), stderr: &errOut, exit: func(code int) { exited <- code }, cleanup: func() {}}).attach(root, args)
 	go func() { _ = root.Execute() }()
 
 	code := <-exited
@@ -141,7 +141,7 @@ func TestExpireOnMergedStreamsWritesTheErrorTextOnlyAtALineBoundary(t *testing.T
 			g := &guard{w: w}
 			tc.setup(t, g)
 			exited := make(chan int, 1)
-			c := &clock{stderr: w, exit: func(code int) { exited <- code }}
+			c := &clock{stderr: w, exit: func(code int) { exited <- code }, cleanup: func() {}}
 
 			c.expire(g, true, contract.Errorf(contract.Timeout, "--timeout 1s expired"))
 			_ = w.Close()
@@ -151,5 +151,55 @@ func TestExpireOnMergedStreamsWritesTheErrorTextOnlyAtALineBoundary(t *testing.T
 				t.Errorf("the shared pipe got %q, want %q and exit 8", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestExpireCleansUpBeforeAnyWriteAndStillExitsWhenStderrNeverDrains(t *testing.T) {
+	cleaned := make(chan struct{})
+	stderr := &stuckWriter{entered: make(chan struct{}, 4), release: make(chan struct{})}
+	t.Cleanup(func() { close(stderr.release) })
+	exited := make(chan int, 1)
+	var out bytes.Buffer
+	var stdoutSawCleanup bool
+	g := &guard{w: writerFunc(func(p []byte) (int, error) {
+		select {
+		case <-cleaned:
+			stdoutSawCleanup = true
+		default:
+		}
+		return out.Write(p)
+	})}
+	c := &clock{stderr: stderr, exit: func(code int) { exited <- code }, cleanup: func() { close(cleaned) }}
+
+	go c.expire(g, true, contract.Errorf(contract.Timeout, "--timeout 1s expired"))
+
+	select {
+	case code := <-exited:
+		if code != 8 || !stdoutSawCleanup {
+			t.Errorf("exit %d, cleanup before the stdout write %t; want exit 8 after cleanup", code, stdoutSawCleanup)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("expire never exited: a stderr that does not drain held it up")
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestFinishNeverReturnsOnceTheFallbackHasClaimedTheTerminalObject(t *testing.T) {
+	c := &clock{timer: time.NewTimer(time.Hour)}
+	c.terminal.Store(true)
+	returned := make(chan struct{})
+
+	go func() {
+		c.finish()
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Error("finish returned after the fallback claimed the terminal object, so the command's own exit would race it")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

@@ -18,6 +18,16 @@ func fakeRunner() int {
 	if os.Getenv("FAKE_IGNORE_SIGINT") == "1" {
 		signal.Ignore(syscall.SIGINT)
 	}
+	if path := os.Getenv("FAKE_SLOW_STOP_FILE"); path != "" {
+		stops := make(chan os.Signal, 1)
+		signal.Notify(stops, syscall.SIGINT)
+		go func() {
+			<-stops
+			time.Sleep(time.Second)
+			_ = os.WriteFile(path, []byte("done"), 0o644)
+			os.Exit(0)
+		}()
+	}
 	fmt.Println("fake runner stdout noise")
 	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_PID_FILE"); path != "" {
