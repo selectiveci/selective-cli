@@ -18,6 +18,11 @@ func TestAbandonKillsARunningGitAndFreezesTheCallerAndLaterCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Cleanup(func() {
+		live.Lock()
+		live.abandoned = false
+		live.Unlock()
+	})
 	returned := make(chan struct{}, 2)
 	go func() {
 		_, _ = Repo()
