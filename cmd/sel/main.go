@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -71,7 +72,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	entered := false
 	markEntered(root, &entered)
 
-	cmd, err := root.ExecuteC()
+	cmd, err := executeRecovering(root, args, stderr, &entered)
 	if err == nil {
 		return cmd, contract.ExitOK
 	}
@@ -101,6 +102,18 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()
+}
+
+func executeRecovering(root *cobra.Command, args []string, stderr io.Writer, entered *bool) (cmd *cobra.Command, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(stderr, "panic: %v\n\n%s", r, debug.Stack())
+			*entered = true
+			cmd, _, _ = root.Find(args)
+			err = contract.Errorf(contract.InternalError, "unexpected internal error: this is a bug in sel")
+		}
+	}()
+	return root.ExecuteC()
 }
 
 func pendingSentence(p *api.PendingApproval) string {
