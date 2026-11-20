@@ -194,6 +194,9 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	var sum localrun.Summary
 	if f.watch {
 		sum, err = localrun.Watch{Dir: plan.root}.Run(signalled, run)
+		if err != nil && signalled.Err() != nil {
+			err = localrun.ErrInterrupted
+		}
 	} else {
 		sum, err = run(signalled, 0)
 	}

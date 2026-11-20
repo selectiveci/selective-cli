@@ -217,3 +217,24 @@ func TestSelTestWatchFirstIterationSelectsAgainstAnEditMadeWhileTheSuiteWasBeing
 		t.Errorf("selection requests %v, want the first to carry the file edited before the watcher started", api.selections)
 	}
 }
+
+func TestSelTestWatchInterruptedWhileGitIsRunningExitsInterruptedNotInternalError(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, started := t.TempDir(), filepath.Join(t.TempDir(), "ls-tree.started")
+	script := "#!/bin/sh\nif [ \"$1\" = ls-tree ]; then : > " + started + "; exec sleep 300; fi\nexec " + realGit + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	w := startWatch(t, newFakeAPI(t, selected))
+	waitUntil(t, "the fingerprint's git ls-tree to start", func() bool { _, err := os.Stat(started); return err == nil })
+
+	_, code := w.interrupt()
+
+	if code != 130 {
+		t.Errorf("exit %d, want 130 for a SIGINT that landed while git was running", code)
+	}
+}
