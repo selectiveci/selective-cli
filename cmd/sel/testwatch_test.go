@@ -223,12 +223,12 @@ func TestSelTestWatchInterruptedWhileGitIsRunningExitsInterruptedNotInternalErro
 	if err != nil {
 		t.Fatal(err)
 	}
-	bin, started := t.TempDir(), filepath.Join(t.TempDir(), "ls-tree.started")
-	script := "#!/bin/sh\ncase \" $* \" in *\" ls-tree \"*) : > " + started + "; exec sleep 300;; esac\nexec " + realGit + " \"$@\"\n"
+	bin, started, path := t.TempDir(), filepath.Join(t.TempDir(), "ls-tree.started"), os.Getenv("PATH")
+	script := "#!/bin/sh\ncase \" $* \" in *\" ls-tree \"*) : > " + started + "; exec sleep 300;; esac\nPATH='" + path + "'\nexec " + realGit + " \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("PATH", bin+":"+path)
 	w := startWatch(t, newFakeAPI(t, selected))
 	waitUntil(t, "the fingerprint's git ls-tree to start", func() bool { _, err := os.Stat(started); return err == nil })
 
