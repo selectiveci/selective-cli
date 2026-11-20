@@ -69,6 +69,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 		helpToStderr(root, args, stderr)
 	}
 	entered := false
+	capTimeout(root, args, stdout, stderr)
 	markEntered(root, &entered)
 
 	cmd, err := root.ExecuteC()

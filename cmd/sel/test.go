@@ -83,6 +83,7 @@ and exits 130. --watch cannot be combined with --list.`,
 			"sends_paths":    "true",
 			"local_exec":     "true",
 			"mcp_skip_flags": "watch",
+			"timeout_cap":    "own",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			code, err := runTest(cmd, args, f)

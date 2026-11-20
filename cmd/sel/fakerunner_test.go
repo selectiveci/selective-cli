@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,9 @@ func fakeRunner() int {
 	}
 	fmt.Println("fake runner stdout noise")
 	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
+	if path := os.Getenv("FAKE_PID_FILE"); path != "" {
+		_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	}
 	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
 	}
