@@ -55,7 +55,7 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	}
 	clock := newClock(root, args, stdout, stderr)
 	cmd, code := runWith(clock, root, args, stdout, stderr)
-	afterCommand(clock.limit(), checker.Stop, func() { printUpdateNotice(cmd, stdout, stderr) })
+	afterCommand(clock.limit(cmd), checker.Stop, func() { printUpdateNotice(cmd, stdout, stderr) })
 	return code
 }
 

@@ -321,3 +321,35 @@ func TestOnlyCommandsThatWriteThroughTheGuardCanBeArmedByATimeoutFlag(t *testing
 		t.Errorf("commands with --timeout: %v; want %v, each audited to write only through cmd.OutOrStdout() (setup.Env.Stdout and auth's os.Stdout bypass the guard)", got, want)
 	}
 }
+
+func TestAnUnarmedClockBoundsOnlyACommandWithAnExplicitTimeoutOutsideWatch(t *testing.T) {
+	c := &clock{start: time.Now()}
+	command := func(path string, flags ...string) *cobra.Command {
+		cmd, _, err := newRoot().Find(strings.Fields(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < len(flags); i += 2 {
+			if err := cmd.Flags().Set(flags[i], flags[i+1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return cmd
+	}
+	cases := map[string]struct {
+		cmd  *cobra.Command
+		want time.Time
+	}{
+		"no command":          {nil, time.Time{}},
+		"no --timeout":        {command("doctor"), time.Time{}},
+		"--timeout":           {command("doctor", "timeout", "5m"), c.start.Add(5 * time.Minute)},
+		"--watch and timeout": {command("test", "watch", "true", "timeout", "5m"), time.Time{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := c.limit(tc.cmd); !got.Equal(tc.want) {
+				t.Errorf("limit %v; want %v", got, tc.want)
+			}
+		})
+	}
+}

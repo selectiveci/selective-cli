@@ -149,12 +149,15 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 
 func TestTimeoutCapsTheWholeCommandAroundTheUpdateCheck(t *testing.T) {
 	cases := map[string]struct {
+		args            []string
 		fifo, tty, hang bool
 		exit            int
 	}{
 		"state file never reads, output piped":              {fifo: true, exit: contract.ExitNotFound},
 		"state file never reads, output on a terminal":      {fifo: true, tty: true, exit: contract.ExitNotFound},
 		"command runs to the timeout, output on a terminal": {tty: true, hang: true, exit: contract.ExitTimeout},
+		"usage error before the clock arms, output piped":   {args: []string{"approvals", "show"}, fifo: true, exit: contract.ExitUsage},
+		"usage error before the clock arms, on a terminal":  {args: []string{"tail", "--timeout=1s", "--bogus"}, fifo: true, tty: true, exit: contract.ExitUsage},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -182,7 +185,11 @@ func TestTimeoutCapsTheWholeCommandAroundTheUpdateCheck(t *testing.T) {
 			}
 			env := []string{"SELECTIVE_CONFIG_DIR=" + filepath.Dir(state), "SELECTIVE_TEST_VERSION=0.1.0", "SELECTIVE_NO_UPDATE_NOTIFIER=", "CI=", "GITHUB_ACTIONS=", "BUILD_NUMBER=", "RUN_ID=", "CODESPACES="}
 
-			cmd, _ := startWithStdout(t, t.TempDir(), srv.URL, env, out, c.tty, "approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90", "--timeout=1s")
+			args := c.args
+			if args == nil {
+				args = []string{"approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90"}
+			}
+			cmd, _ := startWithStdout(t, t.TempDir(), srv.URL, env, out, c.tty, append(args, "--timeout=1s")...)
 			exit, took := waitForExit(t, cmd, 5*time.Second)
 			var shown []byte
 			if c.tty {

@@ -160,10 +160,15 @@ func (c *clock) finish() {
 	}
 }
 
-func (c *clock) limit() time.Time {
+func (c *clock) limit(cmd *cobra.Command) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.timer == nil {
+		if cmd != nil {
+			if d, ok := cappedTimeout(cmd); ok {
+				return c.start.Add(d)
+			}
+		}
 		return time.Time{}
 	}
 	return c.deadline.Add(c.windDown + backstopGrace + backstopExit)
