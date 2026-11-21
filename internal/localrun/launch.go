@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -189,8 +190,43 @@ type Launch struct {
 
 type client struct {
 	cmd    *exec.Cmd
+	seat   *Seat
 	exited chan struct{}
 	grace  time.Duration
+}
+
+var running = struct {
+	sync.Mutex
+	clients map[*client]struct{}
+}{clients: map[*client]struct{}{}}
+
+func Cleanup() {
+	running.Lock()
+	defer running.Unlock()
+	for c := range running.clients {
+		select {
+		case <-c.exited:
+		default:
+			signalGroup(c.cmd, syscall.SIGKILL)
+		}
+		_ = c.seat.Close()
+	}
+}
+
+func (c *client) start() error {
+	running.Lock()
+	defer running.Unlock()
+	if err := c.cmd.Start(); err != nil {
+		return err
+	}
+	running.clients[c] = struct{}{}
+	return nil
+}
+
+func (c *client) untrack() {
+	running.Lock()
+	defer running.Unlock()
+	delete(running.clients, c)
 }
 
 func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summary, error) {
@@ -214,15 +250,16 @@ func (l Launch) Run(ctx context.Context, events io.Writer, opts Options) (Summar
 	cmd.Env = childEnv(ctx, os.Environ(), seat.Env(), l.Root)
 	output := cmp.Or[io.Writer](l.Stderr, os.Stderr)
 	cmd.Stdout, cmd.Stderr = output, output
-	c := &client{cmd: cmd, exited: make(chan struct{}), grace: cmp.Or(l.Grace, defaultGrace)}
+	c := &client{cmd: cmd, seat: seat, exited: make(chan struct{}), grace: cmp.Or(l.Grace, defaultGrace)}
 	cmd.WaitDelay = c.grace
-	if err := cmd.Start(); err != nil {
+	if err := c.start(); err != nil {
 		return Summary{}, contract.Errorf(contract.RunnerMissing, "sel test could not start %s: %v", argv[0], err)
 	}
 	go func() {
 		_ = cmd.Wait()
 		close(c.exited)
 	}()
+	defer c.untrack()
 	defer c.sweep()
 	return c.drive(ctx, seat, events, opts)
 }
@@ -243,7 +280,7 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 			c.reap(syscall.SIGINT, syscall.SIGTERM)
 			return Summary{}, ErrInterrupted
 		}
-		return Summary{}, contract.Errorf(contract.RunnerError, "the test runner exited before it connected to sel (%s); its output is above", c.cmd.ProcessState)
+		return Summary{}, c.acceptFailure()
 	}
 	defer conn.Close()
 	sum, err := Run(ctx, conn, conn, events, opts)
@@ -270,6 +307,15 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 		}
 		c.reap(syscall.SIGTERM)
 		return sum, contract.Errorf(contract.RunnerError, "the test runner did not exit after reporting its finish; sel stopped it")
+	}
+}
+
+func (c *client) acceptFailure() error {
+	select {
+	case <-c.exited:
+		return contract.Errorf(contract.RunnerError, "the test runner exited before it connected to sel (%s); its output is above", c.cmd.ProcessState)
+	default:
+		return contract.Errorf(contract.RunnerError, "sel stopped waiting for the test runner to connect; its output is above")
 	}
 }
 
@@ -327,7 +373,7 @@ func randomHex() string {
 
 func gitValue(ctx context.Context, root string, args ...string) string {
 	cmd := gitctx.Command(ctx, append([]string{"-C", root}, args...)...)
-	out, err := cmd.Output()
+	out, err := gitctx.Output(cmd)
 	if value := strings.TrimSpace(string(out)); err == nil && value != "" {
 		return value
 	}

@@ -3,11 +3,15 @@
 package localrun
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -258,5 +262,91 @@ func TestLaunchReportsAMissingBundleAsRunnerMissing(t *testing.T) {
 	_, err := l.run(context.Background())
 	if codeOf(err) != contract.RunnerMissing || !strings.Contains(err.Error(), "bundle") {
 		t.Errorf("err %v, want runner_missing naming bundle", err)
+	}
+}
+
+func TestCleanupKillsARunningClientsProcessGroupAndRemovesItsSeat(t *testing.T) {
+	l := scriptedClient(t, "echo $$ > \"$PIDF\"\nsleep 300 >/dev/null 2>&1 &\necho $! > \"$CHILDF\"\necho \"$SELECTIVE_SEAT_SOCKET\" > \"$SOCKF\"\nwait\n")
+	pidf, childf, sockf := filepath.Join(l.dir, "pid"), filepath.Join(l.dir, "child"), filepath.Join(l.dir, "sock")
+	t.Setenv("PIDF", pidf)
+	t.Setenv("CHILDF", childf)
+	t.Setenv("SOCKF", sockf)
+	done := make(chan error, 1)
+	go func() { _, err := l.run(context.Background()); done <- err }()
+	pid, _ := strconv.Atoi(awaitFile(t, pidf))
+	child, _ := strconv.Atoi(awaitFile(t, childf))
+	sock := awaitFile(t, sockf)
+	seatDir := filepath.Dir(sock)
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+		t.Fatalf("sel never greeted the connected runner: %v", err)
+	}
+
+	Cleanup()
+
+	if _, err := os.Stat(seatDir); !errors.Is(err, os.ErrNotExist) || !gone(pid) || !gone(child) {
+		t.Errorf("seat dir stat err %v, client gone=%t, its child gone=%t; want the seat dir removed and the whole process group dead", err, gone(pid), gone(child))
+	}
+	conn.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("Launch did not return after Cleanup")
+	}
+}
+
+func TestCleanupDuringAcceptDoesNotRaceTheRunnersExitStatus(t *testing.T) {
+	l := scriptedClient(t, "echo $$ > \"$PIDF\"\nexec sleep 300\n")
+	pidf := filepath.Join(l.dir, "pid")
+	t.Setenv("PIDF", pidf)
+	done := make(chan error, 1)
+	go func() { _, err := l.run(context.Background()); done <- err }()
+	pid, _ := strconv.Atoi(awaitFile(t, pidf))
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	buf := make([]byte, 1<<20)
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(string(buf[:runtime.Stack(buf, true)]), "localrun.(*Seat).Accept"); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("Accept was never reached, so this proves nothing")
+		}
+	}
+
+	Cleanup()
+
+	select {
+	case err := <-done:
+		if msg := err.Error(); strings.Contains(msg, "exited before") && !strings.Contains(msg, "signal: killed") {
+			t.Errorf("error %q claims the runner exited without its exit status", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Launch did not return after Cleanup")
+	}
+}
+
+func TestAcceptFailureDoesNotClaimTheRunnerExitedWhileItIsStillRunning(t *testing.T) {
+	c := &client{cmd: exec.Command("sleep", "300"), exited: make(chan struct{})}
+
+	err := c.acceptFailure()
+
+	if err == nil || strings.Contains(err.Error(), "exited") {
+		t.Errorf("error %v, want one that does not say the runner exited", err)
+	}
+}
+
+func TestAcceptFailureKeepsTheExitedBeforeItConnectedTextOnceTheRunnerHasExited(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "exit 3")
+	_ = cmd.Run()
+	exited := make(chan struct{})
+	close(exited)
+	c := &client{cmd: cmd, exited: exited}
+
+	err := c.acceptFailure()
+
+	if want := "the test runner exited before it connected to sel (exit status 3); its output is above"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("error %v, want it to contain %q", err, want)
 	}
 }
