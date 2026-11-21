@@ -133,7 +133,9 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	signalledAt := make(chan time.Time, 1)
 	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
 	stdout := cmd.OutOrStdout()
-	var events io.Writer = readerWatch{stdout, func() { cancel(errReaderLeft) }}
+	stdoutFile := underlyingFile(stdout)
+	terminal := stdoutFile != nil && format.IsTerminal(stdoutFile)
+	var events io.Writer = readerWatch{stdout, stdoutFile, terminal, func() { cancel(errReaderLeft) }}
 	pretty := !format.JSONMode(cmd.Flags(), stdout)
 	if pretty {
 		events = prettyEvents{format.NewWriter(events, "pretty")}
@@ -198,6 +200,10 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		}
 	} else {
 		sum, err = run(signalled, 0)
+	}
+	if isRunnerError(err) && readerGone(stdoutFile) {
+		cancel(errReaderLeft)
+		err = localrun.ErrInterrupted
 	}
 	if err != nil && errors.Is(context.Cause(signalled), errHangup) {
 		err = localrun.ErrInterrupted

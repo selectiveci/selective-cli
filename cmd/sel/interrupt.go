@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 var (
@@ -16,16 +18,36 @@ var (
 
 type readerWatch struct {
 	io.Writer
-	left func()
+	file     *os.File
+	terminal bool
+	left     func()
 }
 
 func (w readerWatch) Write(p []byte) (int, error) {
 	n, err := w.Writer.Write(p)
-	if errors.Is(err, syscall.EPIPE) {
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EIO) && eioMeansReaderGone(w.file, w.terminal) {
 		w.left()
 		return len(p), nil
 	}
 	return n, err
+}
+
+func underlyingFile(w io.Writer) *os.File {
+	for {
+		switch v := w.(type) {
+		case *os.File:
+			return v
+		case interface{ Unwrap() io.Writer }:
+			w = v.Unwrap()
+		default:
+			return nil
+		}
+	}
+}
+
+func isRunnerError(err error) bool {
+	var failure *contract.Error
+	return errors.As(err, &failure) && failure.Code == contract.RunnerError
 }
 
 func readerDeparted(err error) bool {

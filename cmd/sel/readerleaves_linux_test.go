@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -37,8 +38,10 @@ func TestReaderLeavingInterruptsTheRunAndLeavesNothingBehind(t *testing.T) {
 		{"stdout and stderr on one pipe", false, "", nil},
 		{"a runner that ignores interrupt", true, "FAKE_IGNORE_SIGINT", nil},
 		{"a watch", true, "", []string{"--watch"}},
+		{"stdout behind a wrapper", false, "SELECTIVE_TEST_WRAP_STDOUT", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FAKE_NOISE_FILE", filepath.Join(t.TempDir(), "noise"))
 			if tc.env != "" {
 				t.Setenv(tc.env, "1")
 			}
@@ -74,6 +77,9 @@ func TestReaderLeavingDuringAListEndsInterrupted(t *testing.T) {
 }
 
 func TestStderrReaderLeavingDoesNotInterruptTheRun(t *testing.T) {
+	noise := filepath.Join(t.TempDir(), "noise")
+	t.Setenv("FAKE_NOISE_FILE", noise)
+	t.Setenv("FAKE_IGNORE_SIGPIPE", "1")
 	h := startTricklingRun(t, true, false)
 	runner := h.runnerPid()
 
@@ -82,6 +88,9 @@ func TestStderrReaderLeavingDoesNotInterruptTheRun(t *testing.T) {
 
 	h.wantWoundDown(runner)
 	h.wantExit(0)
+	if body, _ := os.ReadFile(noise); !strings.Contains(string(body), "broken pipe") {
+		t.Errorf("VOID: the runner never wrote to the closed stderr, its write error was %q", body)
+	}
 	if !strings.Contains(h.out.String(), `"event":"summary"`) {
 		t.Errorf("stdout %q; want the run to finish with its summary", h.out.String())
 	}
@@ -129,4 +138,54 @@ func TestHangupRightAfterTheReaderLeavesStillExitsInterrupted(t *testing.T) {
 
 	h.wantWoundDown(runner)
 	h.wantExit(130)
+}
+
+func TestAPtyClosingWithoutAHangupExitsInterrupted(t *testing.T) {
+	t.Setenv("FAKE_TRICKLE", "500ms")
+	t.Setenv("FAKE_TRICKLE_HANG", "1")
+	h := startRun(t, newFakeAPI(t, everything), true, true, false, "--timeout=50s")
+	runner := h.runnerPid()
+
+	_ = h.reader.Close()
+	h.await()
+
+	h.wantWoundDown(runner)
+	h.wantExit(130)
+}
+
+func TestEIOOnAStdoutThatIsNotATerminalStillExitsWithTheWriteError(t *testing.T) {
+	t.Setenv("SELECTIVE_TEST_WRAP_STDOUT", "eio")
+	runnerEnv(t)
+
+	res := selTest(t, pytestProject(t), newFakeAPI(t, everything))
+
+	if res.exit != 9 || !strings.Contains(res.stderr, "could not write the event stream") {
+		t.Errorf("exit %d, stderr %q; want exit 9 and the event stream write error", res.exit, res.stderr)
+	}
+}
+
+func TestARunnerThatReallyFailsStillExitsOneWhileTheReaderIsAlive(t *testing.T) {
+	t.Setenv("FAKE_DIE", "1")
+	runnerEnv(t)
+	api, dir := newFakeAPI(t, everything), pytestProject(t)
+
+	for name, wrap := range map[string]string{"stdout on a pipe": "", "stdout behind a wrapper": "1"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SELECTIVE_TEST_WRAP_STDOUT", wrap)
+			res := selTest(t, dir, api)
+			if res.exit != 1 || !strings.Contains(res.stdout+res.stderr, "runner_error") {
+				t.Errorf("exit %d, stdout %q, stderr %q; want exit 1 and runner_error", res.exit, res.stdout, res.stderr)
+			}
+		})
+	}
+	t.Run("stdout on a regular file", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "stdout")
+		cmd := exec.Command("sh", "-c", `exec "$0" test --org acme >"$1"`, os.Args[0], file)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+api.srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
+		_ = cmd.Run()
+		if body := mustRead(t, file); cmd.ProcessState.ExitCode() != 1 || !strings.Contains(string(body), "runner_error") {
+			t.Errorf("exit %d, stdout %q; want exit 1 and runner_error", cmd.ProcessState.ExitCode(), body)
+		}
+	})
 }

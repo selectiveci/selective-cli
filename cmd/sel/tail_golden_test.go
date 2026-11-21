@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/selectiveci/selective-cli/internal/api"
@@ -17,7 +19,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	switch {
+	switch wrapped := os.Getenv("SELECTIVE_TEST_WRAP_STDOUT"); {
+	case wrapped != "":
+		api.SetClock(instantClock{})
+		os.Exit(run(newRoot(), os.Args[1:], wrappedStdout{wrapped == "eio"}, os.Stderr))
 	case len(os.Args) > 1 && os.Args[1] == "__transport", os.Getenv("SELECTIVE_TEST_RUN_MAIN") == "1":
 		api.SetClock(instantClock{})
 		main()
@@ -26,6 +31,17 @@ func TestMain(m *testing.M) {
 		os.Exit(fakeRunner())
 	}
 	os.Exit(m.Run())
+}
+
+type wrappedStdout struct{ eio bool }
+
+func (w wrappedStdout) Unwrap() io.Writer { return os.Stdout }
+
+func (w wrappedStdout) Write(p []byte) (int, error) {
+	if w.eio {
+		return 0, syscall.EIO
+	}
+	return os.Stdout.Write(p)
 }
 
 type tailServer struct {
