@@ -114,3 +114,19 @@ func TestTheRunnerDoesNotInheritAnIgnoredSigpipe(t *testing.T) {
 		t.Errorf("runner SigIgn %x has SIGPIPE ignored, want it left at the default", mask)
 	}
 }
+
+func TestHangupRightAfterTheReaderLeavesStillExitsInterrupted(t *testing.T) {
+	t.Setenv("FAKE_MORE_IDS", "5000")
+	t.Setenv("FAKE_TRICKLE", "2ms")
+	t.Setenv("FAKE_TRICKLE_HANG", "1")
+	h := startRun(t, newFakeAPI(t, everything), false, false, true, "--timeout=50s")
+	runner := h.runnerPid()
+	waitUntil(t, "events streaming", func() bool { return strings.Contains(h.out.String(), `"event":"progress"`) })
+
+	_ = h.reader.Close()
+	h.hangUp()
+	h.await()
+
+	h.wantWoundDown(runner)
+	h.wantExit(130)
+}

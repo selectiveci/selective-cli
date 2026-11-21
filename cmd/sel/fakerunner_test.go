@@ -90,7 +90,12 @@ func fakeRunner() int {
 
 func manifest() map[string]any {
 	var cases []map[string]any
-	for _, id := range strings.Split(os.Getenv("FAKE_IDS"), ",") {
+	ids := strings.Split(os.Getenv("FAKE_IDS"), ",")
+	more, _ := strconv.Atoi(os.Getenv("FAKE_MORE_IDS"))
+	for i := range more {
+		ids = append(ids, "tests/test_calc.py::gen_"+strconv.Itoa(i))
+	}
+	for _, id := range ids {
 		file, _, _ := strings.Cut(id, "::")
 		cases = append(cases, map[string]any{"id": id, "file_path": file, "line_number": 1})
 	}
