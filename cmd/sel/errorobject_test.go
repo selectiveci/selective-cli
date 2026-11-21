@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 )
 
@@ -40,7 +39,7 @@ func TestTimeoutKeepsEveryJSONErrorObjectUnder512BytesWhateverTheServerSends(t *
 				_ = json.NewEncoder(w).Encode(body)
 			}))
 			t.Cleanup(srv.Close)
-			res, _ := runCapped(t, 5*time.Second, t.TempDir(), t.TempDir(), srv.URL, nil, "approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90", "--json", "--timeout=5s")
+			res := runBinaryIn(t, t.TempDir(), srv.URL, t.TempDir(), "approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90", "--json", "--timeout=5s")
 
 			object := oneObjectUnder512(t, res.stdout)
 			message, _ := object["message"].(string)
@@ -54,8 +53,8 @@ func TestTimeoutKeepsEveryJSONErrorObjectUnder512BytesWhateverTheServerSends(t *
 
 func TestTimeoutMovesDoctorsDocumentToStderrAndLeavesNoTimeoutUntouched(t *testing.T) {
 	host := "http://127.0.0.1:1/" + strings.Repeat("h", 3000)
-	capped, _ := runCapped(t, 5*time.Second, checkoutOfAcmeWeb(t), t.TempDir(), host, nil, "doctor", "--json", "--timeout=5s")
-	plain, _ := runCapped(t, 15*time.Second, checkoutOfAcmeWeb(t), t.TempDir(), host, nil, "doctor", "--json")
+	capped := runBinaryIn(t, checkoutOfAcmeWeb(t), host, t.TempDir(), "doctor", "--json", "--timeout=5s")
+	plain := runBinaryIn(t, checkoutOfAcmeWeb(t), host, t.TempDir(), "doctor", "--json")
 
 	object := oneObjectUnder512(t, capped.stdout)
 	doctorLine, rest, _ := strings.Cut(capped.stderr, "\n")
