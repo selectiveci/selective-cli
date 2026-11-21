@@ -130,7 +130,7 @@ func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io
 		if secretFlagGivenFor(root, cmd, args) {
 			sink = stderr
 		}
-		_ = format.Error(sink, coded)
+		writeErrorObject(sink, stderr, coded)
 	}
 	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
 	return cmd, coded.ExitCode()

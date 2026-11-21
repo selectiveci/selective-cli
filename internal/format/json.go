@@ -9,12 +9,15 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"unicode/utf8"
 
 	"github.com/mattn/go-isatty"
 	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
 const Version = 1
+
+const ErrorLineLimit = 512
 
 type field struct {
 	key   string
@@ -86,14 +89,55 @@ func EventLine(w io.Writer, name string, fields map[string]any) error {
 
 func Error(w io.Writer, err contract.Coded) error {
 	fields := []field{{"error", string(err.ErrorCode())}, {"message", err.Error()}}
-	if f, ok := err.(contract.Fielded); ok {
-		extras := maps.Clone(f.ErrorFields())
-		for _, reserved := range []string{"v", "error", "message"} {
-			delete(extras, reserved)
+	return line(w, append(fields, errorExtras(err)...)...)
+}
+
+func BoundedError(w io.Writer, err contract.Coded) error {
+	const open, between, end = `{"v":1,"error":`, `,"message":`, "}\n"
+	room := ErrorLineLimit - len(open) - len(between) - len(end)
+	code := fitString(string(err.ErrorCode()), room-2)
+	var buf bytes.Buffer
+	buf.WriteString(open)
+	buf.Write(code)
+	buf.WriteString(between)
+	buf.Write(fitString(err.Error(), room-len(code)))
+	for _, f := range errorExtras(err) {
+		key, _ := encode(f.key)
+		val, encodeErr := encode(f.value)
+		if encodeErr == nil && buf.Len()+len(key)+len(val)+len(end)+2 <= ErrorLineLimit {
+			fmt.Fprintf(&buf, ",%s:%s", key, val)
 		}
-		fields = append(fields, sorted(extras)...)
 	}
-	return line(w, fields...)
+	buf.WriteString(end)
+	_, werr := w.Write(buf.Bytes())
+	return werr
+}
+
+func errorExtras(err contract.Coded) []field {
+	f, ok := err.(contract.Fielded)
+	if !ok {
+		return nil
+	}
+	extras := maps.Clone(f.ErrorFields())
+	for _, reserved := range []string{"v", "error", "message"} {
+		delete(extras, reserved)
+	}
+	return sorted(extras)
+}
+
+func fitString(s string, room int) []byte {
+	used, end := 2, 0
+	for end < len(s) {
+		_, size := utf8.DecodeRuneInString(s[end:])
+		piece, _ := encode(s[end : end+size])
+		if used+len(piece)-2 > room {
+			break
+		}
+		used += len(piece) - 2
+		end += size
+	}
+	cut, _ := encode(s[:end])
+	return cut
 }
 
 func sorted(m map[string]any) []field {

@@ -38,7 +38,12 @@ func doctorCmd() *cobra.Command {
 A check that can't run because an earlier one failed is skipped. The exit
 code is the first failing check's. --json writes one document with every
 check; when a check fails it is the error object, carrying the same
-document as its doctor field.`,
+document as its doctor field.
+
+With an explicit --timeout, a JSON error object on stdout is at most 512 bytes
+including its newline: it carries failed_check, the first failing check's name,
+instead of the doctor field, and the full document follows on stderr as one
+{"v":1,"doctor":{...}} line.`,
 		Example: `  sel doctor
   sel doctor --org acme --json
   sel doctor --timeout 10s`,
