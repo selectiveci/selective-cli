@@ -225,8 +225,8 @@ func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *
 			c.claim()
 			go func() { _, _ = g.Write([]byte(partial)) }()
 			expire(c)
-			code, _ := awaitExit(t, exited)
-			if took := time.Since(c.start); code != 8 || took > backstopGrace+backstopExit+backstopExit/2 || seen() != partial {
+			code, took := awaitExit(t, exited)
+			if code != 8 || took > backstopGrace+backstopExit+backstopExit/2 || seen() != partial {
 				t.Errorf("exit %d after %s, stdout %q; want exit 8 within the bound with a stuck or shared stderr, and the command's bytes alone on stdout", code, took, seen())
 			}
 		})
