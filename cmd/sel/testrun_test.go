@@ -342,9 +342,9 @@ func waitUntil(t *testing.T, what string, done func() bool) {
 	}
 }
 
-func interruptedRun(t *testing.T, api *fakeAPI, ready func(stdout func() string)) ([]map[string]any, int) {
+func interruptedRun(t *testing.T, api *fakeAPI, ready func(stdout func() string), extraArgs ...string) ([]map[string]any, int) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "test", "--org", "acme")
+	cmd := exec.Command(os.Args[0], append([]string{"test", "--org", "acme"}, extraArgs...)...)
 	cmd.Dir = pytestProject(t)
 	cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_HOST="+api.srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir())
 	capture := filepath.Join(t.TempDir(), "stdout")

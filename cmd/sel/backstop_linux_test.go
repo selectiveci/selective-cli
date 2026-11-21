@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,8 +14,10 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/selectiveci/selective-cli/internal/localrun"
+	"nhooyr.io/websocket"
 )
 
 const hardBound = time.Second + 500*time.Millisecond + 250*time.Millisecond
@@ -43,7 +49,7 @@ func TestTimeoutInPrettyModeEndsATailWhoseConfigReadNeverReturns(t *testing.T) {
 	}
 }
 
-func startWithStdout(t *testing.T, dir, host string, extraEnv []string, stdout *os.File, args ...string) (*exec.Cmd, *bytes.Buffer) {
+func startWithStdout(t *testing.T, dir, host string, extraEnv []string, stdout *os.File, shared bool, args ...string) (*exec.Cmd, *bytes.Buffer) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Dir = dir
@@ -51,6 +57,9 @@ func startWithStdout(t *testing.T, dir, host string, extraEnv []string, stdout *
 	cmd.Env = append(cmd.Env, extraEnv...)
 	stderr := &bytes.Buffer{}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if shared {
+		cmd.Stderr = stdout
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +116,7 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 		t.Fatal(err)
 	}
 
-	cmd, stderr := startWithStdout(t, project, newFakeAPI(t, selected).srv.URL, env, w, "test", "--org", "acme", "--timeout=1s", "--json")
+	cmd, stderr := startWithStdout(t, project, newFakeAPI(t, selected).srv.URL, env, w, false, "test", "--org", "acme", "--timeout=1s", "--json")
 	_ = w.Close()
 	exit, took := waitForExit(t, cmd, 30*time.Second)
 
@@ -129,5 +138,101 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 		if n, _ := strconv.Atoi(p); !processGone(n) {
 			t.Errorf("git pid %d is still alive after the timeout exit", n)
 		}
+	}
+}
+
+func pipeBytes(t *testing.T, r *os.File) int {
+	t.Helper()
+	var n int32
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, r.Fd(), syscall.TIOCINQ, uintptr(unsafe.Pointer(&n))); errno != 0 {
+		t.Fatal(errno)
+	}
+	return int(n)
+}
+
+func TestTimeoutExitsEightOnTimeWhenStdoutIsBackedUpAndNeverSplicesALine(t *testing.T) {
+	cases := map[string]struct {
+		lineBytes   int
+		nonblocking bool
+		shared      bool
+	}{
+		"blocking pipe, 12000-byte lines":           {12000, false, false},
+		"blocking pipe, 20000-byte lines":           {20000, false, false},
+		"nonblocking pipe, 8192-byte lines":         {8192, true, false},
+		"nonblocking pipe, 20000-byte line":         {20000, true, false},
+		"stdout and stderr on one pipe, 12000-byte": {12000, false, true},
+		"stdout and stderr on one pipe, 20000-byte": {20000, false, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pad := strings.Repeat("x", c.lineBytes)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				ctx := conn.CloseRead(r.Context())
+				for i := 0; conn.Write(ctx, websocket.MessageText, []byte(`{"event":"progress","completed":`+strconv.Itoa(i)+`,"total":99999,"percent":0,"failed":0,"pad":"`+pad+`"}`)) == nil; i++ {
+					time.Sleep(5 * time.Millisecond)
+				}
+			}))
+			t.Cleanup(srv.Close)
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd, stderr := startWithStdout(t, t.TempDir(), srv.URL, nil, w, c.shared, "tail", "--run-id", "r1", "--timeout=1s", "--json")
+			if c.nonblocking {
+				if err := syscall.SetNonblock(int(w.Fd()), true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = w.Close()
+
+			time.Sleep(500 * time.Millisecond)
+			before := pipeBytes(t, r)
+			time.Sleep(300 * time.Millisecond)
+			if after := pipeBytes(t, r); before == 0 || after != before {
+				t.Fatalf("pipe held %d bytes, then %d: the writer was not stalled, so this proves nothing", before, after)
+			}
+			t.Logf("writer stalled with %d bytes in the pipe at 800ms", before)
+			var dump []byte
+			drained := make(chan struct{})
+			go func() {
+				defer close(drained)
+				time.Sleep(550 * time.Millisecond)
+				_ = syscall.SetNonblock(int(r.Fd()), false)
+				dump, _ = io.ReadAll(r)
+			}()
+			exit, took := waitForExit(t, cmd, 5*time.Second)
+			<-drained
+			lines := strings.Split(string(dump), "\n")
+			for i, line := range lines[:len(lines)-1] {
+				if !json.Valid([]byte(line)) && !(c.shared && strings.HasPrefix(line, "Error: ") && !strings.Contains(line, `{"`)) {
+					t.Fatalf("stdout line %d is not complete JSON (%d bytes): spliced; head %.60q, last 600 bytes %q", i, len(line), line, line[max(0, len(line)-600):])
+				}
+			}
+			if tail := lines[len(lines)-1]; strings.Contains(tail, `"error"`) || strings.Contains(tail, "Error:") {
+				t.Errorf("an error object was glued onto an unfinished line: %.80q", tail)
+			}
+			if c.shared == strings.HasPrefix(stderr.String(), "Error: ") || exit != 8 || took > hardBound {
+				t.Errorf("exit %d after %s, stderr %q; want exit 8 within %s and an Error: line on a stderr of its own", exit, took, stderr.String(), hardBound)
+			}
+		})
+	}
+}
+
+func TestInterruptBeforeTheDeadlineStillExitsOneThirtyUnderATimeout(t *testing.T) {
+	runnerEnv(t)
+	t.Setenv("FAKE_HANG", "1")
+	ready := func(stdout func() string) {
+		waitUntil(t, "the selection event", func() bool { return strings.Contains(stdout(), `"event":"selection"`) })
+	}
+
+	events, code := interruptedRun(t, newFakeAPI(t, selected), ready, "--timeout", "5m")
+
+	if last := events[len(events)-1]; code != 130 || last["event"] != "summary" || last["interrupted"] != true {
+		t.Errorf("exit %d, last event %v; want exit 130 and an interrupted summary", code, last)
 	}
 }
