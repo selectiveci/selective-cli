@@ -43,6 +43,8 @@ type hangupRun struct {
 	cmd     *exec.Cmd
 	reader  *os.File
 	out     *syncBuffer
+	errRead *os.File
+	errOut  *syncBuffer
 	pidFile string
 	tmp     string
 	exited  chan struct{}
@@ -74,10 +76,15 @@ func openPty(t *testing.T) (master, slave *os.File) {
 
 func startHangupRun(t *testing.T, api *fakeAPI, pty, ignoreHup bool, extraArgs ...string) *hangupRun {
 	t.Helper()
-	return startHangupRunReading(t, api, pty, ignoreHup, false, extraArgs...)
+	return startRun(t, api, pty, ignoreHup, false, extraArgs...)
 }
 
-func startHangupRunReading(t *testing.T, api *fakeAPI, pty, ignoreHup, stopAtSelection bool, extraArgs ...string) *hangupRun {
+func startRun(t *testing.T, api *fakeAPI, pty, ignoreHup, splitStderr bool, extraArgs ...string) *hangupRun {
+	t.Helper()
+	return startRunReading(t, api, pty, ignoreHup, splitStderr, false, extraArgs...)
+}
+
+func startRunReading(t *testing.T, api *fakeAPI, pty, ignoreHup, splitStderr, stopAtSelection bool, extraArgs ...string) *hangupRun {
 	t.Helper()
 	runnerEnv(t)
 	t.Setenv("FAKE_PID_FILE", filepath.Join(t.TempDir(), "runner.pid"))
@@ -107,6 +114,17 @@ func startHangupRunReading(t *testing.T, api *fakeAPI, pty, ignoreHup, stopAtSel
 		t.Fatal(err)
 	}
 	h.cmd.Stdout, h.cmd.Stderr = childEnd, childEnd
+	h.errOut = &syncBuffer{}
+	if splitStderr {
+		var errEnd *os.File
+		if h.errRead, errEnd, err = os.Pipe(); err != nil {
+			t.Fatal(err)
+		}
+		defer errEnd.Close()
+		h.cmd.Stderr = errEnd
+		go func() { _, _ = io.Copy(h.errOut, h.errRead) }()
+		t.Cleanup(func() { _ = h.errRead.Close() })
+	}
 	if err := h.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +424,7 @@ func TestHangupWithAStdoutWriteInFlightExitsInterruptedWhenTheReaderLeaves(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("FAKE_FAIL", "tests/test_calc.py::test_add")
 			t.Setenv("FAKE_FAIL_BYTES", "1048576")
-			h := startHangupRunReading(t, newFakeAPI(t, everything), tc.pty, false, true)
+			h := startRunReading(t, newFakeAPI(t, everything), tc.pty, false, false, true)
 			runner := h.runnerPid()
 			h.awaitBlockedStdoutWrite()
 
