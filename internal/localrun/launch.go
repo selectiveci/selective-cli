@@ -172,6 +172,8 @@ func envValue(env []string, key string) string {
 
 var ErrInterrupted = errors.New("interrupted")
 
+var ErrCleanedUp = errors.New("sel is exiting")
+
 const (
 	defaultGrace                = 5 * time.Second
 	noSignal     syscall.Signal = 0
@@ -198,11 +200,13 @@ type client struct {
 var running = struct {
 	sync.Mutex
 	clients map[*client]struct{}
+	cleaned bool
 }{clients: map[*client]struct{}{}}
 
 func Cleanup() {
 	running.Lock()
 	defer running.Unlock()
+	running.cleaned = true
 	for c := range running.clients {
 		select {
 		case <-c.exited:
@@ -216,6 +220,9 @@ func Cleanup() {
 func (c *client) start() error {
 	running.Lock()
 	defer running.Unlock()
+	if running.cleaned {
+		return ErrCleanedUp
+	}
 	if err := c.cmd.Start(); err != nil {
 		return err
 	}

@@ -87,7 +87,7 @@ func waitForExit(t *testing.T, cmd *exec.Cmd, limit time.Duration) (exit int, to
 func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.T) {
 	runnerEnv(t)
 	t.Setenv("FAKE_HANG", "1")
-	pidFile := filepath.Join(t.TempDir(), "runner.pid")
+	pidFile, siblingFile := filepath.Join(t.TempDir(), "runner.pid"), filepath.Join(t.TempDir(), "sibling.pid")
 	t.Setenv("FAKE_PID_FILE", pidFile)
 	tmp, err := os.MkdirTemp("/tmp", "k")
 	if err != nil {
@@ -112,7 +112,7 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 	}
 	env := []string{"TMPDIR=" + tmp, "PATH=" + bin + ":" + os.Getenv("PATH")}
 	project := pytestProject(t)
-	client := "#!/bin/sh\necho selective_pytest >/dev/null\nsleep 300 >/dev/null 2>&1 &\nexec env FAKE_RUNNER=1 " + os.Args[0] + " \"$@\"\n"
+	client := "#!/bin/sh\necho selective_pytest >/dev/null\nsleep 300 >/dev/null 2>&1 &\necho $! > " + siblingFile + "\nexec env FAKE_RUNNER=1 " + os.Args[0] + " \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(project, ".venv/bin/selective"), []byte(client), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -127,8 +127,13 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 		t.Fatalf("the runner never started (exit %d after %s, stderr %q), so this proves nothing", exit, took, stderr.String())
 	}
 	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	siblingBody, _ := os.ReadFile(siblingFile)
+	sibling, _ := strconv.Atoi(strings.TrimSpace(string(siblingBody)))
+	if sibling <= 0 {
+		t.Fatalf("the runner's sibling never started (exit %d after %s), so this proves nothing about the group", exit, took)
+	}
 	leftovers, _ := os.ReadDir(tmp)
-	if exit != 8 || took < time.Second+localrun.ShutdownBudget || !processGone(-pid) || len(leftovers) != 0 || !strings.Contains(stderr.String(), "Error: ") {
+	if exit != 8 || !processGone(sibling) || took < time.Second+localrun.ShutdownBudget || !processGone(-pid) || len(leftovers) != 0 || !strings.Contains(stderr.String(), "Error: ") {
 		t.Errorf("exit %d after %s, process group gone=%t, temp entries %d, stderr %q; want the backstop's exit 8 after the wind-down budget, an empty process group, no seat dir and an Error: line", exit, took, processGone(-pid), len(leftovers), stderr.String())
 	}
 	pids := strings.Fields(string(mustRead(t, gitPids)))
@@ -174,6 +179,29 @@ func TestTimeoutCapsTheWholeCommandWhenTheUpdateStateFileNeverReads(t *testing.T
 	}
 }
 
+func newPipe(t *testing.T, nonblocking bool) (r, w *os.File) {
+	t.Helper()
+	flags := syscall.O_CLOEXEC
+	if nonblocking {
+		flags |= syscall.O_NONBLOCK
+	}
+	var fds [2]int
+	if err := syscall.Pipe2(fds[:], flags); err != nil {
+		t.Fatal(err)
+	}
+	r, w = os.NewFile(uintptr(fds[0]), "pipe-r"), os.NewFile(uintptr(fds[1]), "pipe-w")
+	t.Cleanup(func() { _ = r.Close() })
+	return r, w
+}
+
+func hasNonblockingStdout(t *testing.T, pid int) bool {
+	t.Helper()
+	info := string(mustRead(t, "/proc/"+strconv.Itoa(pid)+"/fdinfo/1"))
+	_, flags, _ := strings.Cut(info, "flags:")
+	n, err := strconv.ParseInt(strings.TrimSpace(strings.SplitN(flags, "\n", 2)[0]), 8, 64)
+	return err == nil && n&syscall.O_NONBLOCK != 0
+}
+
 func pipeBytes(t *testing.T, r *os.File) int {
 	t.Helper()
 	var n int32
@@ -188,13 +216,18 @@ func TestTimeoutExitsEightOnTimeWhenStdoutIsBackedUpAndNeverSplicesALine(t *test
 		lineBytes   int
 		nonblocking bool
 		shared      bool
+		afterExit   bool
 	}{
-		"blocking pipe, 12000-byte lines":           {12000, false, false},
-		"blocking pipe, 20000-byte lines":           {20000, false, false},
-		"nonblocking pipe, 8192-byte lines":         {8192, true, false},
-		"nonblocking pipe, 20000-byte line":         {20000, true, false},
-		"stdout and stderr on one pipe, 12000-byte": {12000, false, true},
-		"stdout and stderr on one pipe, 20000-byte": {20000, false, true},
+		"blocking pipe, 12000-byte lines":           {12000, false, false, false},
+		"blocking pipe, 20000-byte lines":           {20000, false, false, false},
+		"nonblocking pipe, 8192-byte lines":         {8192, true, false, false},
+		"nonblocking pipe, 20000-byte line":         {20000, true, false, false},
+		"stdout and stderr on one pipe, 12000-byte": {12000, false, true, false},
+		"stdout and stderr on one pipe, 20000-byte": {20000, false, true, false},
+
+		"blocking pipe, 12000-byte lines, read only after exit":           {lineBytes: 12000, afterExit: true},
+		"nonblocking pipe, 8192-byte lines, read only after exit":         {lineBytes: 8192, nonblocking: true, afterExit: true},
+		"stdout and stderr on one pipe, 12000-byte, read only after exit": {lineBytes: 12000, shared: true, afterExit: true},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -211,15 +244,10 @@ func TestTimeoutExitsEightOnTimeWhenStdoutIsBackedUpAndNeverSplicesALine(t *test
 				}
 			}))
 			t.Cleanup(srv.Close)
-			r, w, err := os.Pipe()
-			if err != nil {
-				t.Fatal(err)
-			}
+			r, w := newPipe(t, c.nonblocking)
 			cmd, stderr := startWithStdout(t, t.TempDir(), srv.URL, nil, w, c.shared, "tail", "--run-id", "r1", "--timeout=1s", "--json")
-			if c.nonblocking {
-				if err := syscall.SetNonblock(int(w.Fd()), true); err != nil {
-					t.Fatal(err)
-				}
+			if c.nonblocking && !hasNonblockingStdout(t, cmd.Process.Pid) {
+				t.Fatal("the child's stdout was not O_NONBLOCK when it started, so this case proves nothing")
 			}
 			_ = w.Close()
 
@@ -231,14 +259,19 @@ func TestTimeoutExitsEightOnTimeWhenStdoutIsBackedUpAndNeverSplicesALine(t *test
 			}
 			t.Logf("writer stalled with %d bytes in the pipe at 800ms", before)
 			var dump []byte
-			drained := make(chan struct{})
+			drained, exited := make(chan struct{}), make(chan struct{})
 			go func() {
 				defer close(drained)
-				time.Sleep(550 * time.Millisecond)
+				if c.afterExit {
+					<-exited
+				} else {
+					time.Sleep(550 * time.Millisecond)
+				}
 				_ = syscall.SetNonblock(int(r.Fd()), false)
 				dump, _ = io.ReadAll(r)
 			}()
 			exit, took := waitForExit(t, cmd, 5*time.Second)
+			close(exited)
 			<-drained
 			lines := strings.Split(string(dump), "\n")
 			for i, line := range lines[:len(lines)-1] {
