@@ -126,7 +126,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
 	started := time.Now()
-	signalled, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	signalled, stop := interruptContext(cmd.Context())
 	defer stop()
 	signalledAt := make(chan time.Time, 1)
 	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
@@ -140,7 +140,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
 		if !sum.Reported {
 			sum.MS = (<-signalledAt).Sub(started).Milliseconds()
-			if err := localrun.WriteInterruptedSummary(events, sum); err != nil {
+			if err := localrun.WriteInterruptedSummary(events, sum); err != nil && !errors.Is(context.Cause(signalled), errHangup) {
 				return 0, contract.Errorf(contract.InternalError, "could not write the event stream: %v", err)
 			}
 		}
