@@ -24,7 +24,7 @@ import (
 
 var (
 	httpTimeout = 10 * time.Second
-	settleGrace = 250 * time.Millisecond
+	SettleGrace = 250 * time.Millisecond
 )
 
 const (
@@ -172,7 +172,7 @@ func runWithin(ctx context.Context, s *state, st step) Check {
 		select {
 		case c := <-done:
 			return timedOut(st.name, s.opts.Timeout, c)
-		case <-time.After(settleGrace):
+		case <-time.After(SettleGrace):
 			return timedOut(st.name, s.opts.Timeout, Check{})
 		}
 	}

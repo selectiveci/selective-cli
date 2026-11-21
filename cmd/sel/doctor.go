@@ -48,6 +48,7 @@ document as its doctor field.`,
 			if timeout <= 0 {
 				return contract.Errorf(contract.UsageError, "--timeout must be longer than zero")
 			}
+			holdBackstop(cmd.Context(), doctor.SettleGrace)
 			report := doctor.Run(doctor.Options{Hostname: f.hostname, Org: f.org, Timeout: timeout, Ctx: cmd.Context()})
 			err := report.Err()
 			out := cmd.OutOrStdout()
