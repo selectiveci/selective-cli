@@ -272,3 +272,20 @@ func TestFlakeWritesAreInHelpAsMutatingAndOnlyMarkFixedAsDestructive(t *testing.
 		t.Errorf("flake write commands in help --json: %v, want quarantine, unquarantine and mark-fixed", found)
 	}
 }
+
+func TestFlakesHelpSaysAQuarantinedFailureStillFailsTheRun(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"flakes", "--help"}, "Leave a flake out of the failure count"},
+		{[]string{"flakes", "quarantine", "--help"}, "a failing run still exits 1"},
+	}
+	for _, c := range cases {
+		res := runBinary(t, t.TempDir(), "http://127.0.0.1:1", c.args...)
+		text := strings.Join(strings.Fields(res.stdout), " ")
+		if res.exit != 0 || !strings.Contains(text, c.want) || strings.Contains(text, "failing builds") {
+			t.Errorf("%v: exit %d, want text %q and no claim about failing builds, got %q", c.args, res.exit, c.want, text)
+		}
+	}
+}
