@@ -34,7 +34,7 @@ func cappedTimeout(cmd *cobra.Command) (time.Duration, bool) {
 		return 0, false
 	}
 	d, err := cmd.Flags().GetDuration("timeout")
-	return d, err == nil && d > 0
+	return d, err == nil && d > 0 && cmd.Flags().Changed("timeout")
 }
 
 func newClock() *clock {
