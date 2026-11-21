@@ -11,6 +11,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
 	"github.com/selectiveci/selective-cli/internal/gitctx"
+	"github.com/selectiveci/selective-cli/internal/localrun"
 	"github.com/spf13/cobra"
 )
 
@@ -94,7 +95,7 @@ func (c *clock) arm(deadline time.Time, cause contract.Coded, g *guard, asJSON b
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.deadline, c.cause, c.guard, c.asJSON = deadline, cause, g, asJSON
-	c.cleanups = append(c.cleanups, gitctx.KillRunning)
+	c.cleanups = append(c.cleanups, gitctx.KillRunning, localrun.Cleanup)
 	c.timer = time.AfterFunc(c.untilFire(), c.fire)
 }
 

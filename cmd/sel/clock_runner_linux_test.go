@@ -1,15 +1,24 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/localrun"
+	"github.com/spf13/cobra"
 )
+
+const runnerChildEnv = "SEL_CLOCK_RUNNER_CHILD_ROOT"
 
 func timedOutSelTest(t *testing.T) (res cliResult, took time.Duration, runnerPid int, tmp string) {
 	t.Helper()
@@ -69,4 +78,45 @@ func processGone(pid int) bool {
 		}
 	}
 	return false
+}
+
+func TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner(t *testing.T) {
+	if root := os.Getenv(runnerChildEnv); root != "" {
+		launchAfterTheBackstopFired(root, os.Getenv("SEL_CLOCK_RUNNER_PID_FILE"))
+		return
+	}
+	root, pidFile := pytestProject(t), filepath.Join(t.TempDir(), "runner.pid")
+	client := "#!/bin/sh\necho selective_pytest >/dev/null\necho $$ > " + pidFile + "\nexec sleep 300\n"
+	if err := os.WriteFile(filepath.Join(root, ".venv/bin/selective"), []byte(client), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		body, _ := os.ReadFile(pidFile)
+		if pid, _ := strconv.Atoi(strings.TrimSpace(string(body))); pid > 0 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	})
+	child := exec.Command(os.Args[0], "-test.run=^TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner$")
+	child.Env = append(os.Environ(), runnerChildEnv+"="+root, "SEL_CLOCK_RUNNER_PID_FILE="+pidFile)
+
+	out, err := child.CombinedOutput()
+
+	if err != nil {
+		t.Errorf("child failed: %v\n%s\nwant no runner to start after the backstop fired", err, out)
+	}
+}
+
+func launchAfterTheBackstopFired(root, pidFile string) {
+	c := newClock(&cobra.Command{}, nil, io.Discard, io.Discard)
+	c.exit = func(int) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _ = localrun.Launch{Root: root, Framework: localrun.Pytest, Sel: os.Args[0], Stderr: io.Discard}.Run(ctx, io.Discard, localrun.Options{Timeout: 2 * time.Second})
+		if _, err := os.Stat(pidFile); err == nil {
+			os.Exit(3)
+		}
+		os.Exit(0)
+	}
+	c.arm(time.Now().Add(-time.Second), contract.Errorf(contract.Timeout, "--timeout expired"), &guard{w: io.Discard}, false)
+	select {}
 }
