@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"io"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -33,6 +35,13 @@ func (b *lockedBuffer) String() string {
 type stuckWriter struct{}
 
 func (stuckWriter) Write([]byte) (int, error) { select {} }
+
+type wedgedWriter struct{ w io.Writer }
+
+func (w wedgedWriter) Write(p []byte) (int, error) {
+	_, _ = w.w.Write(p)
+	select {}
+}
 
 func expiredClock(stdout, stderr io.Writer, asJSON bool) (*clock, *guard, chan int) {
 	exited := make(chan int, 1)
@@ -115,6 +124,92 @@ func TestBackstopNeverBlocksOnABackedUpStdoutAndStderr(t *testing.T) {
 
 	if code != 8 || took > backstopGrace+backstopExit+250*time.Millisecond {
 		t.Errorf("exit %d after %s; want exit 8 by the bound with both streams stuck", code, took)
+	}
+}
+
+func TestBackstopLeavesTheCommandsOwnErrorAndExitCodeAloneOnceItClaimedThem(t *testing.T) {
+	for i := range 20 {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr lockedBuffer
+			c, g, exited := expiredClock(&stdout, &stderr, true)
+			c.claim()
+			fired := make(chan struct{})
+			c.extend(0, []func(){func() { close(fired) }})
+			returned := make(chan struct{})
+			go func() {
+				<-fired
+				_, _ = g.Write([]byte(`{"error":"not_found"}` + "\n"))
+				c.finish()
+				close(returned)
+			}()
+
+			select {
+			case <-returned:
+			case code := <-exited:
+				t.Fatalf("hard exit %d, stdout %q: it took the command's own error and exit code", code, stdout.String())
+			case <-time.After(5 * time.Second):
+				t.Fatal("neither the command nor the backstop finished")
+			}
+
+			if stdout.String() != `{"error":"not_found"}`+"\n" || stderr.String() != "" {
+				t.Errorf("stdout %q, stderr %q; want the command's object alone", stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *testing.T) {
+	const partial = `{"error":"not_fo`
+	cases := map[string]bool{"stderr apart from stdout": false, "stderr on stdout's file": true}
+	for name, shared := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stdout, stderr := new(lockedBuffer), new(lockedBuffer)
+			var out, errOut io.Writer = stdout, stderr
+			seen := stdout.String
+			if shared {
+				f, err := os.CreateTemp(t.TempDir(), "stdout")
+				if err != nil {
+					t.Fatal(err)
+				}
+				out, errOut = f, f
+				seen = func() string { body, _ := os.ReadFile(f.Name()); return string(body) }
+			}
+			exited := make(chan int, 1)
+			c := &clock{start: time.Now(), stdout: out, stderr: errOut, exit: func(code int) { exited <- code }}
+			g := &guard{w: wedgedWriter{out}}
+			c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, true)
+			c.claim()
+			go func() { _, _ = g.Write([]byte(partial)) }()
+
+			code, took := awaitExit(t, exited)
+
+			if gotError := strings.HasPrefix(stderr.String(), "Error: "); code != 8 || took > backstopGrace+backstopExit+250*time.Millisecond || seen() != partial || gotError == shared {
+				t.Errorf("exit %d after %s, stdout %q, stderr %q; want exit 8 by the bound, the command's bytes alone on stdout, and an Error: line only when stderr is not stdout's file", code, took, seen(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestAfterTheBackstopFiresTheCommandPathParksInsteadOfWriting(t *testing.T) {
+	for name, call := range map[string]func(*clock){"claim": (*clock).claim, "finish": (*clock).finish} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, _, exited := expiredClock(io.Discard, io.Discard, false)
+			awaitExit(t, exited)
+			returned := make(chan struct{})
+			go func() {
+				call(c)
+				close(returned)
+			}()
+
+			select {
+			case <-returned:
+				t.Errorf("%s returned after the hard exit had fired: the command could write after it", name)
+			case <-time.After(200 * time.Millisecond):
+			}
+		})
 	}
 }
 

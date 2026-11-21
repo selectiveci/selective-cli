@@ -16,6 +16,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/localrun"
 	"nhooyr.io/websocket"
 )
@@ -138,6 +139,38 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 		if n, _ := strconv.Atoi(p); !processGone(n) {
 			t.Errorf("git pid %d is still alive after the timeout exit", n)
 		}
+	}
+}
+
+func TestTimeoutCapsTheWholeCommandWhenTheUpdateStateFileNeverReads(t *testing.T) {
+	for name, tty := range map[string]bool{"output piped": false, "output on a terminal": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := t.TempDir()
+			if err := syscall.Mkfifo(filepath.Join(state, "update-check.json"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
+			}))
+			t.Cleanup(srv.Close)
+			var out *os.File
+			if tty {
+				_, out = openPTY(t)
+			} else if devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+				out = devnull
+			} else {
+				t.Fatal(err)
+			}
+			env := []string{"SELECTIVE_CONFIG_DIR=" + state, "SELECTIVE_NO_UPDATE_NOTIFIER=", "CI=", "GITHUB_ACTIONS=", "BUILD_NUMBER=", "RUN_ID=", "CODESPACES="}
+
+			cmd, _ := startWithStdout(t, t.TempDir(), srv.URL, env, out, tty, "approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90", "--timeout=1s")
+			exit, took := waitForExit(t, cmd, 5*time.Second)
+
+			if exit != contract.ExitNotFound || took > hardBound {
+				t.Errorf("exit %d after %s; want the command's own exit %d within %s", exit, took, contract.ExitNotFound, hardBound)
+			}
+		})
 	}
 }
 

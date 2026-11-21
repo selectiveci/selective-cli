@@ -60,6 +60,7 @@ type clock struct {
 	claimed  bool
 	fired    bool
 	done     bool
+	owner    chan struct{}
 }
 
 func newClock(root *cobra.Command, args []string, stdout, stderr io.Writer) *clock {
@@ -141,6 +142,10 @@ func (c *clock) finish() {
 	if c.timer != nil {
 		c.timer.Stop()
 	}
+	if c.owner != nil {
+		close(c.owner)
+		c.owner = nil
+	}
 	c.mu.Unlock()
 	if fired {
 		select {}
@@ -149,7 +154,7 @@ func (c *clock) finish() {
 
 func (c *clock) fire() {
 	c.mu.Lock()
-	if c.fired || c.done {
+	if c.fired || c.done || c.owner != nil {
 		c.mu.Unlock()
 		return
 	}
@@ -158,11 +163,14 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 		return
 	}
-	c.fired = true
 	claimed, cleanups := c.claimed, c.cleanups
+	c.fired = !claimed
+	owner := make(chan struct{})
+	if claimed {
+		c.owner = owner
+	}
 	c.mu.Unlock()
 
-	clean := c.guard.mu.TryLock() && (c.guard.last == 0 || c.guard.last == '\n')
 	var wg sync.WaitGroup
 	run := func(f func()) {
 		wg.Add(1)
@@ -171,14 +179,32 @@ func (c *clock) fire() {
 			f()
 		}()
 	}
-	if clean && c.asJSON && !claimed {
+	for _, cleanup := range cleanups {
+		run(cleanup)
+	}
+	exitWait := backstopExit
+	if claimed {
+		exitWait /= 2
+		select {
+		case <-owner:
+			return
+		case <-time.After(exitWait):
+		}
+		c.mu.Lock()
+		if c.done {
+			c.mu.Unlock()
+			return
+		}
+		c.fired = true
+		c.mu.Unlock()
+	}
+
+	clean := !claimed && c.guard.mu.TryLock() && (c.guard.last == 0 || c.guard.last == '\n')
+	if clean && c.asJSON {
 		run(func() { _ = format.Error(c.guard.w, c.cause) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
 		run(func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
-	}
-	for _, cleanup := range cleanups {
-		run(cleanup)
 	}
 	finished := make(chan struct{})
 	go func() {
@@ -187,7 +213,7 @@ func (c *clock) fire() {
 	}()
 	select {
 	case <-finished:
-	case <-time.After(backstopExit):
+	case <-time.After(exitWait):
 	}
 	c.exit(contract.ExitTimeout)
 }

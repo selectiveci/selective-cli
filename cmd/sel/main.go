@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/api"
 	"github.com/selectiveci/selective-cli/internal/auth"
@@ -52,10 +53,35 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	if !isVersionCommand(root, args) {
 		checker = update.StartCheck(version, os.Getenv)
 	}
+	started := time.Now()
 	cmd, code := runCommand(root, args, stdout, stderr)
-	checker.Stop()
-	printUpdateNotice(cmd, stdout, stderr)
+	after := withinTimeout(cmd, started)
+	after(checker.Stop)
+	after(func() { printUpdateNotice(cmd, stdout, stderr) })
 	return code
+}
+
+func withinTimeout(cmd *cobra.Command, started time.Time) func(func()) {
+	var d time.Duration
+	var capped bool
+	if cmd != nil {
+		d, capped = cappedTimeout(cmd)
+	}
+	return func(f func()) {
+		if !capped {
+			f()
+			return
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f()
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Until(started.Add(d))):
+		}
+	}
 }
 
 type exitCode int
