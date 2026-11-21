@@ -151,7 +151,7 @@ Exit codes:
 			if err != nil {
 				return tailConnectError(err)
 			}
-			opts.Ctx = cmd.Context()
+			opts.Ctx, opts.Out = cmd.Context(), cmd.OutOrStdout()
 			code, err := tail.Run(env.Client, opts)
 			if err != nil {
 				return err
