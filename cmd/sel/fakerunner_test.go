@@ -87,7 +87,16 @@ func fakeRunner() int {
 				time.Sleep(time.Minute)
 			}
 		case "close":
+			for gate := os.Getenv("FAKE_FINISH_GATE"); gate != "" && os.Remove(gate) != nil; {
+				time.Sleep(5 * time.Millisecond)
+			}
 			send("report_at_finish", map[string]any{"connection_retries": 0})
+			if path := os.Getenv("FAKE_FINISHED_FILE"); path != "" {
+				if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+					_, _ = f.WriteString("x")
+					_ = f.Close()
+				}
+			}
 			if os.Getenv("FAKE_LINGER") == "1" {
 				time.Sleep(time.Minute)
 			}
