@@ -18,13 +18,14 @@ var (
 
 type readerWatch struct {
 	io.Writer
+	file     *os.File
 	terminal bool
 	left     func()
 }
 
 func (w readerWatch) Write(p []byte) (int, error) {
 	n, err := w.Writer.Write(p)
-	if errors.Is(err, syscall.EPIPE) || w.terminal && errors.Is(err, syscall.EIO) {
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EIO) && eioMeansReaderGone(w.file, w.terminal) {
 		w.left()
 		return len(p), nil
 	}

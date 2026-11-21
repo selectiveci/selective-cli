@@ -134,7 +134,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	stdout := cmd.OutOrStdout()
 	stdoutFile := underlyingFile(stdout)
 	terminal := stdoutFile != nil && format.IsTerminal(stdoutFile)
-	var events io.Writer = readerWatch{stdout, terminal, func() { cancel(errReaderLeft) }}
+	var events io.Writer = readerWatch{stdout, stdoutFile, terminal, func() { cancel(errReaderLeft) }}
 	pretty := !format.JSONMode(cmd.Flags(), stdout)
 	if pretty {
 		events = prettyEvents{format.NewWriter(events, "pretty")}
