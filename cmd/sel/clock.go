@@ -61,6 +61,7 @@ type clock struct {
 	fired    bool
 	done     bool
 	owner    chan struct{}
+	cleaned  chan struct{}
 }
 
 func newClock(root *cobra.Command, args []string, stdout, stderr io.Writer) *clock {
@@ -147,9 +148,24 @@ func (c *clock) finish() {
 		c.owner = nil
 	}
 	c.mu.Unlock()
+	if c.cleaned != nil && !fired {
+		select {
+		case <-c.cleaned:
+		case <-time.After(backstopExit / 2):
+		}
+	}
 	if fired {
 		select {}
 	}
+}
+
+func (c *clock) limit() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer == nil {
+		return time.Time{}
+	}
+	return c.deadline.Add(c.windDown + backstopGrace + backstopExit)
 }
 
 func (c *clock) fire() {
@@ -165,14 +181,14 @@ func (c *clock) fire() {
 	}
 	claimed, cleanups := c.claimed, c.cleanups
 	c.fired = !claimed
-	owner := make(chan struct{})
+	owner, cleaned := make(chan struct{}), make(chan struct{})
 	if claimed {
-		c.owner = owner
+		c.owner, c.cleaned = owner, cleaned
 	}
 	c.mu.Unlock()
 
-	var wg sync.WaitGroup
-	run := func(f func()) {
+	var cleaning, writing sync.WaitGroup
+	run := func(wg *sync.WaitGroup, f func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -180,8 +196,12 @@ func (c *clock) fire() {
 		}()
 	}
 	for _, cleanup := range cleanups {
-		run(cleanup)
+		run(&cleaning, cleanup)
 	}
+	go func() {
+		cleaning.Wait()
+		close(cleaned)
+	}()
 	exitWait := backstopExit
 	if claimed {
 		exitWait /= 2
@@ -199,16 +219,18 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 	}
 
-	clean := !claimed && c.guard.mu.TryLock() && (c.guard.last == 0 || c.guard.last == '\n')
+	locked := c.guard.mu.TryLock()
+	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
 	if clean && c.asJSON {
-		run(func() { _ = format.Error(c.guard.w, c.cause) })
+		run(&writing, func() { _ = format.Error(c.guard.w, c.cause) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
-		run(func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
+		run(&writing, func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
 	}
 	finished := make(chan struct{})
 	go func() {
-		wg.Wait()
+		writing.Wait()
+		<-cleaned
 		close(finished)
 	}()
 	select {

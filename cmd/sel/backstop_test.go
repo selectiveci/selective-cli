@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,11 +132,16 @@ func TestBackstopLeavesTheCommandsOwnErrorAndExitCodeAloneOnceItClaimedThem(t *t
 	for i := range 20 {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			t.Parallel()
-			var stdout, stderr lockedBuffer
-			c, g, exited := expiredClock(&stdout, &stderr, true)
+			var stdout lockedBuffer
+			c, g, exited := expiredClock(&stdout, io.Discard, true)
 			c.claim()
+			var cleaned atomic.Bool
 			fired := make(chan struct{})
-			c.extend(0, []func(){func() { close(fired) }})
+			c.extend(0, []func(){func() {
+				close(fired)
+				time.Sleep(50 * time.Millisecond)
+				cleaned.Store(true)
+			}})
 			returned := make(chan struct{})
 			go func() {
 				<-fired
@@ -152,21 +158,41 @@ func TestBackstopLeavesTheCommandsOwnErrorAndExitCodeAloneOnceItClaimedThem(t *t
 				t.Fatal("neither the command nor the backstop finished")
 			}
 
-			if stdout.String() != `{"error":"not_found"}`+"\n" || stderr.String() != "" {
-				t.Errorf("stdout %q, stderr %q; want the command's object alone", stdout.String(), stderr.String())
+			if stdout.String() != `{"error":"not_found"}`+"\n" || !cleaned.Load() {
+				t.Errorf("stdout %q, cleanup finished %t; want the command's object alone and the cleanup the backstop started finished", stdout.String(), cleaned.Load())
 			}
 		})
 	}
 }
 
+func TestAfterCommandRunsTheStepsInOrderAndStartsNoneOnceTheLimitHasPassed(t *testing.T) {
+	var started lockedBuffer
+	release := make(chan struct{})
+	step := func(name string) func() {
+		return func() {
+			_, _ = started.Write([]byte(name))
+			if name == "a" {
+				<-release
+			}
+		}
+	}
+	afterCommand(time.Now().Add(100*time.Millisecond), step("a"), step("b"))
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	afterCommand(time.Now().Add(-time.Second), step("c"), step("d"))
+	if got := started.String(); got != "a" {
+		t.Errorf("steps started %q; want %q: a wedged step must keep the next one from starting, and a passed limit starts none", got, "a")
+	}
+}
+
 func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *testing.T) {
 	const partial = `{"error":"not_fo`
-	cases := map[string]bool{"stderr apart from stdout": false, "stderr on stdout's file": true}
+	cases := map[string]bool{"stderr stuck": false, "stderr on stdout's file": true}
 	for name, shared := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			stdout, stderr := new(lockedBuffer), new(lockedBuffer)
-			var out, errOut io.Writer = stdout, stderr
+			stdout := new(lockedBuffer)
+			var out, errOut io.Writer = stdout, stuckWriter{}
 			seen := stdout.String
 			if shared {
 				f, err := os.CreateTemp(t.TempDir(), "stdout")
@@ -182,32 +208,46 @@ func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *
 			c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, true)
 			c.claim()
 			go func() { _, _ = g.Write([]byte(partial)) }()
-
-			code, took := awaitExit(t, exited)
-
-			if gotError := strings.HasPrefix(stderr.String(), "Error: "); code != 8 || took > backstopGrace+backstopExit+250*time.Millisecond || seen() != partial || gotError == shared {
-				t.Errorf("exit %d after %s, stdout %q, stderr %q; want exit 8 by the bound, the command's bytes alone on stdout, and an Error: line only when stderr is not stdout's file", code, took, seen(), stderr.String())
+			code, _ := awaitExit(t, exited)
+			if took := time.Since(c.start); code != 8 || took > backstopGrace+backstopExit+backstopExit/2 || seen() != partial {
+				t.Errorf("exit %d after %s, stdout %q; want exit 8 within the bound with a stuck or shared stderr, and the command's bytes alone on stdout", code, took, seen())
 			}
 		})
 	}
 }
 
 func TestAfterTheBackstopFiresTheCommandPathParksInsteadOfWriting(t *testing.T) {
-	for name, call := range map[string]func(*clock){"claim": (*clock).claim, "finish": (*clock).finish} {
+	const object = `{"error":"not_found"}` + "\n"
+	cases := map[string]struct {
+		wrote string
+		call  func(*clock, *guard)
+	}{
+		"claim":                        {"", func(c *clock, _ *guard) { c.claim() }},
+		"finish":                       {"", func(c *clock, _ *guard) { c.finish() }},
+		"a write after its own object": {object, func(_ *clock, g *guard) { _, _ = g.Write([]byte(object)) }},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			c, _, exited := expiredClock(io.Discard, io.Discard, false)
+			var stdout lockedBuffer
+			c, g, exited := expiredClock(&stdout, io.Discard, false)
+			if tc.wrote != "" {
+				c.claim()
+				_, _ = g.Write([]byte(tc.wrote))
+			}
 			awaitExit(t, exited)
 			returned := make(chan struct{})
 			go func() {
-				call(c)
+				tc.call(c, g)
 				close(returned)
 			}()
-
 			select {
 			case <-returned:
 				t.Errorf("%s returned after the hard exit had fired: the command could write after it", name)
 			case <-time.After(200 * time.Millisecond):
+			}
+			if stdout.String() != tc.wrote {
+				t.Errorf("stdout %q; want %q: nothing from the backstop and nothing more from the command once it committed", stdout.String(), tc.wrote)
 			}
 		})
 	}
