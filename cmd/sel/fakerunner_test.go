@@ -18,6 +18,9 @@ func fakeRunner() int {
 	if os.Getenv("FAKE_IGNORE_SIGINT") == "1" {
 		signal.Ignore(syscall.SIGINT)
 	}
+	if os.Getenv("FAKE_IGNORE_SIGPIPE") == "1" {
+		signal.Ignore(syscall.SIGPIPE)
+	}
 	if path := os.Getenv("FAKE_SLOW_STOP_FILE"); path != "" {
 		stops := make(chan os.Signal, 1)
 		signal.Notify(stops, syscall.SIGINT)
@@ -67,9 +70,17 @@ func fakeRunner() int {
 				time.Sleep(time.Minute)
 			}
 			record(command.IDs)
+			if os.Getenv("FAKE_DIE") == "1" {
+				os.Exit(3)
+			}
 			trickle, _ := time.ParseDuration(os.Getenv("FAKE_TRICKLE"))
 			for _, id := range command.IDs {
 				time.Sleep(trickle)
+				if path := os.Getenv("FAKE_NOISE_FILE"); path != "" {
+					if _, err := fmt.Println("runner output"); err != nil {
+						_ = os.WriteFile(path, []byte(err.Error()), 0o644)
+					}
+				}
 				send("test_case_result", result(id))
 			}
 			if os.Getenv("FAKE_TRICKLE_HANG") == "1" {

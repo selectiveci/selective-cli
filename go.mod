@@ -9,6 +9,7 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/zalando/go-keyring v0.2.6
 	golang.org/x/mod v0.22.0
+	golang.org/x/sys v0.35.0
 	nhooyr.io/websocket v1.8.11
 )
 
@@ -23,5 +24,4 @@ require (
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/muesli/termenv v0.15.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	golang.org/x/sys v0.35.0 // indirect
 )
