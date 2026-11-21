@@ -86,6 +86,7 @@ func TestTimeoutLeavesNoCutLineWhenTheErrorObjectOutgrowsTheFreeSpaceInThePipe(t
 			if len(lines) < 2 || len(lines[0]) >= 512 {
 				t.Fatalf("stdout does not start with a complete object of at most 512 bytes: %.80q", lines[0])
 			}
+			t.Logf("exit %d after %s, %d bytes after the last newline", exit, took, len(lines[len(lines)-1]))
 			if tail := lines[len(lines)-1]; tail != "" && !(c.shared && strings.HasPrefix(tail, `{"v":1,"doctor":`)) {
 				t.Errorf("stdout ends on an unterminated line of %d bytes: %.60q", len(tail), tail)
 			}
