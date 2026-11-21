@@ -20,6 +20,9 @@ func TestMain(m *testing.M) {
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "__transport", os.Getenv("SELECTIVE_TEST_RUN_MAIN") == "1":
 		api.SetClock(instantClock{})
+		if v := os.Getenv("SELECTIVE_TEST_VERSION"); v != "" {
+			version = v
+		}
 		main()
 		return
 	case os.Getenv("FAKE_RUNNER") == "1":

@@ -53,34 +53,32 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 	if !isVersionCommand(root, args) {
 		checker = update.StartCheck(version, os.Getenv)
 	}
-	started := time.Now()
-	cmd, code := runCommand(root, args, stdout, stderr)
-	after := withinTimeout(cmd, started)
-	after(checker.Stop)
-	after(func() { printUpdateNotice(cmd, stdout, stderr) })
+	clock := newClock(root, args, stdout, stderr)
+	cmd, code := runWith(clock, root, args, stdout, stderr)
+	afterCommand(clock.limit(), checker.Stop, func() { printUpdateNotice(cmd, stdout, stderr) })
 	return code
 }
 
-func withinTimeout(cmd *cobra.Command, started time.Time) func(func()) {
-	var d time.Duration
-	var capped bool
-	if cmd != nil {
-		d, capped = cappedTimeout(cmd)
+func afterCommand(limit time.Time, steps ...func()) {
+	if limit.IsZero() {
+		for _, step := range steps {
+			step()
+		}
+		return
 	}
-	return func(f func()) {
-		if !capped {
-			f()
-			return
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, step := range steps {
+			if !time.Now().Before(limit) {
+				return
+			}
+			step()
 		}
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			f()
-		}()
-		select {
-		case <-done:
-		case <-time.After(time.Until(started.Add(d))):
-		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Until(limit)):
 	}
 }
 
@@ -89,6 +87,10 @@ type exitCode int
 func (e exitCode) Error() string { return fmt.Sprintf("exit %d", int(e)) }
 
 func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
+	return runWith(newClock(root, args, stdout, stderr), root, args, stdout, stderr)
+}
+
+func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -97,7 +99,6 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	entered := false
 	markEntered(root, &entered)
-	clock := newClock(root, args, stdout, stderr)
 	defer clock.finish()
 	clock.attach(root)
 
