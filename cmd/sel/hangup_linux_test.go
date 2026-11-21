@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,20 +16,68 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/selectiveci/selective-cli/internal/localrun"
 )
 
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type hangupRun struct {
 	t       *testing.T
 	cmd     *exec.Cmd
-	capture string
+	reader  *os.File
+	out     *syncBuffer
 	pidFile string
 	tmp     string
 	exited  chan struct{}
+	copied  chan struct{}
 }
 
-func startHangupRun(t *testing.T, api *fakeAPI, ignoreHup bool, extraArgs ...string) *hangupRun {
+func openPty(t *testing.T) (master, slave *os.File) {
+	t.Helper()
+	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatalf("a pty is required on Linux: %v", err)
+	}
+	var unlock int32
+	var number uint32
+	conn, _ := master.SyscallConn()
+	var lockErr, numberErr syscall.Errno
+	_ = conn.Control(func(fd uintptr) {
+		_, _, lockErr = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock)))
+		_, _, numberErr = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGPTN, uintptr(unsafe.Pointer(&number)))
+	})
+	if lockErr != 0 || numberErr != 0 {
+		t.Fatalf("a pty is required on Linux: unlock %v, number %v", lockErr, numberErr)
+	}
+	if slave, err = os.OpenFile(fmt.Sprintf("/dev/pts/%d", number), os.O_RDWR|syscall.O_NOCTTY, 0); err != nil {
+		t.Fatalf("a pty is required on Linux: %v", err)
+	}
+	return master, slave
+}
+
+func startHangupRun(t *testing.T, api *fakeAPI, pty, ignoreHup bool, extraArgs ...string) *hangupRun {
+	t.Helper()
+	return startHangupRunReading(t, api, pty, ignoreHup, false, extraArgs...)
+}
+
+func startHangupRunReading(t *testing.T, api *fakeAPI, pty, ignoreHup, stopAtSelection bool, extraArgs ...string) *hangupRun {
 	t.Helper()
 	runnerEnv(t)
 	t.Setenv("FAKE_PID_FILE", filepath.Join(t.TempDir(), "runner.pid"))
@@ -39,7 +90,7 @@ func startHangupRun(t *testing.T, api *fakeAPI, ignoreHup bool, extraArgs ...str
 		api = newFakeAPI(t, selected)
 	}
 	args := append([]string{"test", "--org", "acme", "--json"}, extraArgs...)
-	h := &hangupRun{t: t, capture: filepath.Join(t.TempDir(), "stdout"), pidFile: os.Getenv("FAKE_PID_FILE"), tmp: tmp, exited: make(chan struct{})}
+	h := &hangupRun{t: t, out: &syncBuffer{}, pidFile: os.Getenv("FAKE_PID_FILE"), tmp: tmp, exited: make(chan struct{}), copied: make(chan struct{})}
 	h.cmd = exec.Command(os.Args[0], args...)
 	if ignoreHup {
 		h.cmd = exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, os.Args[0]}, args...)...)
@@ -47,21 +98,31 @@ func startHangupRun(t *testing.T, api *fakeAPI, ignoreHup bool, extraArgs ...str
 	h.cmd.Dir = pytestProject(t)
 	h.cmd.Env = append(os.Environ(), "SELECTIVE_TEST_RUN_MAIN=1", "SELECTIVE_NO_UPDATE_NOTIFIER=1", "SELECTIVE_HOST="+api.srv.URL, "SELECTIVE_TOKEN=tok", "SELECTIVE_CONFIG_DIR="+t.TempDir(), "TMPDIR="+tmp)
 	h.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	out, err := os.Create(h.capture)
-	if err != nil {
+	var childEnd *os.File
+	if pty {
+		h.reader, childEnd = openPty(t)
+		h.cmd.Stdin = childEnd
+		h.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	} else if h.reader, childEnd, err = os.Pipe(); err != nil {
 		t.Fatal(err)
 	}
-	defer out.Close()
-	h.cmd.Stdout = out
+	h.cmd.Stdout, h.cmd.Stderr = childEnd, childEnd
 	if err := h.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	_ = childEnd.Close()
+	if stopAtSelection {
+		go h.copyUntilSelection()
+	} else {
+		go func() { _, _ = io.Copy(h.out, h.reader); close(h.copied) }()
+	}
 	go func() { _ = h.cmd.Wait(); close(h.exited) }()
-	t.Cleanup(func() { _ = syscall.Kill(-h.cmd.Process.Pid, syscall.SIGKILL) })
+	t.Cleanup(func() {
+		_ = syscall.Kill(-h.cmd.Process.Pid, syscall.SIGKILL)
+		_ = h.reader.Close()
+	})
 	return h
 }
-
-func (h *hangupRun) stdout() string { return string(mustRead(h.t, h.capture)) }
 
 func (h *hangupRun) runnerPid() int {
 	h.t.Helper()
@@ -72,11 +133,51 @@ func (h *hangupRun) runnerPid() int {
 		return pid > 0
 	})
 	h.t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
-	waitUntil(h.t, "the selection event", func() bool { return strings.Contains(h.stdout(), `"event":"selection"`) })
+	waitUntil(h.t, "the selection event", func() bool { return strings.Contains(h.out.String(), `"event":"selection"`) })
 	if err := syscall.Kill(pid, 0); err != nil {
 		h.t.Fatalf("VOID: the runner was not alive before the signal: %v", err)
 	}
 	return pid
+}
+
+func (h *hangupRun) copyUntilSelection() {
+	buf := make([]byte, 4096)
+	for !strings.Contains(h.out.String(), `"event":"selection"`) {
+		n, err := h.reader.Read(buf)
+		_, _ = h.out.Write(buf[:n])
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (h *hangupRun) abandonReader() {
+	h.t.Helper()
+	if err := h.reader.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	close(h.copied)
+}
+
+func (h *hangupRun) stdoutWriteBlocked() bool {
+	taskDir := fmt.Sprintf("/proc/%d/task", h.cmd.Process.Pid)
+	tasks, _ := os.ReadDir(taskDir)
+	for _, task := range tasks {
+		body, _ := os.ReadFile(filepath.Join(taskDir, task.Name(), "syscall"))
+		if fields := strings.Fields(string(body)); len(fields) > 1 && fields[0] == strconv.Itoa(syscall.SYS_WRITE) && fields[1] == "0x1" {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *hangupRun) awaitBlockedStdoutWrite() {
+	h.t.Helper()
+	waitUntil(h.t, "sel to block writing to a stdout nobody reads", h.stdoutWriteBlocked)
+	time.Sleep(300 * time.Millisecond)
+	if !h.stdoutWriteBlocked() {
+		h.t.Fatal("VOID: the write to stdout did not stay blocked, so no write was in flight when the hangup came")
+	}
 }
 
 func (h *hangupRun) hangUp() {
@@ -94,6 +195,11 @@ func (h *hangupRun) await() {
 	case <-time.After(bound):
 		h.t.Fatalf("sel was still running %s after the signal", bound)
 	}
+	select {
+	case <-h.copied:
+	case <-time.After(3 * time.Second):
+		h.t.Fatal("the output of sel was still open 3s after it exited")
+	}
 }
 
 func (h *hangupRun) wantWoundDown(runner int) {
@@ -110,10 +216,18 @@ func (h *hangupRun) wantWoundDown(runner int) {
 
 func (h *hangupRun) wantInterruptedSummary() {
 	h.t.Helper()
-	events := stdoutEvents(h.t, h.stdout())
-	last := events[len(events)-1]
+	var documents []string
+	for _, line := range strings.Split(h.out.String(), "\n") {
+		if strings.HasPrefix(line, "{") {
+			documents = append(documents, line)
+		}
+	}
+	last := map[string]any{}
+	if len(documents) > 0 {
+		last = stdoutEvents(h.t, documents[len(documents)-1])[0]
+	}
 	if h.cmd.ProcessState.ExitCode() != 130 || last["event"] != "summary" || last["interrupted"] != true {
-		h.t.Errorf("sel: %s, events %v; want exit 130 and a last summary with interrupted=true", h.cmd.ProcessState, eventNames(events))
+		h.t.Errorf("sel: %s, stdout %q; want exit 130 and a last summary with interrupted=true", h.cmd.ProcessState, h.out.String())
 	}
 }
 
@@ -135,6 +249,22 @@ func awaitHeld(t *testing.T, api *fakeAPI) {
 	}
 }
 
+func TestHangupWhenThePtyClosesWindsDownTheRunner(t *testing.T) {
+	t.Setenv("FAKE_HANG", "1")
+	h := startHangupRun(t, nil, true, false)
+	runner := h.runnerPid()
+
+	if err := h.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h.await()
+
+	h.wantWoundDown(runner)
+	if h.cmd.ProcessState.ExitCode() != 130 {
+		t.Errorf("sel: %s, want exit 130 after the terminal closed", h.cmd.ProcessState)
+	}
+}
+
 func TestHangupSignalEndsTheRunWithTheInterruptedSummary(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -148,7 +278,7 @@ func TestHangupSignalEndsTheRunWithTheInterruptedSummary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("FAKE_HANG", "1")
 			t.Setenv(tc.env, "1")
-			h := startHangupRun(t, nil, false, tc.args...)
+			h := startHangupRun(t, nil, false, false, tc.args...)
 			runner := h.runnerPid()
 
 			h.hangUp()
@@ -160,10 +290,27 @@ func TestHangupSignalEndsTheRunWithTheInterruptedSummary(t *testing.T) {
 	}
 }
 
+func TestHangupWithADeadStdoutStillWindsDownTheRunner(t *testing.T) {
+	t.Setenv("FAKE_HANG", "1")
+	h := startHangupRun(t, nil, false, false)
+	runner := h.runnerPid()
+	if err := h.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	h.hangUp()
+	h.await()
+
+	h.wantWoundDown(runner)
+	if h.cmd.ProcessState.ExitCode() != 130 {
+		t.Errorf("sel: %s, want exit 130 even though nothing could be written", h.cmd.ProcessState)
+	}
+}
+
 func TestHangupIgnoredAtStartupLeavesARunningSelTestAlone(t *testing.T) {
 	t.Run("a hung runner keeps running until it is told to stop", func(t *testing.T) {
 		t.Setenv("FAKE_HANG", "1")
-		h := startHangupRun(t, nil, true)
+		h := startHangupRun(t, nil, false, true)
 		runner := h.runnerPid()
 
 		h.hangUp()
@@ -184,7 +331,7 @@ func TestHangupIgnoredAtStartupLeavesARunningSelTestAlone(t *testing.T) {
 
 	t.Run("a run in planning still finishes with its normal exit code", func(t *testing.T) {
 		api, release := heldAPI(t)
-		h := startHangupRun(t, api, true)
+		h := startHangupRun(t, api, false, true)
 		awaitHeld(t, api)
 
 		h.hangUp()
@@ -192,15 +339,15 @@ func TestHangupIgnoredAtStartupLeavesARunningSelTestAlone(t *testing.T) {
 		release()
 		h.await()
 
-		if h.cmd.ProcessState.ExitCode() != 0 || !strings.Contains(h.stdout(), `"event":"summary"`) {
-			t.Errorf("sel: %s, stdout %q; want exit 0 and a summary", h.cmd.ProcessState, h.stdout())
+		if h.cmd.ProcessState.ExitCode() != 0 || !strings.Contains(h.out.String(), `"event":"summary"`) {
+			t.Errorf("sel: %s, stdout %q; want exit 0 and a summary", h.cmd.ProcessState, h.out.String())
 		}
 	})
 }
 
 func TestHangupDuringPlanningExitsInterruptedWithNothingLeftBehind(t *testing.T) {
 	api, _ := heldAPI(t)
-	h := startHangupRun(t, api, false)
+	h := startHangupRun(t, api, false, false)
 	awaitHeld(t, api)
 
 	h.hangUp()
@@ -245,5 +392,40 @@ func TestHangupStillKillsACommandOtherThanSelTest(t *testing.T) {
 	t.Logf("sel suites after SIGHUP: %s", cmd.ProcessState)
 	if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !status.Signaled() || status.Signal() != syscall.SIGHUP {
 		t.Errorf("sel suites: %s, want it killed by the hangup signal as before", cmd.ProcessState)
+	}
+}
+
+func TestHangupWithAStdoutWriteInFlightExitsInterruptedWhenTheReaderLeaves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pty  bool
+	}{
+		{"a pipe whose reader closes after the hangup", false},
+		{"a pty that closes", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FAKE_FAIL", "tests/test_calc.py::test_add")
+			t.Setenv("FAKE_FAIL_BYTES", "1048576")
+			h := startHangupRunReading(t, newFakeAPI(t, everything), tc.pty, false, true)
+			runner := h.runnerPid()
+			h.awaitBlockedStdoutWrite()
+
+			if !tc.pty {
+				h.hangUp()
+				time.Sleep(500 * time.Millisecond)
+				select {
+				case <-h.exited:
+					t.Fatalf("VOID: sel exited before its stdout reader left: %s", h.cmd.ProcessState)
+				default:
+				}
+			}
+			h.abandonReader()
+			h.await()
+
+			h.wantWoundDown(runner)
+			if h.cmd.ProcessState.ExitCode() != 130 {
+				t.Errorf("sel: %s, want exit 130 when the write that was in flight at the hangup fails", h.cmd.ProcessState)
+			}
+		})
 	}
 }

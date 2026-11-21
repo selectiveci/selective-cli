@@ -141,7 +141,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
 		if !sum.Reported {
 			sum.MS = (<-signalledAt).Sub(started).Milliseconds()
-			if err := localrun.WriteInterruptedSummary(events, sum); err != nil {
+			if err := localrun.WriteInterruptedSummary(events, sum); err != nil && !(errors.Is(context.Cause(signalled), errHangup) && readerDeparted(err)) {
 				return 0, contract.Errorf(contract.InternalError, "could not write the event stream: %v", err)
 			}
 		}
@@ -197,6 +197,9 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		}
 	} else {
 		sum, err = run(signalled, 0)
+	}
+	if err != nil && errors.Is(context.Cause(signalled), errHangup) {
+		err = localrun.ErrInterrupted
 	}
 	switch {
 	case errors.Is(err, localrun.ErrInterrupted):
