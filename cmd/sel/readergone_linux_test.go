@@ -37,6 +37,16 @@ func TestReaderGoneReportsEachKindOfDeadReader(t *testing.T) {
 			_ = master.Close()
 			return slave
 		}},
+		{"a socket with its peer open", false, func(t *testing.T) *os.File {
+			fds, _ := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+			t.Cleanup(func() { _ = syscall.Close(fds[1]) })
+			return os.NewFile(uintptr(fds[0]), "socket")
+		}},
+		{"a socket whose peer closed", true, func(t *testing.T) *os.File {
+			fds, _ := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+			_ = syscall.Close(fds[1])
+			return os.NewFile(uintptr(fds[0]), "socket")
+		}},
 		{"a regular file", false, func(t *testing.T) *os.File {
 			f, _ := os.Create(filepath.Join(t.TempDir(), "out"))
 			return f
