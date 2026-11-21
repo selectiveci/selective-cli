@@ -28,6 +28,10 @@ func (w readerWatch) Write(p []byte) (int, error) {
 	return n, err
 }
 
+func readerDeparted(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EIO)
+}
+
 func interruptContext(parent context.Context) (context.Context, context.CancelCauseFunc, context.CancelFunc) {
 	ctx, cancel := context.WithCancelCause(parent)
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)

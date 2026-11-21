@@ -111,6 +111,9 @@ func result(id string) map[string]any {
 	if id == os.Getenv("FAKE_FAIL") {
 		data["status"] = "failed"
 		data["failure_message_lines"] = []string{"expected 1", "got 2"}
+		if size, _ := strconv.Atoi(os.Getenv("FAKE_FAIL_BYTES")); size > 0 {
+			data["failure_message_lines"] = []string{strings.Repeat("x", size)}
+		}
 	}
 	return data
 }
