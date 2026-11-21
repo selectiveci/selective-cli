@@ -3,9 +3,11 @@
 package localrun
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -258,5 +260,40 @@ func TestLaunchReportsAMissingBundleAsRunnerMissing(t *testing.T) {
 	_, err := l.run(context.Background())
 	if codeOf(err) != contract.RunnerMissing || !strings.Contains(err.Error(), "bundle") {
 		t.Errorf("err %v, want runner_missing naming bundle", err)
+	}
+}
+
+func TestCleanupKillsARunningClientsProcessGroupAndRemovesItsSeat(t *testing.T) {
+	l := scriptedClient(t, "echo $$ > \"$PIDF\"\nsleep 300 >/dev/null 2>&1 &\necho $! > \"$CHILDF\"\necho \"$SELECTIVE_SEAT_SOCKET\" > \"$SOCKF\"\nwait\n")
+	pidf, childf, sockf := filepath.Join(l.dir, "pid"), filepath.Join(l.dir, "child"), filepath.Join(l.dir, "sock")
+	t.Setenv("PIDF", pidf)
+	t.Setenv("CHILDF", childf)
+	t.Setenv("SOCKF", sockf)
+	done := make(chan error, 1)
+	go func() { _, err := l.run(context.Background()); done <- err }()
+	pid, _ := strconv.Atoi(awaitFile(t, pidf))
+	child, _ := strconv.Atoi(awaitFile(t, childf))
+	sock := awaitFile(t, sockf)
+	seatDir := filepath.Dir(sock)
+	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := bufio.NewReader(conn).ReadString('\n'); err != nil {
+		t.Fatalf("sel never greeted the connected runner: %v", err)
+	}
+
+	Cleanup()
+
+	if _, err := os.Stat(seatDir); !errors.Is(err, os.ErrNotExist) || !gone(pid) || !gone(child) {
+		t.Errorf("seat dir stat err %v, client gone=%t, its child gone=%t; want the seat dir removed and the whole process group dead", err, gone(pid), gone(child))
+	}
+	conn.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("Launch did not return after Cleanup")
 	}
 }
