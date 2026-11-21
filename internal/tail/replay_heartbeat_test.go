@@ -3,6 +3,7 @@ package tail
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,5 +176,29 @@ func TestHeartbeatAndWaitingShareTheCommandClock(t *testing.T) {
 				t.Errorf("exit %d err %v stdout %q, want exit 1 and %q", code, err, out.String(), want)
 			}
 		})
+	}
+}
+
+func TestStreamToWritesToTheGivenWriterNotTheProcessStdout(t *testing.T) {
+	process, _ := capture(t)
+	srv, _ := recordingTailServer(t, []string{summaryOneFailed})
+	var given bytes.Buffer
+
+	code, err := streamTo(&given, context.Background(), time.Now(), srv.URL, "tok", "b", "ndjson")
+
+	if want := summaryOneFailed + "\n"; code != 1 || err != nil || given.String() != want || process.Len() != 0 {
+		t.Errorf("exit %d err %v given %q process stdout %q, want exit 1, %q and nothing on the process stdout", code, err, given.String(), process.String(), want)
+	}
+}
+
+func TestOptionsOutReplacesTheProcessStdoutForNdjsonWaiting(t *testing.T) {
+	process, _ := capture(t)
+	var given bytes.Buffer
+
+	if got := waitingOutput(Options{Format: "ndjson", Out: &given}); got != &given {
+		t.Errorf("waiting output = %v, want Options.Out", got)
+	}
+	if got := (Options{}).stdout(); got != io.Writer(process) {
+		t.Errorf("default stdout = %v, want the process stdout", got)
 	}
 }
