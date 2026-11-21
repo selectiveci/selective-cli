@@ -97,7 +97,7 @@ func gitMode(info os.FileInfo) string {
 func hashInto(ctx context.Context, files map[string]string, path, root, stdin string, args ...string) {
 	cmd := gitctx.Command(ctx, append([]string{"-C", root, "hash-object"}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
-	if out, err := cmd.Output(); err == nil {
+	if out, err := gitctx.Output(cmd); err == nil {
 		files[path] = strings.TrimSpace(string(out))
 	}
 }
@@ -109,7 +109,7 @@ func hashObjects(ctx context.Context, root string, paths []string) map[string]st
 	}
 	cmd := gitctx.Command(ctx, "-C", root, "hash-object", "--stdin-paths")
 	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
-	out, err := cmd.Output()
+	out, err := gitctx.Output(cmd)
 	if err != nil {
 		return hashed
 	}
@@ -135,6 +135,6 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, bool) {
 	cmd := gitctx.Command(ctx, append([]string{"-C", dir}, args...)...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	err := cmd.Run()
+	err := gitctx.Run(cmd)
 	return out.String(), err == nil
 }
