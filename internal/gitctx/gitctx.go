@@ -1,11 +1,14 @@
 package gitctx
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,9 +55,63 @@ func Command(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
+var ErrKilled = errors.New("git was stopped because sel is exiting")
+
+var running = struct {
+	sync.Mutex
+	cmds   map[*exec.Cmd]struct{}
+	killed bool
+}{cmds: map[*exec.Cmd]struct{}{}}
+
+func Run(cmd *exec.Cmd) error {
+	running.Lock()
+	if running.killed {
+		running.Unlock()
+		return ErrKilled
+	}
+	err := cmd.Start()
+	if err == nil {
+		running.cmds[cmd] = struct{}{}
+	}
+	running.Unlock()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		running.Lock()
+		delete(running.cmds, cmd)
+		running.Unlock()
+	}()
+	return cmd.Wait()
+}
+
+func Output(cmd *exec.Cmd) ([]byte, error) {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	captureStderr := cmd.Stderr == nil
+	if captureStderr {
+		cmd.Stderr = &stderr
+	}
+	err := Run(cmd)
+	var exitErr *exec.ExitError
+	if captureStderr && errors.As(err, &exitErr) {
+		exitErr.Stderr = stderr.Bytes()
+	}
+	return stdout.Bytes(), err
+}
+
+func KillRunning() {
+	running.Lock()
+	defer running.Unlock()
+	running.killed = true
+	for cmd := range running.cmds {
+		_ = cmd.Process.Kill()
+	}
+}
+
 func run(ctx context.Context, args ...string) (string, error) {
 	cmd := Command(ctx, args...)
-	out, err := cmd.Output()
+	out, err := Output(cmd)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("git %v: %s", args, exitErr.Stderr)

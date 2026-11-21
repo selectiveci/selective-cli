@@ -280,7 +280,7 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 			c.reap(syscall.SIGINT, syscall.SIGTERM)
 			return Summary{}, ErrInterrupted
 		}
-		return Summary{}, contract.Errorf(contract.RunnerError, "the test runner exited before it connected to sel (%s); its output is above", c.cmd.ProcessState)
+		return Summary{}, c.acceptFailure()
 	}
 	defer conn.Close()
 	sum, err := Run(ctx, conn, conn, events, opts)
@@ -307,6 +307,15 @@ func (c *client) drive(ctx context.Context, seat *Seat, events io.Writer, opts O
 		}
 		c.reap(syscall.SIGTERM)
 		return sum, contract.Errorf(contract.RunnerError, "the test runner did not exit after reporting its finish; sel stopped it")
+	}
+}
+
+func (c *client) acceptFailure() error {
+	select {
+	case <-c.exited:
+		return contract.Errorf(contract.RunnerError, "the test runner exited before it connected to sel (%s); its output is above", c.cmd.ProcessState)
+	default:
+		return contract.Errorf(contract.RunnerError, "sel stopped waiting for the test runner to connect; its output is above")
 	}
 }
 
@@ -364,7 +373,7 @@ func randomHex() string {
 
 func gitValue(ctx context.Context, root string, args ...string) string {
 	cmd := gitctx.Command(ctx, append([]string{"-C", root}, args...)...)
-	out, err := cmd.Output()
+	out, err := gitctx.Output(cmd)
 	if value := strings.TrimSpace(string(out)); err == nil && value != "" {
 		return value
 	}
