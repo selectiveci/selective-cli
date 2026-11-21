@@ -151,7 +151,13 @@ func TestSelTestWatchTimeoutIsPerRunNotOneClockAcrossTheWatch(t *testing.T) {
 	events, code := w.interrupt()
 
 	names := eventNames(events)
-	if code != 130 || slices.Contains(names, "error:timeout") || slices.Count(names, "iteration_end") < 2 {
+	ends := 0
+	for _, name := range names {
+		if name == "iteration_end" {
+			ends++
+		}
+	}
+	if code != 130 || slices.Contains(names, "error:timeout") || ends < 2 {
 		t.Errorf("exit %d events %v, want the watch alive past %s with two iteration_end and no timeout", code, names, timeout)
 	}
 }
