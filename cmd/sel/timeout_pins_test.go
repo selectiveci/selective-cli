@@ -170,7 +170,7 @@ func TestSelTestTimeoutDefaultIsThirtyMinutes(t *testing.T) {
 }
 
 func TestSelTestTimeoutHelpSaysWhichClockItIs(t *testing.T) {
-	wants := []string{"Exits 8 at the cap", "each run is capped", "caps the whole command", "a run that hits the cap ends the watch"}
+	wants := []string{"Exits 8 at the cap", "each run is capped", "caps the whole command, setup included", "with --watch it caps each run instead", "a run that hits the cap ends the watch"}
 	_, helpOut, _ := execute("test", "--help")
 	_, jsonOut, _ := execute("help", "--json")
 	var doc struct {

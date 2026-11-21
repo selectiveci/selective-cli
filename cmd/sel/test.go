@@ -65,7 +65,7 @@ output goes to stderr; stdout carries NDJSON events only, ending with a
 summary.
 
 --watch runs once, then again after each change to a tracked file (checked
-every 300 ms, debounced by 300 ms), until Ctrl-C. A change during a run queues
+every 300 ms, debounced by 300 ms), until Ctrl-C or a run hits --timeout. A change during a run queues
 one more run. Each run ends with an iteration_end event in place of the
 summary; Ctrl-C ends the stream with one summary carrying interrupted:true,
 and exits 130. --watch cannot be combined with --list.`,
@@ -96,7 +96,7 @@ and exits 130. --watch cannot be combined with --list.`,
 	cmd.Flags().StringVar(&f.org, "org", "", "Organization slug (default: SELECTIVE_ORG, or your only one)")
 	cmd.Flags().BoolVar(&f.list, "list", false, "Print what would run and run nothing")
 	cmd.Flags().BoolVar(&f.passes, "passes", false, "Also emit a test_pass event for each passing test")
-	cmd.Flags().BoolVar(&f.watch, "watch", false, "Run again whenever a tracked file changes, until interrupted")
+	cmd.Flags().BoolVar(&f.watch, "watch", false, "Run again whenever a tracked file changes, until interrupted or a run hits --timeout")
 	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Exits 8 at the cap. When given, it caps the whole command, setup included; with --watch it caps each run instead, and a run that hits the cap ends the watch. Without this flag each run is capped at the default")
 	return cmd
 }
