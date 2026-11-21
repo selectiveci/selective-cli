@@ -597,3 +597,16 @@ func TestSuitesDeleteAnExactIdWinsOverAnotherSuiteNamedLikeIt(t *testing.T) {
 		t.Errorf("exit %d writes %+v, want one DELETE of %s", res.exit, stub.writes, deleteRoute)
 	}
 }
+
+func TestSuitesDeleteUnderATimeoutWritesToTheCommandsOutputWriter(t *testing.T) {
+	stub := &deleteStub{replies: []deleteReply{deleteDone}}
+	t.Setenv("SELECTIVE_HOST", stub.start(t).URL)
+	t.Setenv("SELECTIVE_TOKEN", "tok")
+	t.Setenv("SELECTIVE_CONFIG_DIR", t.TempDir())
+
+	code, stdout, _ := execute("suites", "delete", archivedSuiteID, "--yes", "--org", "acme", "--json", "--timeout", "5m")
+
+	if code != 0 || !strings.Contains(stdout, `"result":"deleted"`) {
+		t.Errorf("exit %d, stdout %q; want exit 0 and the deleted result on the command's own writer", code, stdout)
+	}
+}
