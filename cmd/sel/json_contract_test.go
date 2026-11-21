@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -115,6 +116,45 @@ func TestLoginAgainstAnUnreachableHostPrintsOneErrorObject(t *testing.T) {
 				t.Errorf("exit %d stdout %q, want exit 4 and one network_error", res.exit, res.stdout)
 			}
 		})
+	}
+}
+
+func TestFailedDeviceLoginPrintsOneErrorObject(t *testing.T) {
+	cases := []struct {
+		name        string
+		tokenStatus int
+		tokenBody   string
+		exit        int
+		code        string
+	}{
+		{"denied", 400, `{"error":"access_denied"}`, 6, "approval_denied"},
+		{"expired", 400, `{"error":"expired_token"}`, 7, "approval_expired"},
+		{"server fault", 500, `{"error":"server_error"}`, 4, "server_error"},
+	}
+	for _, tc := range cases {
+		for _, command := range []string{"login", "signup"} {
+			t.Run(tc.name+" "+command, func(t *testing.T) {
+				var polled atomic.Bool
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					if r.URL.Path == "/api/v1/device/code" {
+						_, _ = w.Write([]byte(`{"device_code":"d","user_code":"ABCD-EFGH","verification_uri_complete":"http://x/device","expires_in":600,"interval":1}`))
+						return
+					}
+					polled.Store(r.URL.Path == "/api/v1/device/token")
+					w.WriteHeader(tc.tokenStatus)
+					_, _ = w.Write([]byte(tc.tokenBody))
+				}))
+				t.Cleanup(srv.Close)
+
+				res := runBinary(t, t.TempDir(), srv.URL, "auth", command, "--json", "--no-browser")
+
+				errs := errorObjects(stdoutObjects(t, res.stdout))
+				if !polled.Load() || res.exit != tc.exit || len(errs) != 1 || errs[0]["error"] != tc.code || errs[0]["event"] != nil {
+					t.Errorf("polled %v, exit %d, stdout %q, want exit %d and one %s error object", polled.Load(), res.exit, res.stdout, tc.exit, tc.code)
+				}
+			})
+		}
 	}
 }
 

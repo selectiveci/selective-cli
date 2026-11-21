@@ -85,8 +85,8 @@ func Login(opts LoginOptions) error {
 	} else {
 		grant, err := browserLogin(host, opts)
 		if err != nil {
-			if code := loginErrorCode(err); code != "" {
-				opts.emit(map[string]any{"event": "error", "error": code, "message": err.Error()})
+			if errors.Is(err, errCancelled) {
+				opts.emit(map[string]any{"event": "error", "error": "cancelled", "message": err.Error()})
 			}
 			return err
 		}
@@ -140,17 +140,6 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 		return nil, errCancelled
 	}
 	return grant, err
-}
-
-func loginErrorCode(err error) string {
-	var coded contract.Coded
-	switch {
-	case errors.As(err, &coded):
-		return string(coded.ErrorCode())
-	case errors.Is(err, errCancelled):
-		return "cancelled"
-	}
-	return ""
 }
 
 var openBrowser = browser.Open
