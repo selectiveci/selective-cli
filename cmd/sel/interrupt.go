@@ -10,6 +10,10 @@ import (
 
 var errHangup = errors.New("the terminal hung up")
 
+func readerDeparted(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EIO)
+}
+
 func interruptContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancelCause(parent)
 	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}

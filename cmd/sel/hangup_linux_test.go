@@ -46,6 +46,7 @@ type hangupRun struct {
 	pidFile string
 	tmp     string
 	exited  chan struct{}
+	copied  chan struct{}
 }
 
 func openPty(t *testing.T) (master, slave *os.File) {
@@ -84,7 +85,7 @@ func startHangupRun(t *testing.T, api *fakeAPI, pty, ignoreHup bool, extraArgs .
 		api = newFakeAPI(t, selected)
 	}
 	args := append([]string{"test", "--org", "acme", "--json"}, extraArgs...)
-	h := &hangupRun{t: t, out: &syncBuffer{}, pidFile: os.Getenv("FAKE_PID_FILE"), tmp: tmp, exited: make(chan struct{})}
+	h := &hangupRun{t: t, out: &syncBuffer{}, pidFile: os.Getenv("FAKE_PID_FILE"), tmp: tmp, exited: make(chan struct{}), copied: make(chan struct{})}
 	h.cmd = exec.Command(os.Args[0], args...)
 	if ignoreHup {
 		h.cmd = exec.Command("sh", append([]string{"-c", `trap "" HUP; exec "$0" "$@"`, os.Args[0]}, args...)...)
@@ -105,7 +106,7 @@ func startHangupRun(t *testing.T, api *fakeAPI, pty, ignoreHup bool, extraArgs .
 		t.Fatal(err)
 	}
 	_ = childEnd.Close()
-	go func() { _, _ = io.Copy(h.out, h.reader) }()
+	go func() { _, _ = io.Copy(h.out, h.reader); close(h.copied) }()
 	go func() { _ = h.cmd.Wait(); close(h.exited) }()
 	t.Cleanup(func() {
 		_ = syscall.Kill(-h.cmd.Process.Pid, syscall.SIGKILL)
@@ -144,6 +145,11 @@ func (h *hangupRun) await() {
 	case <-h.exited:
 	case <-time.After(bound):
 		h.t.Fatalf("sel was still running %s after the signal", bound)
+	}
+	select {
+	case <-h.copied:
+	case <-time.After(3 * time.Second):
+		h.t.Fatal("the output of sel was still open 3s after it exited")
 	}
 }
 
