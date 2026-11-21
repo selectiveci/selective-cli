@@ -326,8 +326,15 @@ func TestHangupStillKillsACommandOtherThanSelTest(t *testing.T) {
 	}
 
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGHUP)
-	_ = cmd.Wait()
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("sel suites was still running 10s after SIGHUP, want it killed by the signal as before")
+	}
 
+	t.Logf("sel suites after SIGHUP: %s", cmd.ProcessState)
 	if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !status.Signaled() || status.Signal() != syscall.SIGHUP {
 		t.Errorf("sel suites: %s, want it killed by the hangup signal as before", cmd.ProcessState)
 	}
