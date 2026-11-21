@@ -210,7 +210,7 @@ func TestTimeoutExitsEightOnTimeWhenStdoutIsBackedUpAndNeverSplicesALine(t *test
 			lines := strings.Split(string(dump), "\n")
 			for i, line := range lines[:len(lines)-1] {
 				if !json.Valid([]byte(line)) && !(c.shared && strings.HasPrefix(line, "Error: ") && !strings.Contains(line, `{"`)) {
-					t.Fatalf("stdout line %d is not complete JSON (%d bytes): spliced", i, len(line))
+					t.Fatalf("stdout line %d is not complete JSON (%d bytes): spliced; head %.60q, last 600 bytes %q", i, len(line), line, line[max(0, len(line)-600):])
 				}
 			}
 			if tail := lines[len(lines)-1]; strings.Contains(tail, `"error"`) || strings.Contains(tail, "Error:") {
