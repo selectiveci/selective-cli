@@ -8,7 +8,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 )
 
 func TestReaderGoneReportsEachKindOfDeadReader(t *testing.T) {
@@ -72,17 +71,22 @@ func selOn(t *testing.T, api *fakeAPI, stdout, stderr *os.File, args ...string) 
 }
 
 func TestAPtyAlreadyClosedWhenSelStartsExitsInterrupted(t *testing.T) {
-	runnerEnv(t)
-	master, slave := openPty(t)
-	_ = master.Close()
-	cmd := selOn(t, newFakeAPI(t, everything), slave, slave)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = 30 * time.Second
-	_ = cmd.Run()
-	_ = slave.Close()
-
-	if got := cmd.ProcessState.ExitCode(); got != 130 {
-		t.Errorf("sel: %s, want exit 130 for a pty that closed before sel started", cmd.ProcessState)
+	for name, stderrToFile := range map[string]bool{"stderr on the same pty": false, "stderr on a file": true} {
+		t.Run(name, func(t *testing.T) {
+			runnerEnv(t)
+			master, slave := openPty(t)
+			_ = master.Close()
+			stderr := slave
+			if stderrToFile {
+				stderr, _ = os.Create(filepath.Join(t.TempDir(), "stderr"))
+			}
+			cmd := selOn(t, newFakeAPI(t, everything), slave, stderr)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			_ = cmd.Run()
+			if got := cmd.ProcessState.ExitCode(); got != 130 {
+				t.Errorf("sel: %s, want exit 130 for a pty that closed before sel started", cmd.ProcessState)
+			}
+		})
 	}
 }
 
