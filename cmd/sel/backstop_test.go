@@ -44,18 +44,23 @@ func (w wedgedWriter) Write(p []byte) (int, error) {
 	select {}
 }
 
-func dropArmedCleanups(c *clock) {
+func armQuietly(c *clock, g *guard, asJSON bool) {
+	c.deadline, c.cause, c.guard, c.asJSON = time.Now().Add(time.Hour), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, asJSON
+	c.timer = time.AfterFunc(c.untilFire(), c.fire)
+}
+
+func expire(c *clock) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.cleanups = nil
+	c.deadline = time.Now()
+	c.timer.Reset(c.untilFire())
+	c.mu.Unlock()
 }
 
 func expiredClock(stdout, stderr io.Writer, asJSON bool) (*clock, *guard, chan int) {
 	exited := make(chan int, 1)
 	c := &clock{start: time.Now(), stdout: stdout, stderr: stderr, exit: func(code int) { exited <- code }}
 	g := &guard{w: stdout}
-	c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, asJSON)
-	dropArmedCleanups(c)
+	armQuietly(c, g, asJSON)
 	return c, g, exited
 }
 
@@ -78,6 +83,7 @@ func TestBackstopExitsEightWithOneTimeoutObjectAndAbandonsACleanupThatNeverRetur
 		close(cleaned)
 		select {}
 	}})
+	expire(c)
 
 	code, took := awaitExit(t, exited)
 
@@ -111,8 +117,8 @@ func TestBackstopWritesNoObjectWhenTheOwnPathOrAnotherWriteHoldsStdout(t *testin
 			g := &guard{w: &stdout}
 			setup(c, g, &stdout)
 			before := stdout.String()
-			c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, true)
-			dropArmedCleanups(c)
+			armQuietly(c, g, true)
+			expire(c)
 
 			code, _ := awaitExit(t, exited)
 
@@ -128,6 +134,7 @@ func TestBackstopNeverBlocksOnABackedUpStdoutAndStderr(t *testing.T) {
 	go func() { _, _ = g.Write([]byte("{}\n")) }()
 	time.Sleep(50 * time.Millisecond)
 	c.extend(0, nil)
+	expire(c)
 
 	code, took := awaitExit(t, exited)
 
@@ -140,8 +147,8 @@ func TestBackstopLeavesTheCommandsOwnErrorAndExitCodeAloneOnceItClaimedThem(t *t
 	for i := range 20 {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
 			t.Parallel()
-			var stdout lockedBuffer
-			c, g, exited := expiredClock(&stdout, io.Discard, true)
+			var stdout, stderr lockedBuffer
+			c, g, exited := expiredClock(&stdout, &stderr, true)
 			c.claim()
 			var cleaned atomic.Bool
 			fired := make(chan struct{})
@@ -157,6 +164,7 @@ func TestBackstopLeavesTheCommandsOwnErrorAndExitCodeAloneOnceItClaimedThem(t *t
 				c.finish()
 				close(returned)
 			}()
+			expire(c)
 
 			select {
 			case <-returned:
@@ -166,8 +174,8 @@ func TestBackstopLeavesTheCommandsOwnErrorAndExitCodeAloneOnceItClaimedThem(t *t
 				t.Fatal("neither the command nor the backstop finished")
 			}
 
-			if stdout.String() != `{"error":"not_found"}`+"\n" || !cleaned.Load() {
-				t.Errorf("stdout %q, cleanup finished %t; want the command's object alone and the cleanup the backstop started finished", stdout.String(), cleaned.Load())
+			if stdout.String() != `{"error":"not_found"}`+"\n" || stderr.String() != "" || !cleaned.Load() {
+				t.Errorf("stdout %q, stderr %q, cleanup finished %t; want the command's object alone and the cleanup the backstop started finished", stdout.String(), stderr.String(), cleaned.Load())
 			}
 		})
 	}
@@ -213,10 +221,10 @@ func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *
 			exited := make(chan int, 1)
 			c := &clock{start: time.Now(), stdout: out, stderr: errOut, exit: func(code int) { exited <- code }}
 			g := &guard{w: wedgedWriter{out}}
-			c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, true)
-			dropArmedCleanups(c)
+			armQuietly(c, g, true)
 			c.claim()
 			go func() { _, _ = g.Write([]byte(partial)) }()
+			expire(c)
 			code, _ := awaitExit(t, exited)
 			if took := time.Since(c.start); code != 8 || took > backstopGrace+backstopExit+backstopExit/2 || seen() != partial {
 				t.Errorf("exit %d after %s, stdout %q; want exit 8 within the bound with a stuck or shared stderr, and the command's bytes alone on stdout", code, took, seen())
@@ -244,6 +252,7 @@ func TestAfterTheBackstopFiresTheCommandPathParksInsteadOfWriting(t *testing.T) 
 				c.claim()
 				_, _ = g.Write([]byte(tc.wrote))
 			}
+			expire(c)
 			awaitExit(t, exited)
 			returned := make(chan struct{})
 			go func() {

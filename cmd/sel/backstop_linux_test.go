@@ -175,7 +175,8 @@ func TestTimeoutCapsTheWholeCommandAroundTheUpdateCheck(t *testing.T) {
 				http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
 			}))
 			t.Cleanup(srv.Close)
-			out, master := os.Stdout, (*os.File)(nil)
+			_, out := newPipe(t, false)
+			master := (*os.File)(nil)
 			if c.tty {
 				master, out = openPTY(t)
 			}

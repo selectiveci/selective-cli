@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -96,13 +97,15 @@ func TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner(t *testing.T) 
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
 		}
 	})
-	child := exec.Command(os.Args[0], "-test.run=^TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner$")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner$")
 	child.Env = append(os.Environ(), runnerChildEnv+"="+root, "SEL_CLOCK_RUNNER_PID_FILE="+pidFile)
 
 	out, err := child.CombinedOutput()
 
 	if err != nil {
-		t.Errorf("child failed: %v\n%s\nwant no runner to start after the backstop fired", err, out)
+		t.Errorf("child failed: %v\n%s\nwant Launch.Run refused with %q and no runner started", err, out, localrun.ErrCleanedUp)
 	}
 }
 
@@ -111,9 +114,14 @@ func launchAfterTheBackstopFired(root, pidFile string) {
 	c.exit = func(int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_, _ = localrun.Launch{Root: root, Framework: localrun.Pytest, Sel: os.Args[0], Stderr: io.Discard}.Run(ctx, io.Discard, localrun.Options{Timeout: 2 * time.Second})
-		if _, err := os.Stat(pidFile); err == nil {
+		_, err := localrun.Launch{Root: root, Framework: localrun.Pytest, Sel: os.Args[0], Stderr: io.Discard}.Run(ctx, io.Discard, localrun.Options{Timeout: 2 * time.Second})
+		if _, statErr := os.Stat(pidFile); statErr == nil {
+			fmt.Fprintln(os.Stderr, "a runner started after the backstop fired")
 			os.Exit(3)
+		}
+		if err == nil || !strings.Contains(err.Error(), localrun.ErrCleanedUp.Error()) {
+			fmt.Fprintf(os.Stderr, "Launch.Run returned %v, not the %q refusal\n", err, localrun.ErrCleanedUp)
+			os.Exit(4)
 		}
 		os.Exit(0)
 	}
