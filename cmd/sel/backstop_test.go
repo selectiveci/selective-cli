@@ -44,11 +44,18 @@ func (w wedgedWriter) Write(p []byte) (int, error) {
 	select {}
 }
 
+func dropArmedCleanups(c *clock) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cleanups = nil
+}
+
 func expiredClock(stdout, stderr io.Writer, asJSON bool) (*clock, *guard, chan int) {
 	exited := make(chan int, 1)
 	c := &clock{start: time.Now(), stdout: stdout, stderr: stderr, exit: func(code int) { exited <- code }}
 	g := &guard{w: stdout}
 	c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, asJSON)
+	dropArmedCleanups(c)
 	return c, g, exited
 }
 
@@ -105,6 +112,7 @@ func TestBackstopWritesNoObjectWhenTheOwnPathOrAnotherWriteHoldsStdout(t *testin
 			setup(c, g, &stdout)
 			before := stdout.String()
 			c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, true)
+			dropArmedCleanups(c)
 
 			code, _ := awaitExit(t, exited)
 
@@ -206,6 +214,7 @@ func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *
 			c := &clock{start: time.Now(), stdout: out, stderr: errOut, exit: func(code int) { exited <- code }}
 			g := &guard{w: wedgedWriter{out}}
 			c.arm(time.Now(), contract.Errorf(contract.Timeout, "--timeout 0s expired"), g, true)
+			dropArmedCleanups(c)
 			c.claim()
 			go func() { _, _ = g.Write([]byte(partial)) }()
 			code, _ := awaitExit(t, exited)
