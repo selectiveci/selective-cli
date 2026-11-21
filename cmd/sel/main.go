@@ -71,12 +71,16 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	entered := false
 	markEntered(root, &entered)
-	newClock().attach(root)
+	clock := newClock(root, args, stdout, stderr)
+	defer clock.finish()
+	clock.attach(root)
 
 	cmd, err := executeRecovering(root, args, stderr, &entered)
 	if err == nil {
 		return cmd, contract.ExitOK
 	}
+	clock.claim()
+	out := clock.output(stdout)
 	var exit exitCode
 	if errors.As(err, &exit) {
 		return cmd, int(exit)
@@ -90,12 +94,12 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 	}
 	var pending *api.PendingApproval
 	if errors.As(err, &pending) {
-		reportPending(errorObjectOnStdout(cmd, args, stdout), secretFlagGivenFor(root, cmd, args), stdout, stderr, pending)
+		reportPending(errorObjectOnStdout(cmd, args, stdout), secretFlagGivenFor(root, cmd, args), out, stderr, pending)
 		return cmd, pending.ExitCode()
 	}
 	coded := classify(err, entered)
 	if errorObjectOnStdout(cmd, args, stdout) {
-		sink := stdout
+		sink := out
 		if secretFlagGivenFor(root, cmd, args) {
 			sink = stderr
 		}
