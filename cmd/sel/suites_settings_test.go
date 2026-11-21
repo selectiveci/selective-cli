@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -458,5 +460,59 @@ func TestSuitesShowRefusesAResponseWithoutASuiteObjectAndASettingsObject(t *test
 				t.Errorf("stdout %q, want no success document", res.stdout)
 			}
 		})
+	}
+}
+
+func TestSuitesSettingsAnsweredWithAPendingApprovalExitsSevenAndSaysApprovalNeeded(t *testing.T) {
+	t.Run("json mode", func(t *testing.T) {
+		stub := &settingsStub{status: 202, reply: pendingWrite}
+		srv := stub.start(t)
+
+		res := runBinary(t, t.TempDir(), srv.URL, "suites", "settings", "web-rspec", "--org", "acme", "--json", "--set", "retries.max_retries=3")
+
+		if res.exit != 7 || res.stdout != pendingStdout || stub.puts() != 1 {
+			t.Errorf("exit %d stdout %q PUTs %d, want exit 7, %q and one PUT", res.exit, res.stdout, stub.puts(), pendingStdout)
+		}
+	})
+	t.Run("terminal mode writes nothing to stdout and says Approval needed on stderr", func(t *testing.T) {
+		srv := (&settingsStub{status: 202, reply: pendingWrite}).start(t)
+		var out, errOut bytes.Buffer
+
+		err := suitesChangeSettings(&setup.Env{Client: api.New(srv.URL, "tok"), Stdout: &out}, "acme", "web-rspec", map[string]any{"name": "x"}, false)
+
+		var pending *api.PendingApproval
+		if !errors.As(err, &pending) {
+			t.Fatalf("err = %v, want a pending approval", err)
+		}
+		reportPending(false, false, &out, &errOut, pending)
+		if out.Len() != 0 || !strings.HasPrefix(errOut.String(), "Approval needed: https://selective.test/acme/approvals/a1") {
+			t.Errorf("stdout %q stderr %q, want empty stdout and an Approval needed line", out.String(), errOut.String())
+		}
+	})
+}
+
+func TestSuitesSettingsDeclaresTheSameExitCodesAsFlakesQuarantine(t *testing.T) {
+	_, stdout, _ := execute("help", "--json")
+	var doc struct {
+		Help struct {
+			Commands []struct {
+				Path      string `json:"path"`
+				ExitCodes []int  `json:"exit_codes"`
+			} `json:"commands"`
+		} `json:"help"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	codes := map[string][]int{}
+	for _, c := range doc.Help.Commands {
+		codes[c.Path] = c.ExitCodes
+	}
+	settings, ok := codes["suites settings"]
+	if !ok || codes["flakes quarantine"] == nil {
+		t.Fatalf("help --json lacks suites settings or flakes quarantine: %v", codes)
+	}
+	if !slices.Equal(settings, codes["flakes quarantine"]) {
+		t.Errorf("suites settings exit_codes %v, want flakes quarantine's %v", settings, codes["flakes quarantine"])
 	}
 }
