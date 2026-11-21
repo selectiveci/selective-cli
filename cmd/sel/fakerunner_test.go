@@ -67,8 +67,13 @@ func fakeRunner() int {
 				time.Sleep(time.Minute)
 			}
 			record(command.IDs)
+			trickle, _ := time.ParseDuration(os.Getenv("FAKE_TRICKLE"))
 			for _, id := range command.IDs {
+				time.Sleep(trickle)
 				send("test_case_result", result(id))
+			}
+			if os.Getenv("FAKE_TRICKLE_HANG") == "1" {
+				time.Sleep(time.Minute)
 			}
 		case "close":
 			send("report_at_finish", map[string]any{"connection_retries": 0})
