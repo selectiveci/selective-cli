@@ -201,7 +201,7 @@ func (o createOptions) checkSink(env *setup.Env) error {
 }
 
 func isPipeOrSocket(w io.Writer) bool {
-	f, ok := w.(*os.File)
+	f, ok := format.Unwrapped(w).(*os.File)
 	if !ok {
 		return true
 	}

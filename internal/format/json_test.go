@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -111,6 +112,23 @@ func TestIsTerminalCountsAnMSYSTerminal(t *testing.T) {
 	}
 	if IsTerminal(&bytes.Buffer{}) {
 		t.Error("IsTerminal = true for a buffer, want false")
+	}
+}
+
+type wrapper struct{ inner io.Writer }
+
+func (w wrapper) Write(p []byte) (int, error) { return w.inner.Write(p) }
+func (w wrapper) Unwrap() io.Writer           { return w.inner }
+
+func TestIsTerminalSeesThroughWrappersAroundTheFile(t *testing.T) {
+	isTTY = func(uintptr) bool { return true }
+	t.Cleanup(func() { isTTY = isatty.IsTerminal })
+
+	if !IsTerminal(wrapper{wrapper{os.Stdout}}) {
+		t.Error("IsTerminal = false for a terminal behind two wrappers, want true")
+	}
+	if IsTerminal(wrapper{&bytes.Buffer{}}) {
+		t.Error("IsTerminal = true for a buffer behind a wrapper, want false")
 	}
 }
 

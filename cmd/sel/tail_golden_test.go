@@ -223,3 +223,20 @@ func TestTailExitCodesWithoutAStream(t *testing.T) {
 		})
 	}
 }
+
+func TestTailWritesItsStreamToTheCommandsOutputWriter(t *testing.T) {
+	srv := tailServer{
+		frames:       []string{frameStart, summaryPass},
+		lookupStatus: http.StatusOK,
+		lookupBody:   `{"build_id":"b","status":"completed","run_count":1,"suite_count":1}`,
+	}.start(t)
+	t.Setenv("SELECTIVE_HOST", srv.URL)
+	t.Setenv("SELECTIVE_TOKEN", "tok")
+	t.Setenv("SELECTIVE_CONFIG_DIR", t.TempDir())
+
+	code, stdout, _ := execute("tail", "--run-id", "r1", "--format", "ndjson")
+
+	if lines := strings.Split(strings.TrimSpace(stdout), "\n"); code != 0 || len(lines) != 2 || !strings.Contains(lines[0], `"event":"build_start"`) {
+		t.Errorf("exit %d, stdout %q; want exit 0 and the two stream lines on the command's own writer", code, stdout)
+	}
+}

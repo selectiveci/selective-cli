@@ -536,3 +536,24 @@ func TestHelpListsTokensCreateAsAWriteWithASecretFlag(t *testing.T) {
 		t.Error("help --json lacks tokens create with exit_codes, mutates and secret_flags")
 	}
 }
+
+type unwrapping struct{ io.Writer }
+
+func (u unwrapping) Unwrap() io.Writer { return u.Writer }
+
+func TestIsPipeOrSocketLooksThroughAWrapperToTheFile(t *testing.T) {
+	_, pipe, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pipe.Close() })
+	regular, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = regular.Close() })
+
+	if !isPipeOrSocket(unwrapping{pipe}) || isPipeOrSocket(unwrapping{regular}) {
+		t.Errorf("isPipeOrSocket: pipe %t, regular file %t behind a wrapper; want true and false", isPipeOrSocket(unwrapping{pipe}), isPipeOrSocket(unwrapping{regular}))
+	}
+}

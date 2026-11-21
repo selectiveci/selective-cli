@@ -26,8 +26,18 @@ var (
 	isCygwinTTY = isatty.IsCygwinTerminal
 )
 
+func Unwrapped(w io.Writer) io.Writer {
+	for {
+		inner, ok := w.(interface{ Unwrap() io.Writer })
+		if !ok {
+			return w
+		}
+		w = inner.Unwrap()
+	}
+}
+
 func IsTerminal(w io.Writer) bool {
-	f, ok := w.(*os.File)
+	f, ok := Unwrapped(w).(*os.File)
 	return ok && (isTTY(f.Fd()) || isCygwinTTY(f.Fd()))
 }
 

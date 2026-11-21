@@ -26,11 +26,11 @@ func setRetryBudget(ctx context.Context, client *api.Client, buildID string, opt
 	runs := budgetRuns(written)
 	switch {
 	case opts.Format == "ndjson":
-		if err := format.Document(outWriter, written); err != nil {
+		if err := format.Document(opts.stdout(), written); err != nil {
 			return err
 		}
 	case opts.DryRun:
-		fmt.Fprintln(outWriter, budgetHeadline(buildID, opts, runs))
+		fmt.Fprintln(opts.stdout(), budgetHeadline(buildID, opts, runs))
 	default:
 		fmt.Fprintln(errWriter, budgetHeadline(buildID, opts, runs))
 	}
