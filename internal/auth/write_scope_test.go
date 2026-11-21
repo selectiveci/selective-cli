@@ -118,8 +118,8 @@ func TestOlderServerRefusingTheWriteScopeIsACodedError(t *testing.T) {
 	if got := codeOf(err); got != contract.InvalidRequest {
 		t.Fatalf("code = %q, want %q (err: %v)", got, contract.InvalidRequest, err)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("stdout = %q, want no error event: the caller reports the error", out.String())
+	if !strings.HasPrefix(out.String(), `{"v":1,"event":"error"`) || !strings.Contains(out.String(), `"error":"invalid_request"`) {
+		t.Fatalf("stdout = %q", out.String())
 	}
 }
 

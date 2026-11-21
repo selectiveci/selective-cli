@@ -21,14 +21,14 @@ func helpOnlyGroup(root *cobra.Command, args []string) *cobra.Command {
 	if err != nil || cmd.Runnable() || !cmd.HasAvailableSubCommands() || cmd.ParseFlags(rest) != nil {
 		return nil
 	}
-	if cmd.Flags().Changed("help") || !explicitJSON(cmd) {
+	if cmd.Flags().Changed("help") || cmd.Flags().NArg() > 0 || !explicitJSON(cmd) {
 		return nil
 	}
 	return cmd
 }
 
-func showGroup(cmd *cobra.Command) error {
-	if explicitJSON(cmd) {
+func showGroup(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 && explicitJSON(cmd) {
 		return groupUsage(cmd)
 	}
 	return cmd.Help()

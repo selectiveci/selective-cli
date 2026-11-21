@@ -85,9 +85,9 @@ func TestBareGroupWithExplicitJSONIsOneUsageErrorListingTheSubcommands(t *testin
 	}
 }
 
-func TestBareGroupWithoutExplicitJSONStillPrintsHelp(t *testing.T) {
+func TestOnlyABareGroupWithExplicitJSONLeavesHelpBehind(t *testing.T) {
 	host := closedHost(t)
-	for _, args := range [][]string{{"auth"}, {"auth", "--json=false"}, {"--json=false"}} {
+	for _, args := range [][]string{{"auth"}, {"auth", "--json=false"}, {"--json=false"}, {"approvals", "bogus", "--json"}, {"auth", "bogus", "--json"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			res := runBinary(t, t.TempDir(), host, args...)
 			if res.exit != 0 || !strings.Contains(res.stdout, "Available Commands:") || strings.HasPrefix(res.stdout, "{") {

@@ -27,7 +27,7 @@ for a server other than app.selective.ci).`,
 			if legacyToken != "" {
 				return auth.LegacyTokenLogin(legacyToken, legacyHost, version, os.Stderr)
 			}
-			return showGroup(cmd)
+			return showGroup(cmd, args)
 		},
 	}
 	// `sel auth --token …` predates `auth login`; keep it working, quietly.

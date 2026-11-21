@@ -134,7 +134,21 @@ func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 	}
 }
 
-func TestJSONLoginFailureReturnsTheContractCodeWithoutAnErrorEvent(t *testing.T) {
+func TestJSONLoginFailureWithoutAContractCodeEmitsNoErrorEvent(t *testing.T) {
+	setup(t)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	host := srv.URL
+	srv.Close()
+
+	out := &bytes.Buffer{}
+	err := Login(LoginOptions{Hostname: host, JSON: true, NoBrowser: true, Stdout: out, Stderr: &bytes.Buffer{}})
+
+	if err == nil || out.Len() != 0 {
+		t.Fatalf("err = %v, stdout = %q, want a failure and nothing on stdout", err, out.String())
+	}
+}
+
+func TestJSONLoginErrorEventCarriesTheContractCode(t *testing.T) {
 	cases := []struct {
 		name        string
 		tokenStatus int
@@ -165,12 +179,9 @@ func TestJSONLoginFailureReturnsTheContractCodeWithoutAnErrorEvent(t *testing.T)
 			if err == nil {
 				t.Fatal("login succeeded")
 			}
-			if got := string(codeOf(err)); got != tc.code {
-				t.Errorf("code = %q, want %q", got, tc.code)
-			}
 			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-			if len(lines) != 1 || !strings.HasPrefix(lines[0], `{"v":1,"event":"authorize"`) {
-				t.Errorf("stdout = %q, want only the authorize event", out.String())
+			if len(lines) != 2 || !strings.HasPrefix(lines[1], `{"v":1,"event":"error"`) || !strings.Contains(lines[1], `"error":"`+tc.code+`"`) {
+				t.Fatalf("stdout = %q", out.String())
 			}
 		})
 	}
