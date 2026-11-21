@@ -127,7 +127,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
 	started := time.Now()
-	signalled, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	signalled, stop := interruptContext(cmd.Context())
 	defer stop()
 	signalledAt := make(chan time.Time, 1)
 	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
