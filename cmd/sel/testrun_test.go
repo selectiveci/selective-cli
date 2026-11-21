@@ -34,6 +34,7 @@ type fakeAPI struct {
 	held       chan struct{}
 	status     int
 	reply      string
+	delay      time.Duration
 	selections []map[string]any
 }
 
@@ -66,6 +67,7 @@ func newFakeAPI(t *testing.T, reply string) *fakeAPI {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			api.selections = append(api.selections, body)
+			time.Sleep(api.delay)
 			w.WriteHeader(api.status)
 			_, _ = io.WriteString(w, api.reply)
 		default:
@@ -87,7 +89,7 @@ func git(t *testing.T, dir string, args ...string) {
 func pytestProject(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	client := "#!/bin/sh\necho selective_pytest >/dev/null\nexec env FAKE_RUNNER=1 " + os.Args[0] + " \"$@\"\n"
+	client := "#!/bin/sh\necho selective_pytest >/dev/null\n[ -z \"$FAKE_SIGIGN_FILE\" ] || grep SigIgn /proc/$$/status >\"$FAKE_SIGIGN_FILE\"\nexec env FAKE_RUNNER=1 " + os.Args[0] + " \"$@\"\n"
 	for name, body := range map[string]string{
 		"pyproject.toml":      "[tool.pytest.ini_options]\n",
 		"src/calc.py":         "v1\n",

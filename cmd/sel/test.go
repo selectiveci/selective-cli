@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -127,15 +128,15 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
 	started := time.Now()
-	signalled, stop := interruptContext(cmd.Context())
+	signalled, cancel, stop := interruptContext(cmd.Context())
 	defer stop()
 	signalledAt := make(chan time.Time, 1)
 	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
 	stdout := cmd.OutOrStdout()
-	events := stdout
+	var events io.Writer = readerWatch{stdout, func() { cancel(errReaderLeft) }}
 	pretty := !format.JSONMode(cmd.Flags(), stdout)
 	if pretty {
-		events = prettyEvents{format.NewWriter(stdout, "pretty")}
+		events = prettyEvents{format.NewWriter(events, "pretty")}
 	}
 	interrupted := func(sum localrun.Summary) (int, error) {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")

@@ -3,19 +3,38 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 )
 
-var errHangup = errors.New("the terminal hung up")
+var (
+	errHangup     = errors.New("the terminal hung up")
+	errReaderLeft = errors.New("the stdout reader left")
+)
+
+type readerWatch struct {
+	io.Writer
+	left func()
+}
+
+func (w readerWatch) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if errors.Is(err, syscall.EPIPE) {
+		w.left()
+		return len(p), nil
+	}
+	return n, err
+}
 
 func readerDeparted(err error) bool {
 	return errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.EIO)
 }
 
-func interruptContext(parent context.Context) (context.Context, context.CancelFunc) {
+func interruptContext(parent context.Context) (context.Context, context.CancelCauseFunc, context.CancelFunc) {
 	ctx, cancel := context.WithCancelCause(parent)
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
 	if !signal.Ignored(syscall.SIGHUP) {
 		signals = append(signals, syscall.SIGHUP)
@@ -26,7 +45,6 @@ func interruptContext(parent context.Context) (context.Context, context.CancelFu
 		select {
 		case sig := <-received:
 			if sig == syscall.SIGHUP {
-				signal.Ignore(syscall.SIGPIPE)
 				cancel(errHangup)
 				return
 			}
@@ -34,7 +52,7 @@ func interruptContext(parent context.Context) (context.Context, context.CancelFu
 		case <-ctx.Done():
 		}
 	}()
-	return ctx, func() {
+	return ctx, cancel, func() {
 		signal.Stop(received)
 		cancel(context.Canceled)
 	}
