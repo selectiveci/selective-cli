@@ -31,12 +31,7 @@ func TestTimeoutEndsACommandWhoseConfigReadNeverReturns(t *testing.T) {
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			dir := gitRepo(t)
-			if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.pytest.ini_options]\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-
-			res, took := runCapped(t, 5*time.Second, dir, stalledConfigDir(t, 0), "http://127.0.0.1:1", nil, append(args, "--timeout=1s", "--json")...)
+			res, took := runCapped(t, 5*time.Second, gitRepo(t), stalledConfigDir(t, 0), "http://127.0.0.1:1", nil, append(args, "--timeout=1s", "--json")...)
 
 			assertTimeoutLast(t, res)
 			if !strings.HasPrefix(res.stderr, "Error: ") || took > hardBound {
@@ -115,8 +110,13 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 		}
 	}
 	env := []string{"TMPDIR=" + tmp, "PATH=" + bin + ":" + os.Getenv("PATH")}
+	project := pytestProject(t)
+	client := "#!/bin/sh\necho selective_pytest >/dev/null\nsleep 300 >/dev/null 2>&1 &\nexec env FAKE_RUNNER=1 " + os.Args[0] + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(project, ".venv/bin/selective"), []byte(client), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	cmd, stderr := startWithStdout(t, pytestProject(t), newFakeAPI(t, selected).srv.URL, env, w, false, "test", "--org", "acme", "--timeout=1s", "--json")
+	cmd, stderr := startWithStdout(t, project, newFakeAPI(t, selected).srv.URL, env, w, false, "test", "--org", "acme", "--timeout=1s", "--json")
 	_ = w.Close()
 	exit, took := waitForExit(t, cmd, 30*time.Second)
 
