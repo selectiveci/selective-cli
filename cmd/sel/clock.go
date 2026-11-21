@@ -60,6 +60,8 @@ type clock struct {
 	claimed  bool
 	fired    bool
 	done     bool
+	owner    chan struct{}
+	cleaned  chan struct{}
 }
 
 func newClock(root *cobra.Command, args []string, stdout, stderr io.Writer) *clock {
@@ -141,15 +143,34 @@ func (c *clock) finish() {
 	if c.timer != nil {
 		c.timer.Stop()
 	}
+	if c.owner != nil {
+		close(c.owner)
+		c.owner = nil
+	}
 	c.mu.Unlock()
+	if c.cleaned != nil && !fired {
+		select {
+		case <-c.cleaned:
+		case <-time.After(backstopExit / 2):
+		}
+	}
 	if fired {
 		select {}
 	}
 }
 
+func (c *clock) limit() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer == nil {
+		return time.Time{}
+	}
+	return c.deadline.Add(c.windDown + backstopGrace + backstopExit)
+}
+
 func (c *clock) fire() {
 	c.mu.Lock()
-	if c.fired || c.done {
+	if c.fired || c.done || c.owner != nil {
 		c.mu.Unlock()
 		return
 	}
@@ -158,36 +179,63 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 		return
 	}
-	c.fired = true
 	claimed, cleanups := c.claimed, c.cleanups
+	c.fired = !claimed
+	owner, cleaned := make(chan struct{}), make(chan struct{})
+	if claimed {
+		c.owner, c.cleaned = owner, cleaned
+	}
 	c.mu.Unlock()
 
-	clean := c.guard.mu.TryLock() && (c.guard.last == 0 || c.guard.last == '\n')
-	var wg sync.WaitGroup
-	run := func(f func()) {
+	var cleaning, writing sync.WaitGroup
+	run := func(wg *sync.WaitGroup, f func()) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			f()
 		}()
 	}
-	if clean && c.asJSON && !claimed {
-		run(func() { _ = format.Error(c.guard.w, c.cause) })
+	for _, cleanup := range cleanups {
+		run(&cleaning, cleanup)
+	}
+	go func() {
+		cleaning.Wait()
+		close(cleaned)
+	}()
+	exitWait := backstopExit
+	if claimed {
+		exitWait /= 2
+		select {
+		case <-owner:
+			return
+		case <-time.After(exitWait):
+		}
+		c.mu.Lock()
+		if c.done {
+			c.mu.Unlock()
+			return
+		}
+		c.fired = true
+		c.mu.Unlock()
+	}
+
+	locked := c.guard.mu.TryLock()
+	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
+	if clean && c.asJSON {
+		run(&writing, func() { _ = format.Error(c.guard.w, c.cause) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
-		run(func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
-	}
-	for _, cleanup := range cleanups {
-		run(cleanup)
+		run(&writing, func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
 	}
 	finished := make(chan struct{})
 	go func() {
-		wg.Wait()
+		writing.Wait()
+		<-cleaned
 		close(finished)
 	}()
 	select {
 	case <-finished:
-	case <-time.After(backstopExit):
+	case <-time.After(exitWait):
 	}
 	c.exit(contract.ExitTimeout)
 }

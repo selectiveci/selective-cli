@@ -16,6 +16,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/localrun"
 	"nhooyr.io/websocket"
 )
@@ -138,6 +139,55 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 		if n, _ := strconv.Atoi(p); !processGone(n) {
 			t.Errorf("git pid %d is still alive after the timeout exit", n)
 		}
+	}
+}
+
+func TestTimeoutCapsTheWholeCommandAroundTheUpdateCheck(t *testing.T) {
+	cases := map[string]struct {
+		fifo, tty, hang bool
+		exit            int
+	}{
+		"state file never reads, output piped":              {fifo: true, exit: contract.ExitNotFound},
+		"state file never reads, output on a terminal":      {fifo: true, tty: true, exit: contract.ExitNotFound},
+		"command runs to the timeout, output on a terminal": {tty: true, hang: true, exit: contract.ExitTimeout},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			state := filepath.Join(t.TempDir(), "update-check.json")
+			if c.fifo {
+				if err := syscall.Mkfifo(state, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(state, []byte(cacheJSON("")), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if c.hang {
+					<-r.Context().Done()
+					return
+				}
+				http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
+			}))
+			t.Cleanup(srv.Close)
+			out, master := os.Stdout, (*os.File)(nil)
+			if c.tty {
+				master, out = openPTY(t)
+			}
+			env := []string{"SELECTIVE_CONFIG_DIR=" + filepath.Dir(state), "SELECTIVE_TEST_VERSION=0.1.0", "SELECTIVE_NO_UPDATE_NOTIFIER=", "CI=", "GITHUB_ACTIONS=", "BUILD_NUMBER=", "RUN_ID=", "CODESPACES="}
+
+			cmd, _ := startWithStdout(t, t.TempDir(), srv.URL, env, out, c.tty, "approvals", "show", "0193b6a0-7c1e-7d3a-9f2b-4a5c6d7e8f90", "--timeout=1s")
+			exit, took := waitForExit(t, cmd, 5*time.Second)
+			var shown []byte
+			if c.tty {
+				_ = out.Close()
+				shown, _ = io.ReadAll(master)
+			}
+
+			if noticed := strings.Contains(string(shown), "A new release of sel is available"); exit != c.exit || took > hardBound || noticed != c.hang {
+				t.Errorf("exit %d after %s, notice printed %t; want exit %d within %s and the notice only when the command ran to the timeout", exit, took, noticed, c.exit, hardBound)
+			}
+		})
 	}
 }
 
