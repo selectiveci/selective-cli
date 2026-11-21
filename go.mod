@@ -1,6 +1,6 @@
 module github.com/selectiveci/selective-cli
 
-go 1.23.0
+go 1.23.12
 
 require (
 	github.com/charmbracelet/lipgloss v0.13.0
