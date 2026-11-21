@@ -30,8 +30,8 @@ func TestSuitesDeleteTimeoutCountsTheSetupThatRunsBeforeTheFirstRequest(t *testi
 	began := time.Now()
 	res := runBinaryIn(t, t.TempDir(), srv.URL, configDir, "suites", "delete", "old-minitest", "--yes", "--timeout=500ms", "--org", "acme", "--json")
 
-	if took := time.Since(began); took < setupStall {
-		t.Fatalf("took %s, the config read never stalled for %s so the pin proves nothing", took, setupStall)
+	if took := time.Since(began); took >= setupStall {
+		t.Fatalf("took %s, the exit waited for the %s config read instead of ending at the --timeout bound", took, setupStall)
 	}
 	assertRefusal(t, res, 8, "timeout")
 	if n := stub.requestCount(); n != 0 {

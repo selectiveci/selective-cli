@@ -216,7 +216,7 @@ func TestTheVersionCheckDoesNotRunOnceALaterStepHasUsedUpTheTimeout(t *testing.T
 	if got := check(t, report, "cli_version"); got.Message != "skipped because the run's timeout expired" {
 		t.Errorf("cli_version = %+v", got)
 	}
-	if elapsed > 300*time.Millisecond+settleGrace+time.Second {
+	if elapsed > 300*time.Millisecond+SettleGrace+time.Second {
 		t.Errorf("took %s with a 300ms timeout", elapsed)
 	}
 }
@@ -234,7 +234,7 @@ func TestDoctorStopsAtTheCallersDeadlineEvenWithALongerOwnTimeout(t *testing.T) 
 	began := time.Now()
 	report := run(t, host, Options{Timeout: 5 * time.Second, Ctx: clock})
 
-	if got := check(t, report, "org"); got.Code != contract.Timeout || time.Since(began) > 300*time.Millisecond+settleGrace+time.Second {
+	if got := check(t, report, "org"); got.Code != contract.Timeout || time.Since(began) > 300*time.Millisecond+SettleGrace+time.Second {
 		t.Errorf("org check %+v after %s, want a timeout at the caller's 300ms, not the 5s of Options.Timeout", got, time.Since(began))
 	}
 }
