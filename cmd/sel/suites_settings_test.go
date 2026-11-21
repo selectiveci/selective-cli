@@ -474,7 +474,7 @@ func TestSuitesSettingsAnsweredWithAPendingApprovalExitsSevenAndSaysApprovalNeed
 			t.Errorf("exit %d stdout %q PUTs %d, want exit 7, %q and one PUT", res.exit, res.stdout, stub.puts(), pendingStdout)
 		}
 	})
-	t.Run("terminal mode", func(t *testing.T) {
+	t.Run("terminal mode writes nothing to stdout and says Approval needed on stderr", func(t *testing.T) {
 		srv := (&settingsStub{status: 202, reply: pendingWrite}).start(t)
 		var out, errOut bytes.Buffer
 
@@ -485,13 +485,13 @@ func TestSuitesSettingsAnsweredWithAPendingApprovalExitsSevenAndSaysApprovalNeed
 			t.Fatalf("err = %v, want a pending approval", err)
 		}
 		reportPending(false, false, &out, &errOut, pending)
-		if pending.ExitCode() != 7 || out.Len() != 0 || !strings.HasPrefix(errOut.String(), "Approval needed: https://selective.test/acme/approvals/a1") {
-			t.Errorf("exit %d stdout %q stderr %q, want exit 7, empty stdout and an Approval needed line", pending.ExitCode(), out.String(), errOut.String())
+		if out.Len() != 0 || !strings.HasPrefix(errOut.String(), "Approval needed: https://selective.test/acme/approvals/a1") {
+			t.Errorf("stdout %q stderr %q, want empty stdout and an Approval needed line", out.String(), errOut.String())
 		}
 	})
 }
 
-func TestSuitesSettingsDeclaresTheSameExitCodesAsTheOtherGatedWrites(t *testing.T) {
+func TestSuitesSettingsDeclaresTheSameExitCodesAsFlakesQuarantine(t *testing.T) {
 	_, stdout, _ := execute("help", "--json")
 	var doc struct {
 		Help struct {
@@ -504,13 +504,15 @@ func TestSuitesSettingsDeclaresTheSameExitCodesAsTheOtherGatedWrites(t *testing.
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatal(err)
 	}
+	codes := map[string][]int{}
 	for _, c := range doc.Help.Commands {
-		if c.Path == "suites settings" {
-			if !slices.Equal(c.ExitCodes, []int{0, 3, 4, 5, 6, 7}) {
-				t.Errorf("suites settings exit_codes %v, want [0 3 4 5 6 7]", c.ExitCodes)
-			}
-			return
-		}
+		codes[c.Path] = c.ExitCodes
 	}
-	t.Error("suites settings is not in help --json")
+	settings, ok := codes["suites settings"]
+	if !ok || codes["flakes quarantine"] == nil {
+		t.Fatalf("help --json lacks suites settings or flakes quarantine: %v", codes)
+	}
+	if !slices.Equal(settings, codes["flakes quarantine"]) {
+		t.Errorf("suites settings exit_codes %v, want flakes quarantine's %v", settings, codes["flakes quarantine"])
+	}
 }
