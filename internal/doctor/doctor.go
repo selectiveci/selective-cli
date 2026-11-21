@@ -99,9 +99,6 @@ var steps = []step{
 }
 
 func Run(opts Options) *Report {
-	if opts.Repo == nil {
-		opts.Repo = gitctx.Repo
-	}
 	if opts.Root == nil {
 		opts.Root = os.Getwd
 	}
@@ -110,6 +107,9 @@ func Run(opts Options) *Report {
 	}
 	ctx, cancel := context.WithTimeout(cmp.Or(opts.Ctx, context.Background()), opts.Timeout)
 	defer cancel()
+	if opts.Repo == nil {
+		opts.Repo = func() (string, error) { return gitctx.Repo(ctx) }
+	}
 
 	s := &state{ctx: ctx, opts: opts}
 	blockedBy := map[string]string{}

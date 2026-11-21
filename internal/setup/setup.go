@@ -3,6 +3,7 @@
 package setup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -374,7 +375,7 @@ func repoOrOrigin(repo string) (string, error) {
 	if repo != "" {
 		return repo, nil
 	}
-	repo, err := gitctx.Repo()
+	repo, err := gitctx.Repo(context.Background())
 	if err != nil {
 		return "", contract.Errorf(contract.UsageError, "pass --repo owner/name (couldn't read this checkout's origin: %v)", err)
 	}

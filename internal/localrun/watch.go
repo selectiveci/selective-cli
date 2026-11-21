@@ -29,7 +29,7 @@ type Iteration func(ctx context.Context, n int) (Summary, error)
 func (w Watch) Run(ctx context.Context, iterate Iteration) (Summary, error) {
 	fingerprint := w.Fingerprint
 	if fingerprint == nil {
-		fingerprint = treeFingerprint
+		fingerprint = func(dir string) (string, error) { return treeFingerprint(ctx, dir) }
 	}
 	seen, err := fingerprint(w.Dir)
 	if err != nil {
@@ -87,8 +87,8 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func treeFingerprint(dir string) (string, error) {
-	snapshot, err := takeSnapshot(dir)
+func treeFingerprint(ctx context.Context, dir string) (string, error) {
+	snapshot, err := takeSnapshot(ctx, dir)
 	if err != nil {
 		return "", err
 	}

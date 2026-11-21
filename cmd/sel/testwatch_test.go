@@ -56,7 +56,14 @@ func (w *watchRun) edit(name, body string) {
 func (w *watchRun) interrupt() ([]map[string]any, int) {
 	w.t.Helper()
 	_ = w.cmd.Process.Signal(syscall.SIGINT)
-	_ = w.cmd.Wait()
+	exited := make(chan struct{})
+	go func() { _ = w.cmd.Wait(); close(exited) }()
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		_ = w.cmd.Process.Kill()
+		w.t.Fatal("sel test --watch was still running 10s after SIGINT")
+	}
 	return stdoutEvents(w.t, w.stdout()), w.cmd.ProcessState.ExitCode()
 }
 

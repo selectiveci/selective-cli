@@ -56,9 +56,9 @@ func Run(client *api.Client, opts Options) (int, error) {
 
 	buildID := opts.RunID
 	if buildID == "" {
-		repo, sha, err := detect(opts.Commit)
+		repo, sha, err := detect(ctx, opts.Commit)
 		if err != nil {
-			return refuse(err)
+			return refuse(deadlineCause(ctx, err))
 		}
 		lookup := waitOptions(opts)
 		if opts.DryRun {
@@ -107,15 +107,15 @@ func waitingOutput(format string) io.Writer {
 	return errWriter
 }
 
-func detect(commit string) (repo, sha string, err error) {
-	ctx, err := gitctx.Detect()
+func detect(ctx context.Context, commit string) (repo, sha string, err error) {
+	git, err := gitctx.Detect(ctx)
 	if err != nil {
 		return "", "", contract.Errorf(contract.GitRepoNotFound, "git detection failed: %v; run in a git repo or pass --run-id", err)
 	}
 	if commit == "" {
-		commit = ctx.Commit
+		commit = git.Commit
 	}
-	return ctx.Repo, commit, nil
+	return git.Repo, commit, nil
 }
 
 func lookupOnce(ctx context.Context, client *api.Client, repo, sha string) (string, error) {

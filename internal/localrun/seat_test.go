@@ -28,7 +28,7 @@ func seatRunner(t *testing.T) (*Seat, *io.PipeWriter, io.Reader, chan int) {
 	seatStdin, clientStdout := io.Pipe()
 	clientStdin, seatStdout := io.Pipe()
 	code := make(chan int, 1)
-	go func() { code <- RunSeat([]string{"--stdio"}, seatStdin, seatStdout, io.Discard) }()
+	go func() { code <- RunSeat(context.Background(), []string{"--stdio"}, seatStdin, seatStdout, io.Discard) }()
 	t.Cleanup(func() { clientStdout.Close() })
 	return seat, clientStdout, clientStdin, code
 }
@@ -58,7 +58,7 @@ func awaitCode(t *testing.T, code chan int) int {
 
 func TestSeatHelpMentionsStdioAndWritesNothingToStdout(t *testing.T) {
 	var out, errw bytes.Buffer
-	if code := RunSeat([]string{"--help"}, strings.NewReader(""), &out, &errw); code != 0 {
+	if code := RunSeat(context.Background(), []string{"--help"}, strings.NewReader(""), &out, &errw); code != 0 {
 		t.Errorf("exit %d, want 0", code)
 	}
 	if !strings.Contains(errw.String(), "--stdio") || out.Len() != 0 {
@@ -69,7 +69,7 @@ func TestSeatHelpMentionsStdioAndWritesNothingToStdout(t *testing.T) {
 func TestSeatRefusesUnknownArgumentsWithExit2AndNothingOnStdout(t *testing.T) {
 	for _, args := range [][]string{nil, {"--bogus"}, {"ws://localhost/transport/websocket?api_key=x", "runner-1"}} {
 		var out, errw bytes.Buffer
-		if code := RunSeat(args, strings.NewReader(""), &out, &errw); code != 2 {
+		if code := RunSeat(context.Background(), args, strings.NewReader(""), &out, &errw); code != 2 {
 			t.Errorf("%q: exit %d, want 2", args, code)
 		}
 		if out.Len() != 0 || errw.Len() == 0 {
@@ -163,7 +163,7 @@ func TestSeatEndsWhenTheOrchestratorHangsUp(t *testing.T) {
 func TestSeatStdioWithoutASocketIsARefusal(t *testing.T) {
 	t.Setenv("SELECTIVE_SEAT_SOCKET", "")
 	var out, errw bytes.Buffer
-	if code := RunSeat([]string{"--stdio"}, strings.NewReader(""), &out, &errw); code != 2 || out.Len() != 0 || errw.Len() == 0 {
+	if code := RunSeat(context.Background(), []string{"--stdio"}, strings.NewReader(""), &out, &errw); code != 2 || out.Len() != 0 || errw.Len() == 0 {
 		t.Errorf("exit %d stdout %q stderr %q, want exit 2 and only a stderr message", code, out.String(), errw.String())
 	}
 }
