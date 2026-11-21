@@ -1,6 +1,7 @@
 package tail
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,7 @@ type Options struct {
 	Wait    time.Duration
 	Timeout time.Duration
 	Started time.Time
+	Ctx     context.Context
 
 	Retries        int
 	Org            string
@@ -38,7 +40,7 @@ type Options struct {
 }
 
 func Run(client *api.Client, opts Options) (int, error) {
-	ctx := context.Background()
+	ctx := cmp.Or(opts.Ctx, context.Background())
 	if opts.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeoutCause(ctx, opts.Timeout,

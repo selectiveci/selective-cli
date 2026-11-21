@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -62,6 +63,7 @@ type Options struct {
 	Repo     func() (string, error)
 	Root     func() (string, error)
 	OS       string
+	Ctx      context.Context
 }
 
 type state struct {
@@ -106,7 +108,7 @@ func Run(opts Options) *Report {
 	if opts.OS == "" {
 		opts.OS = runtime.GOOS
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
+	ctx, cancel := context.WithTimeout(cmp.Or(opts.Ctx, context.Background()), opts.Timeout)
 	defer cancel()
 
 	s := &state{ctx: ctx, opts: opts}

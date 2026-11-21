@@ -155,10 +155,13 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	select {
 	case p := <-planned:
 		if p.err != nil {
-			return 0, p.err
+			return 0, expiredOr(cmd.Context(), p.err)
 		}
 		plan = p.plan
 	case <-signalled.Done():
+		if err := expiredOr(cmd.Context(), nil); err != nil {
+			return 0, err
+		}
 		return interrupted(localrun.Summary{})
 	}
 	self, err := os.Executable()
