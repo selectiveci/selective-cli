@@ -59,7 +59,8 @@ func TestTimeoutExclusionsOnTheCommandContext(t *testing.T) {
 	}
 }
 
-func TestSelTestWithoutTheFlagCapsEachRunButNotTheWholeCommand(t *testing.T) {
+func neverConnectingProject(t *testing.T) {
+	t.Helper()
 	api := newFakeAPI(t, selected)
 	runnerEnv(t)
 	t.Setenv("FAKE_NEVER_CONNECT", "1")
@@ -74,6 +75,10 @@ func TestSelTestWithoutTheFlagCapsEachRunButNotTheWholeCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(prev) })
+}
+
+func TestSelTestWithoutTheFlagCapsEachRunButNotTheWholeCommand(t *testing.T) {
+	neverConnectingProject(t)
 
 	root := newRoot()
 	target, _, _ := root.Find([]string{"test"})
@@ -111,8 +116,33 @@ func TestSelTestWithoutTheFlagCapsEachRunButNotTheWholeCommand(t *testing.T) {
 	}
 }
 
+func TestSelTestWatchWithATimeoutCapsEachRun(t *testing.T) {
+	neverConnectingProject(t)
+	done := make(chan int, 1)
+	var stdout, stderr bytes.Buffer
+	go func() {
+		_, code := runCommand(newRoot(), []string{"test", "--org", "acme", "--json", "--watch", "--timeout", "1s"}, &stdout, &stderr)
+		done <- code
+	}()
+	select {
+	case code := <-done:
+		if code != 8 {
+			t.Errorf("exit %d, want 8 from the per-run cap\nstdout: %s\nstderr: %s", code, stdout.String(), stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no per-run cap under --watch: still running 10s after a 1s --timeout")
+	}
+}
+
+func TestSelTestTimeoutDefaultIsThirtyMinutes(t *testing.T) {
+	target, _, _ := newRoot().Find([]string{"test"})
+	if got := target.Flags().Lookup("timeout").DefValue; got != "30m0s" {
+		t.Errorf("--timeout default = %s, want 30m0s", got)
+	}
+}
+
 func TestSelTestTimeoutHelpSaysWhichClockItIs(t *testing.T) {
-	const wantEach, wantWhole = "each run is capped", "caps the whole command"
+	const wantEach, wantWhole, wantWatch = "each run is capped", "caps the whole command", "the watch itself has no limit"
 	_, helpOut, _ := execute("test", "--help")
 	_, jsonOut, _ := execute("help", "--json")
 	var doc struct {
@@ -135,8 +165,8 @@ func TestSelTestTimeoutHelpSaysWhichClockItIs(t *testing.T) {
 		}
 	}
 	for name, text := range map[string]string{"sel test --help": helpOut, "sel help --json": usage} {
-		if !strings.Contains(text, wantEach) || !strings.Contains(text, wantWhole) {
-			t.Errorf("%s does not say %q and %q about --timeout\n%s", name, wantEach, wantWhole, text)
+		if !strings.Contains(text, wantEach) || !strings.Contains(text, wantWhole) || !strings.Contains(text, wantWatch) {
+			t.Errorf("%s does not say %q, %q and %q about --timeout\n%s", name, wantEach, wantWhole, wantWatch, text)
 		}
 	}
 }
