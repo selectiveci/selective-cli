@@ -41,11 +41,18 @@ func scriptedClient(t *testing.T, script string) *launched {
 	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SELECTIVE_API_KEY", "sk_live_SHOULDNOTLEAK")
 	t.Setenv("SELECTIVE_TOKEN", "tok_SHOULDNOTLEAK")
+	t.Cleanup(resetCleanup)
 	stderr := &bytes.Buffer{}
 	return &launched{
 		launch: Launch{Root: root, Framework: RSpec, Sel: os.Args[0], Stderr: stderr, Grace: 150 * time.Millisecond},
 		stderr: stderr, events: &bytes.Buffer{}, dir: root,
 	}
+}
+
+func resetCleanup() {
+	running.Lock()
+	running.cleaned = false
+	running.Unlock()
 }
 
 func (l *launched) run(ctx context.Context) (Summary, error) {
@@ -298,6 +305,66 @@ func TestCleanupKillsARunningClientsProcessGroupAndRemovesItsSeat(t *testing.T) 
 	case <-time.After(5 * time.Second):
 		t.Error("Launch did not return after Cleanup")
 	}
+}
+
+func TestLaunchAfterCleanupStartsNoRunner(t *testing.T) {
+	l := scriptedClient(t, "echo $$ > \"$PIDF\"\nexec sleep 300\n")
+	pidf := filepath.Join(l.dir, "pid")
+	t.Setenv("PIDF", pidf)
+	Cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := l.run(ctx)
+
+	if body, readErr := os.ReadFile(pidf); readErr == nil {
+		_ = syscall.Kill(-atoiOr0(string(body)), syscall.SIGKILL)
+		t.Errorf("a runner started after Cleanup (pid file %q)", body)
+	}
+	if err == nil || !strings.Contains(err.Error(), "sel is exiting") {
+		t.Errorf("err %v, want one saying sel is exiting", err)
+	}
+}
+
+func atoiOr0(s string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	return n
+}
+
+func TestCleanupRacingLaunchRunLeavesNoRunnerBehind(t *testing.T) {
+	l := scriptedClient(t, "echo $$ >> \"$PIDF\"\nexec sleep 300\n")
+	pidf := filepath.Join(l.dir, "pids")
+	t.Setenv("PIDF", pidf)
+	t.Cleanup(func() {
+		body, _ := os.ReadFile(pidf)
+		for _, pid := range strings.Fields(string(body)) {
+			_ = syscall.Kill(-atoiOr0(pid), syscall.SIGKILL)
+		}
+	})
+	refused := 0
+	for i := range 200 {
+		resetCleanup()
+		finished := make(chan error, 1)
+		go func() { _, err := l.run(context.Background()); finished <- err }()
+		time.Sleep(time.Duration(i%100) * time.Millisecond)
+		Cleanup()
+		select {
+		case err := <-finished:
+			if err != nil && strings.Contains(err.Error(), "sel is exiting") {
+				refused++
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("race %d: Launch.Run was still going 2s after Cleanup, so a runner started after it", i)
+		}
+	}
+	body, _ := os.ReadFile(pidf)
+	started := strings.Fields(string(body))
+	for _, pid := range started {
+		if !gone(-atoiOr0(pid)) {
+			t.Errorf("runner group %s survived Cleanup", pid)
+		}
+	}
+	t.Logf("200 races: %d refused by the latch, %d runners started and killed", refused, len(started))
 }
 
 func TestCleanupDuringAcceptDoesNotRaceTheRunnersExitStatus(t *testing.T) {

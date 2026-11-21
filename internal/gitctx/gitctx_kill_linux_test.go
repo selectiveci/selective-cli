@@ -3,6 +3,7 @@ package gitctx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,10 @@ func waitForPid(t *testing.T, path string) int {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		if body, err := os.ReadFile(path); err == nil && strings.HasSuffix(string(body), "\n") {
-			pid, _ := strconv.Atoi(strings.TrimSpace(string(body)))
+			pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+			if err != nil || pid <= 0 {
+				t.Fatalf("%s holds %q, not a pid", path, body)
+			}
 			return pid
 		}
 	}
@@ -90,5 +94,20 @@ func TestOutputKeepsStderrOnTheExitError(t *testing.T) {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || strings.TrimSpace(string(exitErr.Stderr)) != "no such remote" {
 		t.Errorf("error %v, want an ExitError whose Stderr is %q", err, "no such remote")
+	}
+}
+
+func TestRunKeepsTheSameCappedGitStderrAsExecCmdOutput(t *testing.T) {
+	gitShim(t, "seq 1 20000 | head -c 100000 >&2\nexit 1\n")
+	_, mainErr := exec.Command("git", "status").Output()
+	var want *exec.ExitError
+	if !errors.As(mainErr, &want) || !strings.Contains(string(want.Stderr), "omitting") {
+		t.Fatalf("exec.Cmd.Output returned %v without an omitting marker, so this compares nothing", mainErr)
+	}
+
+	_, err := run(context.Background(), "status")
+
+	if got := fmt.Sprintf("git %v: %s", []string{"status"}, want.Stderr); err == nil || err.Error() != got {
+		t.Errorf("run error %.120q (%d bytes), want main's %.120q (%d bytes)", err, len(fmt.Sprint(err)), got, len(got))
 	}
 }

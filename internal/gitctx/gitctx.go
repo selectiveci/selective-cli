@@ -85,8 +85,37 @@ func Run(cmd *exec.Cmd) error {
 	return cmd.Wait()
 }
 
+const stderrKept = 32 << 10
+
+type stderrSaver struct {
+	head, tail []byte
+	omitted    int64
+}
+
+func (s *stderrSaver) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := stderrKept - len(s.head); room > 0 {
+		kept := min(room, len(p))
+		s.head, p = append(s.head, p[:kept]...), p[kept:]
+	}
+	s.tail = append(s.tail, p...)
+	if over := len(s.tail) - stderrKept; over > 0 {
+		s.tail = append(s.tail[:0], s.tail[over:]...)
+		s.omitted += int64(over)
+	}
+	return n, nil
+}
+
+func (s *stderrSaver) Bytes() []byte {
+	if s.omitted == 0 {
+		return append(s.head, s.tail...)
+	}
+	return fmt.Appendf(nil, "%s\n... omitting %d bytes ...\n%s", s.head, s.omitted, s.tail)
+}
+
 func Output(cmd *exec.Cmd) ([]byte, error) {
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
+	var stderr stderrSaver
 	cmd.Stdout = &stdout
 	captureStderr := cmd.Stderr == nil
 	if captureStderr {

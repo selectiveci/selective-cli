@@ -1,15 +1,25 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/localrun"
+	"github.com/spf13/cobra"
 )
+
+const runnerChildEnv = "SEL_CLOCK_RUNNER_CHILD_ROOT"
 
 func timedOutSelTest(t *testing.T) (res cliResult, took time.Duration, runnerPid int, tmp string) {
 	t.Helper()
@@ -69,4 +79,52 @@ func processGone(pid int) bool {
 		}
 	}
 	return false
+}
+
+func TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner(t *testing.T) {
+	if root := os.Getenv(runnerChildEnv); root != "" {
+		launchAfterTheBackstopFired(root, os.Getenv("SEL_CLOCK_RUNNER_PID_FILE"))
+		return
+	}
+	root, pidFile := pytestProject(t), filepath.Join(t.TempDir(), "runner.pid")
+	client := "#!/bin/sh\necho selective_pytest >/dev/null\necho $$ > " + pidFile + "\nexec sleep 300\n"
+	if err := os.WriteFile(filepath.Join(root, ".venv/bin/selective"), []byte(client), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		body, _ := os.ReadFile(pidFile)
+		if pid, _ := strconv.Atoi(strings.TrimSpace(string(body))); pid > 0 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBackstopFiringBeforeHoldBackstopStillRefusesALaterRunner$")
+	child.Env = append(os.Environ(), runnerChildEnv+"="+root, "SEL_CLOCK_RUNNER_PID_FILE="+pidFile)
+
+	out, err := child.CombinedOutput()
+
+	if err != nil {
+		t.Errorf("child failed: %v\n%s\nwant Launch.Run refused with %q and no runner started", err, out, localrun.ErrCleanedUp)
+	}
+}
+
+func launchAfterTheBackstopFired(root, pidFile string) {
+	c := newClock(&cobra.Command{}, nil, io.Discard, io.Discard)
+	c.exit = func(int) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := localrun.Launch{Root: root, Framework: localrun.Pytest, Sel: os.Args[0], Stderr: io.Discard}.Run(ctx, io.Discard, localrun.Options{Timeout: 2 * time.Second})
+		if _, statErr := os.Stat(pidFile); statErr == nil {
+			fmt.Fprintln(os.Stderr, "a runner started after the backstop fired")
+			os.Exit(3)
+		}
+		if err == nil || !strings.Contains(err.Error(), localrun.ErrCleanedUp.Error()) {
+			fmt.Fprintf(os.Stderr, "Launch.Run returned %v, not the %q refusal\n", err, localrun.ErrCleanedUp)
+			os.Exit(4)
+		}
+		os.Exit(0)
+	}
+	c.arm(time.Now().Add(-time.Second), contract.Errorf(contract.Timeout, "--timeout expired"), &guard{w: io.Discard}, false)
+	select {}
 }
