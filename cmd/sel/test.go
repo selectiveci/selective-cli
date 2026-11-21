@@ -97,7 +97,7 @@ and exits 130. --watch cannot be combined with --list.`,
 	cmd.Flags().BoolVar(&f.list, "list", false, "Print what would run and run nothing")
 	cmd.Flags().BoolVar(&f.passes, "passes", false, "Also emit a test_pass event for each passing test")
 	cmd.Flags().BoolVar(&f.watch, "watch", false, "Run again whenever a tracked file changes, until interrupted")
-	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Exits 8 at the cap. When given, it caps the whole command, setup included; with --watch it caps each run instead and the watch itself has no limit. Without this flag each run is capped at the default")
+	cmd.Flags().DurationVar(&f.timeout, "timeout", 30*time.Minute, "Exits 8 at the cap. When given, it caps the whole command, setup included; with --watch it caps each run instead, and a run that hits the cap ends the watch. Without this flag each run is capped at the default")
 	return cmd
 }
 

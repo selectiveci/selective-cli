@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -134,6 +135,27 @@ func TestSelTestWatchWithATimeoutCapsEachRun(t *testing.T) {
 	}
 }
 
+func TestSelTestWatchTimeoutIsPerRunNotOneClockAcrossTheWatch(t *testing.T) {
+	const timeout = 3 * time.Second
+	api := newFakeAPI(t, selected)
+	runnerEnv(t)
+	w := startWatch(t, api, "--timeout", timeout.String())
+	w.await("iteration_end", 1)
+	time.Sleep(timeout + 500*time.Millisecond)
+	w.edit("tests/test_calc.py", "v2\n")
+	waitUntil(t, "the second iteration_end or a timeout", func() bool {
+		out := w.stdout()
+		return strings.Count(out, `"event":"iteration_end"`) >= 2 || strings.Contains(out, `"error":"timeout"`)
+	})
+
+	events, code := w.interrupt()
+
+	names := eventNames(events)
+	if code != 130 || slices.Contains(names, "error:timeout") || slices.Count(names, "iteration_end") < 2 {
+		t.Errorf("exit %d events %v, want the watch alive past %s with two iteration_end and no timeout", code, names, timeout)
+	}
+}
+
 func TestSelTestTimeoutDefaultIsThirtyMinutes(t *testing.T) {
 	target, _, _ := newRoot().Find([]string{"test"})
 	if got := target.Flags().Lookup("timeout").DefValue; got != "30m0s" {
@@ -142,7 +164,7 @@ func TestSelTestTimeoutDefaultIsThirtyMinutes(t *testing.T) {
 }
 
 func TestSelTestTimeoutHelpSaysWhichClockItIs(t *testing.T) {
-	const wantEach, wantWhole, wantWatch = "each run is capped", "caps the whole command", "the watch itself has no limit"
+	wants := []string{"Exits 8 at the cap", "each run is capped", "caps the whole command", "a run that hits the cap ends the watch"}
 	_, helpOut, _ := execute("test", "--help")
 	_, jsonOut, _ := execute("help", "--json")
 	var doc struct {
@@ -165,8 +187,10 @@ func TestSelTestTimeoutHelpSaysWhichClockItIs(t *testing.T) {
 		}
 	}
 	for name, text := range map[string]string{"sel test --help": helpOut, "sel help --json": usage} {
-		if !strings.Contains(text, wantEach) || !strings.Contains(text, wantWhole) || !strings.Contains(text, wantWatch) {
-			t.Errorf("%s does not say %q, %q and %q about --timeout\n%s", name, wantEach, wantWhole, wantWatch, text)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s does not say %q about --timeout\n%s", name, want, text)
+			}
 		}
 	}
 }
