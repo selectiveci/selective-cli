@@ -145,6 +145,10 @@ func executeRecovering(root *cobra.Command, args []string, stderr io.Writer, ent
 			err = contract.Errorf(contract.InternalError, "unexpected internal error: this is a bug in sel")
 		}
 	}()
+	if group := helpOnlyGroup(root, args); group != nil {
+		*entered = true
+		return group, groupUsage(group)
+	}
 	return root.ExecuteC()
 }
 

@@ -134,7 +134,7 @@ func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 	}
 }
 
-func TestJSONLoginErrorEventCarriesTheContractCode(t *testing.T) {
+func TestJSONLoginFailureReturnsTheContractCodeWithoutAnErrorEvent(t *testing.T) {
 	cases := []struct {
 		name        string
 		tokenStatus int
@@ -165,9 +165,12 @@ func TestJSONLoginErrorEventCarriesTheContractCode(t *testing.T) {
 			if err == nil {
 				t.Fatal("login succeeded")
 			}
+			if got := string(codeOf(err)); got != tc.code {
+				t.Errorf("code = %q, want %q", got, tc.code)
+			}
 			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-			if len(lines) != 2 || !strings.HasPrefix(lines[1], `{"v":1,"event":"error"`) || !strings.Contains(lines[1], `"error":"`+tc.code+`"`) {
-				t.Fatalf("stdout = %q", out.String())
+			if len(lines) != 1 || !strings.HasPrefix(lines[0], `{"v":1,"event":"authorize"`) {
+				t.Errorf("stdout = %q, want only the authorize event", out.String())
 			}
 		})
 	}
