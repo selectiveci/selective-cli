@@ -61,6 +61,7 @@ type clock struct {
 	claimed  bool
 	fired    bool
 	ctrlC    bool
+	final    bool
 	told     sync.Once
 	done     bool
 	owner    chan struct{}
@@ -128,6 +129,31 @@ func noteCtrlC(ctx context.Context) {
 		defer c.mu.Unlock()
 		c.ctrlC = c.ctrlC || time.Now().Before(c.deadline)
 	}
+}
+
+func claimFinalLine(ctx context.Context) bool {
+	if c, ok := ctx.Value(backstopKey{}).(*clock); ok {
+		return c.takeFinalLine()
+	}
+	return true
+}
+
+func (c *clock) takeFinalLine() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ctrlC {
+		return true
+	}
+	taken := !c.final
+	c.final = true
+	return taken
+}
+
+func (c *clock) finalError(ctrlC bool) contract.Coded {
+	if ctrlC {
+		return contract.Errorf(contract.Interrupted, "Interrupted")
+	}
+	return c.cause
 }
 
 func announceInterrupt(ctx context.Context, w io.Writer) {
@@ -259,10 +285,10 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 	}
 
-	locked := c.guard.mu.TryLock()
+	locked := c.takeFinalLine() && c.guard.mu.TryLock()
 	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
-	if clean && c.asJSON && !ctrlC {
-		run(&writing, func() { _ = format.BoundedError(c.guard.w, c.cause) })
+	if clean && c.asJSON {
+		run(&writing, func() { _ = format.BoundedError(c.guard.w, c.finalError(ctrlC)) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
 		run(&writing, func() {
