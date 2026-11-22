@@ -31,6 +31,22 @@ func fakeRunner() int {
 			os.Exit(0)
 		}()
 	}
+	if path := os.Getenv("FAKE_SIGINT_AT_FILE"); path != "" {
+		stops := make(chan os.Signal, 1)
+		signal.Notify(stops, syscall.SIGINT)
+		go func() {
+			<-stops
+			_ = os.WriteFile(path, []byte(strconv.FormatInt(time.Now().UnixNano(), 10)), 0o644)
+			gate := os.Getenv("FAKE_STOP_GATE")
+			if gate == "" {
+				return
+			}
+			for os.Remove(gate) != nil {
+				time.Sleep(5 * time.Millisecond)
+			}
+			os.Exit(0)
+		}()
+	}
 	fmt.Println("fake runner stdout noise")
 	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_PID_FILE"); path != "" {

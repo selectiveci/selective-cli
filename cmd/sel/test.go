@@ -141,7 +141,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		events = prettyEvents{format.NewWriter(events, "pretty")}
 	}
 	interrupted := func(sum localrun.Summary) (int, error) {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
+		announceInterrupt(cmd.Context(), cmd.ErrOrStderr())
 		if !sum.Reported {
 			sum.MS = (<-signalledAt).Sub(started).Milliseconds()
 			if err := localrun.WriteInterruptedSummary(events, sum); err != nil && !(errors.Is(context.Cause(signalled), errHangup) && readerDeparted(err)) {
