@@ -141,9 +141,12 @@ func announceInterrupt(ctx context.Context, w io.Writer) {
 		defer close(told)
 		c.told.Do(func() { fmt.Fprintln(w, "Interrupted") })
 	}()
+	c.mu.Lock()
+	ctrlC := c.ctrlC
+	c.mu.Unlock()
 	var limit <-chan time.Time
-	if !sameFile(c.stdout, c.stderr) {
-		limit = time.After(backstopExit)
+	if ctrlC && !sameFile(c.stdout, c.stderr) {
+		limit = time.After(backstopExit / 2)
 	}
 	select {
 	case <-told:

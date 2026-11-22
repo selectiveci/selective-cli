@@ -41,9 +41,9 @@ func startPipedRun(t *testing.T, stdout, stderr io.Writer) (cmd *exec.Cmd, runne
 	return cmd, runner, began
 }
 
-func ctrlCAndWait(t *testing.T, cmd *exec.Cmd, runner int) (exit int) {
+func signalAndWait(t *testing.T, cmd *exec.Cmd, runner int, sig syscall.Signal) (exit int) {
 	t.Helper()
-	if err := syscall.Kill(cmd.Process.Pid, syscall.SIGINT); err != nil {
+	if err := syscall.Kill(cmd.Process.Pid, sig); err != nil {
 		t.Fatal(err)
 	}
 	exit, _ = waitForExit(t, cmd, 30*time.Second)
@@ -51,6 +51,11 @@ func ctrlCAndWait(t *testing.T, cmd *exec.Cmd, runner int) (exit int) {
 		t.Errorf("the runner group %d is still alive after sel exited", runner)
 	}
 	return exit
+}
+
+func ctrlCAndWait(t *testing.T, cmd *exec.Cmd, runner int) (exit int) {
+	t.Helper()
+	return signalAndWait(t, cmd, runner, syscall.SIGINT)
 }
 
 func wantSummaryLast(t *testing.T, out string) {
@@ -114,6 +119,68 @@ func TestABackstopAfterACtrlCWritesNoTimeoutObject(t *testing.T) {
 	}
 }
 
+func TestATermOrHangupOnAStalledStderrKeepsTheTimeoutExit(t *testing.T) {
+	for name, sig := range map[string]syscall.Signal{"term": syscall.SIGTERM, "hup": syscall.SIGHUP} {
+		t.Run(name, func(t *testing.T) {
+			w := fullPipe(t)
+			var out bytes.Buffer
+			cmd, runner, _ := startPipedRun(t, &out, w)
+			_ = w.Close()
+
+			exit := signalAndWait(t, cmd, runner, sig)
+			got := out.String()
+			if exit != 8 || strings.Count(got, `"error":"timeout"`) != 1 || strings.Contains(got, `"event":"summary"`) {
+				t.Errorf("exit %d, output %q; want 8, one timeout object and no summary", exit, got)
+			}
+		})
+	}
+}
+
+func TestACtrlCAtTheDeadlineWritesTheSummaryBeforeTheBackstop(t *testing.T) {
+	_, w := filledPipe(t)
+	var stdout lockedBuffer
+	c, g, exited := expiredClock(&stdout, w, true)
+	c.mu.Lock()
+	c.ctrlC = true
+	c.deadline = time.Now().Add(-20 * time.Millisecond)
+	c.timer.Reset(c.untilFire())
+	c.mu.Unlock()
+	line := "{\"event\":\"summary\",\"interrupted\":true}\n"
+
+	wrote := make(chan struct{})
+	go func() {
+		announceInterrupt(context.WithValue(context.Background(), backstopKey{}, c), w)
+		_, _ = g.Write([]byte(line))
+		close(wrote)
+	}()
+	select {
+	case <-wrote:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("the summary was never written; stdout %q", stdout.String())
+	}
+
+	code, _ := awaitExit(t, exited)
+	if code != 130 || stdout.String() != line {
+		t.Errorf("exit %d, stdout %q; want 130 and only the summary", code, stdout.String())
+	}
+}
+
+func TestTheInterruptNoticeIsWrittenOnceAcrossBothPaths(t *testing.T) {
+	var stdout, stderr lockedBuffer
+	c, _, exited := expiredClock(&stdout, &stderr, true)
+	c.mu.Lock()
+	c.ctrlC = true
+	c.mu.Unlock()
+
+	announceInterrupt(context.WithValue(context.Background(), backstopKey{}, c), &stderr)
+	expire(c)
+	code, _ := awaitExit(t, exited)
+
+	if code != 130 || strings.Count(stderr.String(), "Interrupted") != 1 {
+		t.Errorf("exit %d, stderr %q; want 130 and one Interrupted", code, stderr.String())
+	}
+}
+
 func filledPipe(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -141,7 +208,7 @@ func TestTheInterruptNoticeWaitsForStderrOnlyWhenItSharesStdout(t *testing.T) {
 	}
 	defer other.Close()
 	notice := func(stdout *os.File) chan struct{} {
-		ctx := context.WithValue(context.Background(), backstopKey{}, &clock{stdout: stdout, stderr: w})
+		ctx := context.WithValue(context.Background(), backstopKey{}, &clock{stdout: stdout, stderr: w, ctrlC: true})
 		done := make(chan struct{})
 		go func() {
 			announceInterrupt(ctx, w)
