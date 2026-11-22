@@ -278,7 +278,7 @@ func TestFlakesHelpLimitsQuarantineToTheDashboardCount(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"flakes", "--help"}, "Leave a flake out of the dashboard failure count"},
+		{[]string{"flakes", "--help"}, "Keep a flake out of the dashboard failure count"},
 		{[]string{"flakes", "quarantine", "--help"}, "left out of the dashboard's failure count"},
 	}
 	for _, c := range cases {

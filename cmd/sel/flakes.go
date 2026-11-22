@@ -21,7 +21,7 @@ func flakesCmd() *cobra.Command {
   sel flakes list          List flakes, ranked, with their flake rate and cost
   sel flakes show          One flake's metrics and recent failures
   sel flakes prompt        The prompt that asks an agent to fix a flake
-  sel flakes quarantine    Leave a flake out of the dashboard failure count
+  sel flakes quarantine    Keep a flake out of the dashboard failure count
   sel flakes unquarantine  Make a quarantined flake count again
   sel flakes mark-fixed    Delete a flake and its recorded failures`,
 		Args: cobra.NoArgs,
