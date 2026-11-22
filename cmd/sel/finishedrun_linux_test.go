@@ -49,12 +49,18 @@ func (f *finishingRun) finishes() int {
 	return len(body)
 }
 
-func (f *finishingRun) leaveBeforeTheFinish(progress, finishes int) {
+func (f *finishingRun) leaveBeforeTheFinish(progress int) {
 	f.t.Helper()
 	f.awaitCount("progress", progress)
 	_ = f.reader.Close()
 	f.releaseTheFinish()
-	waitUntil(f.t, "the runner to report its finish after the reader left", func() bool { return f.finishes() >= finishes })
+}
+
+func (f *finishingRun) wantFinishesAfterTheReaderLeft(finishes int) {
+	f.t.Helper()
+	if got := f.finishes(); got != finishes {
+		f.t.Errorf("VOID: the runner went through %d finishes, want %d, all after the reader left", got, finishes)
+	}
 }
 
 func TestAReaderLeavingAtTheSummaryOfAFinishedRunKeepsTheRealExitCode(t *testing.T) {
@@ -77,8 +83,10 @@ func TestAReaderLeavingAtTheSummaryOfAFinishedRunKeepsTheRealExitCode(t *testing
 			f := startFinishingRun(t, tc.split, tc.fail, tc.linger)
 			runner := f.runnerPid()
 
-			f.leaveBeforeTheFinish(3, 1)
+			f.leaveBeforeTheFinish(3)
 			f.await()
+
+			f.wantFinishesAfterTheReaderLeft(1)
 
 			f.wantWoundDown(runner)
 			f.wantExit(tc.want)
@@ -158,8 +166,10 @@ func TestAReaderLeavingRightAfterAnIterationUnderWatchStillExitsInterrupted(t *t
 			f.awaitCount("progress", progress)
 			runner := f.runnerPid()
 
-			f.leaveBeforeTheFinish(progress, finishes)
+			f.leaveBeforeTheFinish(progress)
 			f.await()
+
+			f.wantFinishesAfterTheReaderLeft(finishes)
 
 			f.wantWoundDown(runner)
 			f.wantExit(130)
