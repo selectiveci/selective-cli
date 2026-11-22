@@ -125,14 +125,17 @@ func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io
 		return cmd, pending.ExitCode()
 	}
 	coded := classify(err, entered)
+	stderrStalled := false
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := out
 		if secretFlagGivenFor(root, cmd, args) {
 			sink = stderr
 		}
-		writeErrorObject(sink, stderr, coded)
+		stderrStalled = writeErrorObject(sink, stderr, coded)
 	}
-	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
+	if !stderrStalled {
+		fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
+	}
 	return cmd, coded.ExitCode()
 }
 
