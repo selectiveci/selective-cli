@@ -21,7 +21,7 @@ func flakesCmd() *cobra.Command {
   sel flakes list          List flakes, ranked, with their flake rate and cost
   sel flakes show          One flake's metrics and recent failures
   sel flakes prompt        The prompt that asks an agent to fix a flake
-  sel flakes quarantine    Leave a flake out of the failure count
+  sel flakes quarantine    Leave a flake out of the dashboard failure count
   sel flakes unquarantine  Make a quarantined flake count again
   sel flakes mark-fixed    Delete a flake and its recorded failures`,
 		Args: cobra.NoArgs,
@@ -162,10 +162,9 @@ func flakeWriteCmd(use, short, long, example string, do func(*setup.Env, string,
 
 func flakesQuarantineCmd() *cobra.Command {
 	return flakeWriteCmd("quarantine FLAKE", "Quarantine a flake",
-		`Quarantine the flake, so its failures are left out of the build's failure
-count. The test still runs, and a failing run still exits 1, so CI still fails.
-Quarantining a flake that is already quarantined changes nothing and reports
-result "unchanged".
+		`Quarantine the flake, so its failures are left out of the dashboard's failure
+count. Quarantining a flake that is already quarantined changes nothing and
+reports result "unchanged".
 
 --dry-run reports what would happen and changes nothing.`,
 		"  sel flakes quarantine 7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f", flakes.Quarantine)

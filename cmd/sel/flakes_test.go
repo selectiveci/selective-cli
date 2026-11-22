@@ -273,19 +273,24 @@ func TestFlakeWritesAreInHelpAsMutatingAndOnlyMarkFixedAsDestructive(t *testing.
 	}
 }
 
-func TestFlakesHelpSaysAQuarantinedFailureStillFailsTheRun(t *testing.T) {
+func TestFlakesHelpLimitsQuarantineToTheDashboardCount(t *testing.T) {
 	cases := []struct {
 		args []string
 		want string
 	}{
-		{[]string{"flakes", "--help"}, "Leave a flake out of the failure count"},
-		{[]string{"flakes", "quarantine", "--help"}, "a failing run still exits 1"},
+		{[]string{"flakes", "--help"}, "Leave a flake out of the dashboard failure count"},
+		{[]string{"flakes", "quarantine", "--help"}, "left out of the dashboard's failure count"},
 	}
 	for _, c := range cases {
 		res := runBinary(t, t.TempDir(), "http://127.0.0.1:1", c.args...)
 		text := strings.Join(strings.Fields(res.stdout), " ")
-		if res.exit != 0 || !strings.Contains(text, c.want) || strings.Contains(text, "failing builds") {
-			t.Errorf("%v: exit %d, want text %q and no claim about failing builds, got %q", c.args, res.exit, c.want, text)
+		if res.exit != 0 || !strings.Contains(text, c.want) {
+			t.Errorf("%v: exit %d, want text %q, got %q", c.args, res.exit, c.want, text)
+		}
+		for _, banned := range []string{"failing builds", "CI still fails", "still exits 1"} {
+			if strings.Contains(text, banned) {
+				t.Errorf("%v: help must not say %q, got %q", c.args, banned, text)
+			}
 		}
 	}
 }
