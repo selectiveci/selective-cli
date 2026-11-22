@@ -178,7 +178,11 @@ func (h *hangupRun) abandonReader() {
 }
 
 func (h *hangupRun) stdoutWriteBlocked() bool {
-	taskDir := fmt.Sprintf("/proc/%d/task", h.cmd.Process.Pid)
+	return stdoutWriteBlocked(h.cmd.Process.Pid)
+}
+
+func stdoutWriteBlocked(pid int) bool {
+	taskDir := fmt.Sprintf("/proc/%d/task", pid)
 	tasks, _ := os.ReadDir(taskDir)
 	for _, task := range tasks {
 		body, _ := os.ReadFile(filepath.Join(taskDir, task.Name(), "syscall"))
