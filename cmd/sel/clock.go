@@ -288,7 +288,7 @@ func (c *clock) fire() {
 	locked := c.takeFinalLine() && c.guard.mu.TryLock()
 	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
 	if clean && c.asJSON {
-		run(&writing, func() { _ = format.Error(c.guard.w, c.finalError(ctrlC)) })
+		run(&writing, func() { _ = format.BoundedError(c.guard.w, c.finalError(ctrlC)) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
 		run(&writing, func() {
