@@ -137,3 +137,74 @@ func TestErrorsWithoutTheTokenAreUnchanged(t *testing.T) {
 		t.Errorf("exit %d stdout %q stderr %q", res.exit, res.stdout, res.stderr)
 	}
 }
+
+func replyingServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestShortTokensLeaveOrdinaryWordsInErrorsByteIdentical(t *testing.T) {
+	srv := replyingServer(t, 401, `{"error":"unauthorized","message":"Invalid token."}`)
+	for _, token := range []string{"tok", "to", "e", "a"} {
+		for _, timeout := range [][]string{nil, {"--timeout=30s"}} {
+			res := selRun{host: srv.URL, token: token}.run(t, append(append([]string{}, showApproval...), timeout...)...)
+
+			if want := `{"v":1,"error":"unauthorized","message":"Invalid token."}` + "\n"; res.exit != 4 || res.stdout != want || res.stderr != "Error: Invalid token.\n" {
+				t.Errorf("token %q %v: exit %d stdout %q stderr %q", token, timeout, res.exit, res.stdout, res.stderr)
+			}
+		}
+	}
+}
+
+func TestShortTokenStandingAloneIsRedactedInNestedFieldsAndTheRestSurvives(t *testing.T) {
+	srv := replyingServer(t, 422, `{"error":"validation_failed","message":"bad credential tok here","detail":{"token":"token=tok","count":3,"list":["tok",false]}}`)
+
+	res := selRun{host: srv.URL, token: "tok"}.run(t, showApproval...)
+
+	want := `{"v":1,"error":"validation_failed","message":"bad credential [redacted] here","detail":{"count":3,"list":["[redacted]",false],"token":"token=[redacted]"}}` + "\n"
+	if res.exit != 5 || res.stdout != want || res.stderr != "Error: bad credential [redacted] here\n" {
+		t.Errorf("exit %d stdout %q stderr %q", res.exit, res.stdout, res.stderr)
+	}
+}
+
+func TestATokenInTheServersErrorCodeIsCleanedAndTheExitCodeKept(t *testing.T) {
+	srv := replyingServer(t, 422, `{"error":"`+storedToken+`"}`)
+	for _, timeout := range [][]string{nil, {"--timeout=30s"}} {
+		res := selRun{host: srv.URL, token: storedToken}.run(t, append(append([]string{}, showApproval...), timeout...)...)
+
+		requireNoTokenAndRedacted(t, storedToken, res.stdout)
+		if res.exit != 5 || strings.Contains(res.stderr, storedToken) || !strings.Contains(res.stdout, `"error":"[redacted]"`) {
+			t.Errorf("%v: exit %d stdout %q stderr %q", timeout, res.exit, res.stdout, res.stderr)
+		}
+	}
+}
+
+func pendingWriteHolding(token string) string {
+	return `{"result":"pending_approval","dry_run":false,"approval":{"id":"a1","status":"pending","url":"https://selective.test/a1?k=` + token + `"}}`
+}
+
+func TestAPendingApprovalURLHoldingTheTokenIsCleanedAndExitSevenKept(t *testing.T) {
+	revoke := (&revokeStub{status: 202, body: pendingWriteHolding(storedToken)}).start(t)
+	budget := (&budgetServer{replies: []stubReply{{status: 202, body: pendingWriteHolding("tok")}}}).start(t)
+	cases := []struct {
+		name  string
+		token string
+		res   cliResult
+	}{
+		{"without --timeout", storedToken, selRun{host: revoke.URL, token: storedToken}.run(t, "tokens", "revoke", revokeID, "--yes", "--json")},
+		{"with --timeout", "tok", runBinary(t, gitRepo(t), budget.URL, "tail", "--run-id", "b1", "--retries", "3", "--json", "--timeout=30s")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireNoTokenAndRedacted(t, tc.token, tc.res.stdout)
+			if tc.res.exit != 7 || !strings.Contains(tc.res.stdout, `"id":"a1"`) || !strings.Contains(tc.res.stdout, `"status":"pending"`) || strings.Contains(tc.res.stderr, tc.token) {
+				t.Errorf("exit %d stdout %q stderr %q", tc.res.exit, tc.res.stdout, tc.res.stderr)
+			}
+		})
+	}
+}

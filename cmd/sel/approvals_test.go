@@ -241,7 +241,7 @@ func runApprovals(t *testing.T, clock *stepClock, replies []reply, args ...strin
 	var count atomic.Int32
 	srv := replyServer(t, replies, &count)
 	t.Setenv("SELECTIVE_HOST", srv.URL)
-	t.Setenv("SELECTIVE_TOKEN", "sk_live_tests")
+	t.Setenv("SELECTIVE_TOKEN", "tok")
 	t.Setenv("SELECTIVE_CONFIG_DIR", t.TempDir())
 	t.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
 	useClock(t, clock)

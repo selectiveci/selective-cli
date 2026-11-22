@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -9,7 +10,11 @@ import (
 	"github.com/selectiveci/selective-cli/internal/contract"
 )
 
-const Mask = "[redacted]"
+const (
+	Mask           = "[redacted]"
+	anywhereLength = 16
+	wordBytes      = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
 
 var (
 	mu      sync.Mutex
@@ -39,18 +44,72 @@ func known() []string {
 }
 
 func String(s string) string {
-	for _, secret := range known() {
-		s = strings.ReplaceAll(s, secret, Mask)
+	list := known()
+	var out strings.Builder
+	copied := 0
+	for i := 0; i < len(s); {
+		n := matchAt(s, i, list)
+		if n == 0 {
+			i++
+			continue
+		}
+		out.WriteString(s[copied:i])
+		out.WriteString(Mask)
+		i += n
+		copied = i
 	}
-	return s
+	if copied == 0 {
+		return s
+	}
+	out.WriteString(s[copied:])
+	return out.String()
 }
 
-func escaped(text string) string {
-	for _, secret := range known() {
-		quoted, _ := json.Marshal(secret)
-		text = strings.ReplaceAll(text, string(quoted[1:len(quoted)-1]), Mask)
+func matchAt(s string, i int, list []string) int {
+	for _, secret := range list {
+		if !strings.HasPrefix(s[i:], secret) {
+			continue
+		}
+		if len(secret) >= anywhereLength || standsAlone(s, i, i+len(secret)) {
+			return len(secret)
+		}
 	}
-	return text
+	return 0
+}
+
+func standsAlone(s string, start, end int) bool {
+	return (start == 0 || !wordByte(s[start-1])) && (end == len(s) || !wordByte(s[end]))
+}
+
+func wordByte(b byte) bool {
+	return strings.IndexByte(wordBytes, b) >= 0
+}
+
+func walk(v any) (any, bool) {
+	switch node := v.(type) {
+	case string:
+		clean := String(node)
+		return clean, clean != node
+	case []any:
+		changed := false
+		for i, item := range node {
+			var cut bool
+			node[i], cut = walk(item)
+			changed = changed || cut
+		}
+		return node, changed
+	case map[string]any:
+		out := make(map[string]any, len(node))
+		changed := false
+		for key, item := range node {
+			clean, cut := walk(item)
+			cleanKey := String(key)
+			out[cleanKey] = clean
+			changed = changed || cut || cleanKey != key
+		}
+		return out, changed
+	}
+	return v, false
 }
 
 func value(v any) (any, bool) {
@@ -58,31 +117,43 @@ func value(v any) (any, bool) {
 	if err != nil {
 		return v, false
 	}
-	clean := escaped(string(raw))
-	if clean == string(raw) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var tree any
+	if decoder.Decode(&tree) != nil {
 		return v, false
 	}
-	decoder := json.NewDecoder(strings.NewReader(clean))
-	decoder.UseNumber()
-	var out any
-	if decoder.Decode(&out) != nil {
-		return Mask, true
+	clean, changed := walk(tree)
+	if !changed {
+		return v, false
 	}
-	return out, true
+	return clean, true
+}
+
+func Raw(raw json.RawMessage) json.RawMessage {
+	clean, changed := value(raw)
+	if !changed {
+		return raw
+	}
+	out, _ := json.Marshal(clean)
+	return out
 }
 
 type cleaned struct {
 	contract.Coded
+	code    contract.Code
 	message string
 	fields  map[string]any
 }
 
 func (c cleaned) Error() string               { return c.message }
+func (c cleaned) ErrorCode() contract.Code    { return c.code }
 func (c cleaned) ErrorFields() map[string]any { return c.fields }
 
 func Coded(err contract.Coded) contract.Coded {
 	message := String(err.Error())
-	changed := message != err.Error()
+	code := contract.Code(String(string(err.ErrorCode())))
+	changed := message != err.Error() || code != err.ErrorCode()
 	var fields map[string]any
 	if fielded, ok := err.(contract.Fielded); ok {
 		fields = make(map[string]any)
@@ -96,5 +167,5 @@ func Coded(err contract.Coded) contract.Coded {
 	if !changed {
 		return err
 	}
-	return cleaned{err, message, fields}
+	return cleaned{err, code, message, fields}
 }
