@@ -19,6 +19,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/devicelogin"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/redact"
 )
 
 type LoginOptions struct {
@@ -85,7 +86,9 @@ func Login(opts LoginOptions) error {
 	} else {
 		grant, err := browserLogin(host, opts)
 		if err != nil {
-			opts.emit(map[string]any{"event": "error", "error": loginErrorCode(err), "message": err.Error()})
+			if errors.Is(err, errCancelled) {
+				opts.emit(map[string]any{"event": "error", "error": "cancelled", "message": err.Error()})
+			}
 			return err
 		}
 		token, email, scope = grant.AccessToken, grant.User.Email, grant.Scope
@@ -138,17 +141,6 @@ func browserLogin(host string, opts LoginOptions) (*devicelogin.Grant, error) {
 		return nil, errCancelled
 	}
 	return grant, err
-}
-
-func loginErrorCode(err error) string {
-	var coded contract.Coded
-	switch {
-	case errors.As(err, &coded):
-		return string(coded.ErrorCode())
-	case errors.Is(err, errCancelled):
-		return "cancelled"
-	}
-	return "login_failed"
 }
 
 var openBrowser = browser.Open
@@ -321,7 +313,7 @@ func Logout(opts LogoutOptions) error {
 	if revoked {
 		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s and revoked the token.\n", host)
 	} else {
-		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, revokeErr)
+		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, redact.String(revokeErr.Error()))
 	}
 	return opts.report(host, revoked, "deleted")
 }

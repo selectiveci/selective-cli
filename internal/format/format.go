@@ -130,7 +130,12 @@ func (fw *Writer) writePretty(raw []byte) error {
 			iteration = fmt.Sprintf("  iteration %d", int(n))
 			clear(fw.failed)
 		}
-		fmt.Fprintf(fw.w, "\n  %s  %s  %.1fs%s\n\n", summaryIcon(int(failed)), counts, ms/1000, iteration)
+		status, didNotFinish := UnfinishedStatus(ev)
+		unfinished := ""
+		if didNotFinish {
+			unfinished = "  build did not finish: " + status
+		}
+		fmt.Fprintf(fw.w, "\n  %s  %s  %.1fs%s%s\n\n", summaryIcon(int(failed), didNotFinish), counts, ms/1000, iteration, unfinished)
 	}
 	return nil
 }
@@ -153,8 +158,13 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-func summaryIcon(failed int) string {
-	if failed == 0 {
+func UnfinishedStatus(summary map[string]any) (string, bool) {
+	status, _ := summary["status"].(string)
+	return status, status == "incomplete" || status == "cancelled"
+}
+
+func summaryIcon(failed int, unfinished bool) string {
+	if failed == 0 && !unfinished {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Render("●")
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Render("●")

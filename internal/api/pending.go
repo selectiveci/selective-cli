@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/redact"
 )
 
 const pendingApprovalResult = "pending_approval"
@@ -32,7 +33,7 @@ func pendingResponse(status int, body []byte, path string) error {
 		if string(probe.Approval) == "null" {
 			probe.Approval = nil
 		}
-		return &PendingApproval{DryRun: probe.DryRun, Approval: probe.Approval}
+		return &PendingApproval{DryRun: probe.DryRun, Approval: redact.Raw(probe.Approval)}
 	}
 	if status == http.StatusAccepted {
 		return &Error{Status: status, Code: contract.ServerError, Message: fmt.Sprintf("unexpected 202 from %s: no pending approval in the body", path)}

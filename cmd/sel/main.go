@@ -18,6 +18,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/auth"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/redact"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/update"
 	"github.com/spf13/cobra"
@@ -25,6 +26,8 @@ import (
 
 var version = "dev"
 var commit = "none"
+
+const updateGrace = time.Second
 
 func main() {
 	os.Exit(run(newRoot(), os.Args[1:], os.Stdout, os.Stderr))
@@ -60,11 +63,8 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 }
 
 func afterCommand(limit time.Time, steps ...func()) {
-	if limit.IsZero() {
-		for _, step := range steps {
-			step()
-		}
-		return
+	if bound := time.Now().Add(updateGrace); limit.IsZero() || bound.Before(limit) {
+		limit = bound
 	}
 	done := make(chan struct{})
 	go func() {
@@ -91,6 +91,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 }
 
 func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
+	redact.Reset()
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -124,15 +125,18 @@ func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io
 		reportPending(errorObjectOnStdout(cmd, args, stdout), secretFlagGivenFor(root, cmd, args), out, stderr, pending)
 		return cmd, pending.ExitCode()
 	}
-	coded := classify(err, entered)
+	coded := redact.Coded(classify(err, entered))
+	stderrStalled := false
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := out
 		if secretFlagGivenFor(root, cmd, args) {
 			sink = stderr
 		}
-		_ = format.Error(sink, coded)
+		stderrStalled = writeErrorObject(sink, stderr, coded)
 	}
-	fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
+	if !stderrStalled {
+		fmt.Fprintf(stderr, "Error: %s\n", coded.Error())
+	}
 	return cmd, coded.ExitCode()
 }
 
@@ -145,6 +149,10 @@ func executeRecovering(root *cobra.Command, args []string, stderr io.Writer, ent
 			err = contract.Errorf(contract.InternalError, "unexpected internal error: this is a bug in sel")
 		}
 	}()
+	if group, usage := helpOnlyGroup(root, args); group != nil {
+		*entered = true
+		return group, usage
+	}
 	return root.ExecuteC()
 }
 
@@ -270,10 +278,10 @@ func isNetworkError(err error) bool {
 func classify(err error, entered bool) contract.Coded {
 	var coded contract.Coded
 	switch {
+	case errors.As(err, &coded) && (entered || coded.ErrorCode() == contract.UsageError):
+		return coded
 	case !entered:
 		return contract.Errorf(contract.UsageError, "%s", err.Error())
-	case errors.As(err, &coded):
-		return coded
 	case isNetworkError(err):
 		return contract.Errorf(contract.NetworkError, "%s", err.Error())
 	default:
@@ -308,7 +316,7 @@ func suitesCmd() *cobra.Command {
   sel suites delete     Delete an archived suite for good
   sel suites show       Show a suite and its settings
   sel suites settings   Show or change a suite's settings`,
-		Args: cobra.NoArgs,
+		Args: groupNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
 			if err != nil {
