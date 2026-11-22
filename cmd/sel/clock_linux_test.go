@@ -156,15 +156,14 @@ func TestTimeoutAfterASlowSetupEndsAStreamThroughTheCommandsOwnDeadline(t *testi
 	}
 }
 
-func TestTimeoutKeepsDoctorsPerCheckReportWhenTheConfigReadStalls(t *testing.T) {
+func TestTimeoutNamesDoctorsFailedCheckAndKeepsItsReportOnStderrWhenTheConfigReadStalls(t *testing.T) {
 	res, _ := runCapped(t, 5*time.Second, t.TempDir(), stalledConfigDir(t, 0), "http://127.0.0.1:1", nil, "doctor", "--timeout=1s", "--json")
 
 	assertTimeoutLast(t, res)
 	lines := stdoutLines(t, res.stdout)
-	report, _ := lines[len(lines)-1]["doctor"].(map[string]any)
-	checks, _ := report["checks"].([]any)
-	if report["status"] != "fail" || len(checks) == 0 {
-		t.Errorf("last line %v; want the timeout object to carry the doctor report with its per-check results", lines[len(lines)-1])
+	last := lines[len(lines)-1]
+	if _, kept := last["doctor"]; kept || last["failed_check"] == nil || !strings.Contains(res.stderr, `{"v":1,"doctor":{"status":"fail","checks":[`) {
+		t.Errorf("last line %v, stderr %.80q; want failed_check on stdout and the per-check report on stderr", last, res.stderr)
 	}
 }
 

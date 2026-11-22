@@ -262,7 +262,7 @@ func (c *clock) fire() {
 	locked := c.guard.mu.TryLock()
 	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
 	if clean && c.asJSON && !ctrlC {
-		run(&writing, func() { _ = format.Error(c.guard.w, c.cause) })
+		run(&writing, func() { _ = format.BoundedError(c.guard.w, c.cause) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
 		run(&writing, func() {
