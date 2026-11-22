@@ -60,6 +60,9 @@ type clock struct {
 	cleanups []func()
 	claimed  bool
 	fired    bool
+	ctrlC    bool
+	final    bool
+	told     sync.Once
 	done     bool
 	owner    chan struct{}
 	cleaned  chan struct{}
@@ -118,6 +121,63 @@ func (c *clock) extend(windDown time.Duration, cleanups []func()) {
 	c.windDown = max(c.windDown, windDown)
 	c.cleanups = append(c.cleanups, cleanups...)
 	c.timer.Reset(c.untilFire())
+}
+
+func noteCtrlC(ctx context.Context) {
+	if c, ok := ctx.Value(backstopKey{}).(*clock); ok {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.ctrlC = c.ctrlC || time.Now().Before(c.deadline)
+	}
+}
+
+func claimFinalLine(ctx context.Context) bool {
+	if c, ok := ctx.Value(backstopKey{}).(*clock); ok {
+		return c.takeFinalLine()
+	}
+	return true
+}
+
+func (c *clock) takeFinalLine() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ctrlC {
+		return true
+	}
+	taken := !c.final
+	c.final = true
+	return taken
+}
+
+func (c *clock) finalError(ctrlC bool) contract.Coded {
+	if ctrlC {
+		return contract.Errorf(contract.Interrupted, "Interrupted")
+	}
+	return c.cause
+}
+
+func announceInterrupt(ctx context.Context, w io.Writer) {
+	c, ok := ctx.Value(backstopKey{}).(*clock)
+	if !ok {
+		fmt.Fprintln(w, "Interrupted")
+		return
+	}
+	told := make(chan struct{})
+	go func() {
+		defer close(told)
+		c.told.Do(func() { fmt.Fprintln(w, "Interrupted") })
+	}()
+	c.mu.Lock()
+	ctrlC := c.ctrlC
+	c.mu.Unlock()
+	var limit <-chan time.Time
+	if ctrlC && !sameFile(c.stdout, c.stderr) {
+		limit = time.After(backstopExit / 2)
+	}
+	select {
+	case <-told:
+	case <-limit:
+	}
 }
 
 func (c *clock) output(stdout io.Writer) io.Writer {
@@ -185,7 +245,7 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 		return
 	}
-	claimed, cleanups := c.claimed, c.cleanups
+	claimed, cleanups, ctrlC := c.claimed, c.cleanups, c.ctrlC
 	c.fired = !claimed
 	owner, cleaned := make(chan struct{}), make(chan struct{})
 	if claimed {
@@ -225,13 +285,19 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 	}
 
-	locked := c.guard.mu.TryLock()
+	locked := c.takeFinalLine() && c.guard.mu.TryLock()
 	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
 	if clean && c.asJSON {
-		run(&writing, func() { _ = format.Error(c.guard.w, c.cause) })
+		run(&writing, func() { _ = format.BoundedError(c.guard.w, c.finalError(ctrlC)) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
-		run(&writing, func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
+		run(&writing, func() {
+			if !ctrlC {
+				fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error())
+			} else {
+				c.told.Do(func() { fmt.Fprintln(c.stderr, "Interrupted") })
+			}
+		})
 	}
 	finished := make(chan struct{})
 	go func() {
@@ -242,6 +308,9 @@ func (c *clock) fire() {
 	select {
 	case <-finished:
 	case <-time.After(exitWait):
+	}
+	if ctrlC {
+		c.exit(contract.ExitInterrupted)
 	}
 	c.exit(contract.ExitTimeout)
 }
