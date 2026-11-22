@@ -70,6 +70,9 @@ func interruptContext(parent context.Context) (context.Context, context.CancelCa
 				cancel(errHangup)
 				return
 			}
+			if sig == os.Interrupt {
+				noteCtrlC(parent)
+			}
 			cancel(context.Canceled)
 		case <-ctx.Done():
 		}

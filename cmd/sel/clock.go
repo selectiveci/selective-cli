@@ -60,6 +60,8 @@ type clock struct {
 	cleanups []func()
 	claimed  bool
 	fired    bool
+	ctrlC    bool
+	told     bool
 	done     bool
 	owner    chan struct{}
 	cleaned  chan struct{}
@@ -118,6 +120,29 @@ func (c *clock) extend(windDown time.Duration, cleanups []func()) {
 	c.windDown = max(c.windDown, windDown)
 	c.cleanups = append(c.cleanups, cleanups...)
 	c.timer.Reset(c.untilFire())
+}
+
+func noteCtrlC(ctx context.Context) {
+	if c, ok := ctx.Value(backstopKey{}).(*clock); ok {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.ctrlC = c.ctrlC || time.Now().Before(c.deadline)
+	}
+}
+
+func announceInterrupt(ctx context.Context, w io.Writer) {
+	if c, ok := ctx.Value(backstopKey{}).(*clock); ok && !c.firstNotice() {
+		return
+	}
+	fmt.Fprintln(w, "Interrupted")
+}
+
+func (c *clock) firstNotice() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	first := !c.told
+	c.told = true
+	return first
 }
 
 func (c *clock) output(stdout io.Writer) io.Writer {
@@ -185,7 +210,7 @@ func (c *clock) fire() {
 		c.mu.Unlock()
 		return
 	}
-	claimed, cleanups := c.claimed, c.cleanups
+	claimed, cleanups, ctrlC := c.claimed, c.cleanups, c.ctrlC
 	c.fired = !claimed
 	owner, cleaned := make(chan struct{}), make(chan struct{})
 	if claimed {
@@ -227,11 +252,17 @@ func (c *clock) fire() {
 
 	locked := c.guard.mu.TryLock()
 	clean := !claimed && locked && (c.guard.last == 0 || c.guard.last == '\n')
-	if clean && c.asJSON {
+	if clean && c.asJSON && !ctrlC {
 		run(&writing, func() { _ = format.Error(c.guard.w, c.cause) })
 	}
 	if clean || !sameFile(c.stdout, c.stderr) {
-		run(&writing, func() { fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error()) })
+		run(&writing, func() {
+			if !ctrlC {
+				fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error())
+			} else if c.firstNotice() {
+				fmt.Fprintln(c.stderr, "Interrupted")
+			}
+		})
 	}
 	finished := make(chan struct{})
 	go func() {
@@ -242,6 +273,9 @@ func (c *clock) fire() {
 	select {
 	case <-finished:
 	case <-time.After(exitWait):
+	}
+	if ctrlC {
+		c.exit(contract.ExitInterrupted)
 	}
 	c.exit(contract.ExitTimeout)
 }
