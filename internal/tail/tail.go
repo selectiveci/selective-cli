@@ -383,8 +383,9 @@ func streamTo(stdout io.Writer, parent context.Context, commandStart time.Time, 
 func summaryExitCode(summary map[string]any, sawFailure bool) int {
 	failed, _ := summary["failed"].(float64)
 	flaky, _ := summary["flaky"].(float64)
+	_, unfinished := format.UnfinishedStatus(summary)
 	switch {
-	case failed > 0:
+	case unfinished || failed > 0:
 		return 1
 	case flaky > 0 || sawFailure:
 		return 2

@@ -84,6 +84,21 @@ func waitForExit(t *testing.T, cmd *exec.Cmd, limit time.Duration) (exit int, to
 	return cmd.ProcessState.ExitCode(), time.Since(began)
 }
 
+func fullPipe(t *testing.T) *os.File {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	for chunk := []byte(strings.Repeat("x", 4095) + "\n"); ; {
+		_ = w.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+		if _, err := w.Write(chunk); err != nil {
+			return w
+		}
+	}
+}
+
 func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.T) {
 	runnerEnv(t)
 	t.Setenv("FAKE_HANG", "1")
@@ -99,17 +114,7 @@ func TestTimeoutRemovesTheRunnerAndSeatWhenSelTestsStdoutIsNeverRead(t *testing.
 	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(shim), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = r.Close() })
-	for chunk := []byte(strings.Repeat("x", 4095) + "\n"); ; {
-		_ = w.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
-		if _, err := w.Write(chunk); err != nil {
-			break
-		}
-	}
+	w := fullPipe(t)
 	env := []string{"TMPDIR=" + tmp, "PATH=" + bin + ":" + os.Getenv("PATH")}
 	project := pytestProject(t)
 	client := "#!/bin/sh\necho selective_pytest >/dev/null\nsleep 300 >/dev/null 2>&1 &\necho $! > " + siblingFile + "\nexec env FAKE_RUNNER=1 " + os.Args[0] + " \"$@\"\n"

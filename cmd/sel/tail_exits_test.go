@@ -90,3 +90,11 @@ func TestTailDeclaresExitSixInTheSchemaAndTheHelpText(t *testing.T) {
 		t.Errorf("schema %s\nhelp %s", schema, help)
 	}
 }
+
+func TestTailHelpSaysExitOneCoversABuildThatDidNotFinish(t *testing.T) {
+	_, help, _ := execute("tail", "--help")
+
+	if !strings.Contains(help, "\n  1  real test failures, or a build that did not finish (incomplete or cancelled)\n") {
+		t.Errorf("help %s", help)
+	}
+}
