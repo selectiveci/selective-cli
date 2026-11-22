@@ -307,6 +307,30 @@ func TestGateTextModeWaitsOnStderrAndPrintsTheSentenceOnStdout(t *testing.T) {
 	}
 }
 
+func TestGateWaitAnnouncementNeverPrintsATokenFromTheApprovalURL(t *testing.T) {
+	pending := `{"result":"pending_approval","dry_run":false,"approval":{"id":"a1","url":"https://selective.example/a1?k=tok"}}`
+	for _, asJSON := range []bool{true, false} {
+		srv := newGateServer(t, []reply{{202, pending, ""}, {200, `{"token":{"id":"t1"},"result":"revoked","dry_run":false}`, ""}}, ok("approved"))
+		var out, errOut bytes.Buffer
+		gate := srv.gate(&out, &errOut)
+		gate.JSON = asJSON
+		send := func(ctx context.Context) (*Outcome, error) {
+			revoked, err := gate.Client.WithContext(ctx).RevokeToken("t1", false)
+			if err != nil {
+				return nil, err
+			}
+			return &Outcome{Key: "token", Resource: revoked.Token, Result: revoked.Result}, nil
+		}
+
+		err := gate.Do(context.Background(), send, sentence)
+
+		shown := out.String() + errOut.String()
+		if err != nil || strings.Contains(shown, "k=tok") || !strings.Contains(shown, "a1?k=[redacted]") {
+			t.Errorf("json %v: err = %v, output %q", asJSON, err, shown)
+		}
+	}
+}
+
 func TestGateRecognisesTheApprovalTheAPIClientDetects(t *testing.T) {
 	srv := newGateServer(t, []reply{{202, pendingA1, ""}, {200, `{"token":{"id":"t1"},"result":"revoked","dry_run":false}`, ""}}, ok("approved"))
 	client := api.New(srv.URL, "tok")
