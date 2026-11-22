@@ -94,20 +94,25 @@ func Error(w io.Writer, err contract.Coded) error {
 
 func BoundedError(w io.Writer, err contract.Coded) error {
 	const open, between, end = `{"v":1,"error":`, `,"message":`, "}\n"
+	const messageFloorRoom = 2 + 128 + 5
 	room := ErrorLineLimit - len(open) - len(between) - len(end)
 	code := fitString(string(err.ErrorCode()), room-2)
+	room -= len(code)
+	reserved := min(len(fitString(err.Error(), messageFloorRoom)), room)
+	var extras bytes.Buffer
+	for _, f := range errorExtras(err) {
+		key, _ := encode(f.key)
+		val, encodeErr := encode(f.value)
+		if encodeErr == nil && reserved+extras.Len()+len(key)+len(val)+2 <= room {
+			fmt.Fprintf(&extras, ",%s:%s", key, val)
+		}
+	}
 	var buf bytes.Buffer
 	buf.WriteString(open)
 	buf.Write(code)
 	buf.WriteString(between)
-	buf.Write(fitString(err.Error(), room-len(code)))
-	for _, f := range errorExtras(err) {
-		key, _ := encode(f.key)
-		val, encodeErr := encode(f.value)
-		if encodeErr == nil && buf.Len()+len(key)+len(val)+len(end)+2 <= ErrorLineLimit {
-			fmt.Fprintf(&buf, ",%s:%s", key, val)
-		}
-	}
+	buf.Write(fitString(err.Error(), room-extras.Len()))
+	buf.Write(extras.Bytes())
 	buf.WriteString(end)
 	_, werr := w.Write(buf.Bytes())
 	return werr

@@ -43,7 +43,7 @@ document as its doctor field.
 With an explicit --timeout, a JSON error object on stdout is at most 512 bytes
 including its newline: it carries failed_check, the first failing check's name,
 instead of the doctor field, and the full document follows on stderr as one
-{"v":1,"doctor":{...}} line.`,
+{"v":1,"doctor":{...}} line, unless stderr is the file stdout is written to.`,
 		Example: `  sel doctor
   sel doctor --org acme --json
   sel doctor --timeout 10s`,

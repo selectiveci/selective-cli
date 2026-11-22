@@ -81,7 +81,7 @@ func TestTimeoutLeavesNoCutLineWhenTheErrorObjectOutgrowsTheFreeSpaceInThePipe(t
 			}
 			lines := strings.Split(string(dump[prefilled:]), "\n")
 			for i, line := range lines[:len(lines)-1] {
-				if !json.Valid([]byte(line)) {
+				if !json.Valid([]byte(line)) && !(c.shared && strings.HasPrefix(line, "Error: ")) {
 					t.Fatalf("stdout line %d is not complete JSON (%d bytes): %.60q", i, len(line), line)
 				}
 			}
