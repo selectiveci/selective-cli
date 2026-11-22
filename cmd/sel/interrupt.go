@@ -6,9 +6,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/gitctx"
+	"github.com/selectiveci/selective-cli/internal/localrun"
 )
 
 var (
@@ -63,22 +67,48 @@ func interruptContext(parent context.Context) (context.Context, context.CancelCa
 	}
 	received := make(chan os.Signal, 1)
 	signal.Notify(received, signals...)
+	_, capped := parent.Value(backstopKey{}).(*clock)
+	wound := make(chan struct{})
 	go func() {
 		select {
 		case sig := <-received:
 			if sig == syscall.SIGHUP {
 				cancel(errHangup)
-				return
+			} else {
+				if sig == os.Interrupt {
+					noteCtrlC(parent)
+				}
+				cancel(context.Canceled)
 			}
-			if sig == os.Interrupt {
-				noteCtrlC(parent)
+			if !capped {
+				exitUnlessWoundDown(wound)
 			}
-			cancel(context.Canceled)
 		case <-ctx.Done():
 		}
 	}()
+	closeWound := sync.OnceFunc(func() { close(wound) })
 	return ctx, cancel, func() {
 		signal.Stop(received)
 		cancel(context.Canceled)
+		closeWound()
 	}
+}
+
+func exitUnlessWoundDown(wound <-chan struct{}) {
+	select {
+	case <-wound:
+		return
+	case <-time.After(localrun.ShutdownBudget + backstopGrace):
+	}
+	cleaned := make(chan struct{})
+	go func() {
+		gitctx.KillRunning()
+		localrun.Cleanup()
+		close(cleaned)
+	}()
+	select {
+	case <-cleaned:
+	case <-time.After(backstopExit / 2):
+	}
+	hardExit(contract.ExitInterrupted)
 }
