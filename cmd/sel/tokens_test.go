@@ -19,8 +19,8 @@ const (
 	agentToken     = `{"id":"2","name":"ci","prefix":"sel_ab12","kind":"agent","scopes":["read","write"],"organization":"acme","repos":["acme/web","acme/api"],"expires_at":"2026-12-01T00:00:00Z","source":"api","inserted_at":"2026-11-01T09:30:00Z"}`
 	userToken      = `{"id":"1","name":"laptop","prefix":"sel_cd34","kind":"user","scopes":["read"],"organization":null,"repos":null,"expires_at":null,"source":"cli","inserted_at":"2026-10-01T09:30:00Z"}`
 	leakedSecret   = "sel_LEAKED_plaintext_secret"
-	forbiddenBody  = `{"error":"forbidden","message":"Agent tokens can't manage other tokens."}`
-	forbiddenStdio = `{"v":1,"error":"forbidden","message":"Agent tokens can't manage other tokens."}` + "\n"
+	forbiddenBody  = `{"error":"forbidden","message":"Agents can't manage other agents."}`
+	forbiddenStdio = `{"v":1,"error":"forbidden","message":"Agents can't manage other agents."}` + "\n"
 )
 
 type tokensStub struct {
@@ -226,7 +226,7 @@ func TestTokensListMapsServerRefusalsToExitCodes(t *testing.T) {
 		stdout string
 	}{
 		{"forbidden to agent tokens", 403, forbiddenBody, []string{"tokens", "list", "--json"}, 6, forbiddenStdio},
-		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid token."}`, []string{"tokens", "list", "--json"}, 4, `{"v":1,"error":"unauthorized","message":"Invalid token."}` + "\n"},
+		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid login."}`, []string{"tokens", "list", "--json"}, 4, `{"v":1,"error":"unauthorized","message":"Invalid login."}` + "\n"},
 		{"bad request", 422, `{"error":"invalid_request","message":"limit must be an integer from 1 to 200"}`, []string{"tokens", "list", "--json"}, 5, `{"v":1,"error":"invalid_request","message":"limit must be an integer from 1 to 200"}` + "\n"},
 		{"takes no argument", 200, `{}`, []string{"tokens", "list", "extra", "--json"}, 5, ""},
 	}
@@ -333,7 +333,7 @@ func TestTokensShowMapsServerRefusalsToExitCodes(t *testing.T) {
 		stdout string
 	}{
 		{"forbidden", 403, forbiddenBody, []string{"tokens", "show", "--json"}, 6, forbiddenStdio},
-		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid token."}`, []string{"tokens", "show", "--json"}, 4, `{"v":1,"error":"unauthorized","message":"Invalid token."}` + "\n"},
+		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid login."}`, []string{"tokens", "show", "--json"}, 4, `{"v":1,"error":"unauthorized","message":"Invalid login."}` + "\n"},
 		{"bad request", 422, `{"error":"invalid_request","message":"nope"}`, []string{"tokens", "show", "--json"}, 5, `{"v":1,"error":"invalid_request","message":"nope"}` + "\n"},
 		{"takes no argument", 200, `{}`, []string{"tokens", "show", "some-id", "--json"}, 5, ""},
 	}
@@ -389,8 +389,8 @@ func TestHelpListsTokensListAndShowAsReads(t *testing.T) {
 const (
 	revokeID      = "7d0c6a0e-5b1f-4c5e-9d0f-2a1b3c4d5e6f"
 	revokeOKBody  = `{"token":{"id":"` + revokeID + `","name":"ci","prefix":"sel_ab12"},"result":"deleted","dry_run":false}`
-	notFoundBody  = `{"error":"not_found","message":"No such token."}`
-	notFoundStdio = `{"v":1,"error":"not_found","message":"No such token."}` + "\n"
+	notFoundBody  = `{"error":"not_found","message":"No such login."}`
+	notFoundStdio = `{"v":1,"error":"not_found","message":"No such login."}` + "\n"
 )
 
 type revokeStub struct {
@@ -496,7 +496,7 @@ func TestTokensRevokeIfExistsStillFailsOnOtherRefusals(t *testing.T) {
 		stdout string
 	}{
 		{"forbidden", 403, forbiddenBody, 6, forbiddenStdio},
-		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid token."}`, 4, `{"v":1,"error":"unauthorized","message":"Invalid token."}` + "\n"},
+		{"unauthorized", 401, `{"error":"unauthorized","message":"Invalid login."}`, 4, `{"v":1,"error":"unauthorized","message":"Invalid login."}` + "\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

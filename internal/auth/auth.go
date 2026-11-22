@@ -19,6 +19,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/credentials"
 	"github.com/selectiveci/selective-cli/internal/devicelogin"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/redact"
 )
 
 type LoginOptions struct {
@@ -312,7 +313,7 @@ func Logout(opts LogoutOptions) error {
 	if revoked {
 		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s and revoked the token.\n", host)
 	} else {
-		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, revokeErr)
+		fmt.Fprintf(opts.Stderr, "✓ Logged out of %s locally, but couldn't revoke the token on the server (%v).\n  Revoke it on your API tokens page.\n", host, redact.String(revokeErr.Error()))
 	}
 	return opts.report(host, revoked, "deleted")
 }
