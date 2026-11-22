@@ -12,4 +12,4 @@ func readerGone(f *os.File) bool {
 	return n > 0 && fds[0].Revents&(unix.POLLERR|unix.POLLHUP) != 0
 }
 
-func eioMeansReaderGone(_ *os.File, terminal bool) bool { return terminal }
+func eioMeansReaderGone(f *os.File, _ bool) bool { return readerGone(f) }
