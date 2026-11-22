@@ -131,11 +131,24 @@ func noteCtrlC(ctx context.Context) {
 }
 
 func announceInterrupt(ctx context.Context, w io.Writer) {
-	if c, ok := ctx.Value(backstopKey{}).(*clock); ok {
-		c.told.Do(func() { fmt.Fprintln(w, "Interrupted") })
+	c, ok := ctx.Value(backstopKey{}).(*clock)
+	if !ok {
+		fmt.Fprintln(w, "Interrupted")
 		return
 	}
-	fmt.Fprintln(w, "Interrupted")
+	told := make(chan struct{})
+	go func() {
+		defer close(told)
+		c.told.Do(func() { fmt.Fprintln(w, "Interrupted") })
+	}()
+	var limit <-chan time.Time
+	if !sameFile(c.stdout, c.stderr) {
+		limit = time.After(backstopExit)
+	}
+	select {
+	case <-told:
+	case <-limit:
+	}
 }
 
 func (c *clock) output(stdout io.Writer) io.Writer {

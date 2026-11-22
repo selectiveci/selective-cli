@@ -47,11 +47,11 @@ func fakeRunner() int {
 			os.Exit(0)
 		}()
 	}
-	fmt.Println("fake runner stdout noise")
-	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_PID_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
 	}
+	fmt.Println("fake runner stdout noise")
+	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
 	}
