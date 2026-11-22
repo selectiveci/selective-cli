@@ -206,7 +206,7 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		cancel(errReaderLeft)
 		err = localrun.ErrInterrupted
 	}
-	if errors.Is(err, localrun.ErrInterrupted) && sum.Reported && errors.Is(context.Cause(signalled), errReaderLeft) {
+	if errors.Is(err, localrun.ErrInterrupted) && sum.Reported && !f.list && errors.Is(context.Cause(signalled), errReaderLeft) {
 		err = nil
 	}
 	if err != nil && errors.Is(context.Cause(signalled), errHangup) {

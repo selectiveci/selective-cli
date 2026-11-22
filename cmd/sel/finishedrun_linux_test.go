@@ -115,6 +115,20 @@ func TestAReaderLeavingAfterTheSummaryOfAFinishedRunWhoseRunnerStaysAliveKeepsTh
 	}
 }
 
+func TestAReaderLeavingAListAfterItsSelectionStillExitsInterrupted(t *testing.T) {
+	f := startFinishingRun(t, true, false, false, "--list")
+	runner := f.runnerPid()
+	if got := f.finishes(); got != 0 {
+		t.Fatalf("VOID: the runner had already finished (%d) before the reader left", got)
+	}
+	_ = f.reader.Close()
+	f.releaseTheFinish()
+	f.await()
+	f.wantFinishesAfterTheReaderLeft(1)
+	f.wantWoundDown(runner)
+	f.wantExit(130)
+}
+
 func TestASignalAfterTheRunFinishedStillExitsInterrupted(t *testing.T) {
 	for _, tc := range []struct {
 		name string
