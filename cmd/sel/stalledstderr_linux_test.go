@@ -114,9 +114,10 @@ func TestABackstopAfterACtrlCWritesNoTimeoutObject(t *testing.T) {
 
 	code, _ := awaitExit(t, exited)
 
-	if code != 130 || stdout.String() != "" || strings.Count(stderr.String(), "Interrupted") != 1 {
-		t.Errorf("exit %d, stdout %q, stderr %q; want 130, no stdout and one Interrupted", code, stdout.String(), stderr.String())
+	if code != 130 || strings.Count(stderr.String(), "Interrupted") != 1 {
+		t.Errorf("exit %d, stderr %q; want 130 and one Interrupted", code, stderr.String())
 	}
+	wantOneInterruptedObject(t, stdout.String())
 }
 
 func TestATermOrHangupOnAStalledStderrKeepsTheTimeoutExit(t *testing.T) {
@@ -149,8 +150,12 @@ func TestACtrlCAtTheDeadlineWritesTheSummaryBeforeTheBackstop(t *testing.T) {
 
 	wrote := make(chan struct{})
 	go func() {
-		announceInterrupt(context.WithValue(context.Background(), backstopKey{}, c), w)
-		_, _ = g.Write([]byte(line))
+		ctx := context.WithValue(context.Background(), backstopKey{}, c)
+		owns := claimFinalLine(ctx)
+		announceInterrupt(ctx, w)
+		if owns {
+			_, _ = g.Write([]byte(line))
+		}
 		close(wrote)
 	}()
 	select {
@@ -163,6 +168,66 @@ func TestACtrlCAtTheDeadlineWritesTheSummaryBeforeTheBackstop(t *testing.T) {
 	if code != 130 || stdout.String() != line {
 		t.Errorf("exit %d, stdout %q; want 130 and only the summary", code, stdout.String())
 	}
+}
+
+func TestOnlyOneOfTheBackstopAndTheSummaryClaimsTheFinalLineAfterACtrlC(t *testing.T) {
+	ctrlCClock := func() (*clock, *guard, chan int, *lockedBuffer, context.Context) {
+		var stdout lockedBuffer
+		var stderr lockedBuffer
+		c, g, exited := expiredClock(&stdout, &stderr, true)
+		c.mu.Lock()
+		c.ctrlC = true
+		c.mu.Unlock()
+		return c, g, exited, &stdout, context.WithValue(context.Background(), backstopKey{}, c)
+	}
+
+	t.Run("the backstop first", func(t *testing.T) {
+		c, _, exited, stdout, ctx := ctrlCClock()
+		expire(c)
+		code, _ := awaitExit(t, exited)
+
+		if claimFinalLine(ctx) {
+			t.Error("the summary claimed the final line after the backstop wrote its own")
+		}
+		if code != 130 {
+			t.Errorf("exit %d; want 130", code)
+		}
+		wantOneInterruptedObject(t, stdout.String())
+	})
+
+	t.Run("the summary first", func(t *testing.T) {
+		c, g, exited, stdout, ctx := ctrlCClock()
+		if !claimFinalLine(ctx) {
+			t.Fatal("the summary could not claim the final line before the backstop")
+		}
+		expire(c)
+		code, _ := awaitExit(t, exited)
+
+		if !g.mu.TryLock() {
+			t.Error("the backstop took the stdout guard the summary still needs")
+		} else {
+			g.mu.Unlock()
+		}
+		if code != 130 || stdout.String() != "" {
+			t.Errorf("exit %d, stdout %q; want 130 and nothing the backstop wrote", code, stdout.String())
+		}
+	})
+}
+
+func TestWithoutARecordedCtrlCTheBackstopKeepsItsTimeoutObject(t *testing.T) {
+	var stdout, stderr lockedBuffer
+	c, _, exited := expiredClock(&stdout, &stderr, true)
+
+	if !claimFinalLine(context.WithValue(context.Background(), backstopKey{}, c)) {
+		t.Error("the summary was refused the final line without a recorded Ctrl-C")
+	}
+	expire(c)
+	code, _ := awaitExit(t, exited)
+
+	if code != 8 {
+		t.Errorf("exit %d; want 8", code)
+	}
+	wantOneTimeoutObject(t, stdout.String())
 }
 
 func TestTheInterruptNoticeIsWrittenOnceAcrossBothPaths(t *testing.T) {
