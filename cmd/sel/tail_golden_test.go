@@ -214,6 +214,20 @@ func TestTailOutputAndExitCodesAreUnchanged(t *testing.T) {
 	}
 }
 
+func TestTailExitsOneWhenTheBuildDidNotFinish(t *testing.T) {
+	srv := tailServer{
+		frames:       []string{frameStart, `{"event":"summary","status":"incomplete","passed":10,"failed":0,"flaky":0,"ms":2500}`},
+		lookupStatus: http.StatusOK,
+		lookupBody:   `{"build_id":"b","status":"completed","run_count":1,"suite_count":1}`,
+	}.start(t)
+
+	res := runBinary(t, gitRepo(t), srv.URL, "tail", "--format", "pretty")
+
+	if res.exit != 1 || !strings.Contains(res.stdout, "build did not finish: incomplete") {
+		t.Errorf("exit = %d, stdout %q, want exit 1 and a line saying the build did not finish (stderr: %s)", res.exit, res.stdout, res.stderr)
+	}
+}
+
 func TestTailExitCodesWithoutAStream(t *testing.T) {
 	cases := []struct {
 		name   string

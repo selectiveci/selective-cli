@@ -165,6 +165,7 @@ func TestStreamMapsATokenClosedStreamToUnauthorizedWithoutReconnecting(t *testin
 		{"token revoked", 4401, "token_revoked", contract.Unauthorized, "the token was revoked"},
 		{"unknown reason", 4401, "other", contract.Unauthorized, "the token is invalid or expired"},
 		{"normal close with no summary", websocket.StatusNormalClosure, "", contract.NetworkError, "lost the connection"},
+		{"summary unavailable on the server", websocket.StatusInternalError, "summary_unavailable", contract.NetworkError, "lost the connection"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
