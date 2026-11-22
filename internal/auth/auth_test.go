@@ -134,16 +134,15 @@ func TestLogoutRefusesWithAnEnvToken(t *testing.T) {
 	}
 }
 
-func TestJSONLoginErrorEventCarriesTheContractCode(t *testing.T) {
+func TestJSONLoginFailureEmitsNoErrorEvent(t *testing.T) {
 	cases := []struct {
 		name        string
 		tokenStatus int
 		tokenBody   string
-		code        string
 	}{
-		{"denied", 400, `{"error":"access_denied"}`, "approval_denied"},
-		{"expired", 400, `{"error":"expired_token"}`, "approval_expired"},
-		{"server fault", 500, `{"error":"server_error"}`, "server_error"},
+		{"denied", 400, `{"error":"access_denied"}`},
+		{"expired", 400, `{"error":"expired_token"}`},
+		{"server fault", 500, `{"error":"server_error"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,8 +165,8 @@ func TestJSONLoginErrorEventCarriesTheContractCode(t *testing.T) {
 				t.Fatal("login succeeded")
 			}
 			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-			if len(lines) != 2 || !strings.HasPrefix(lines[1], `{"v":1,"event":"error"`) || !strings.Contains(lines[1], `"error":"`+tc.code+`"`) {
-				t.Fatalf("stdout = %q", out.String())
+			if len(lines) != 1 || !strings.HasPrefix(lines[0], `{"v":1,"event":"authorize"`) {
+				t.Fatalf("stdout = %q, want only the authorize event", out.String())
 			}
 		})
 	}

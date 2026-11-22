@@ -2,12 +2,15 @@ package format
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mattn/go-isatty"
 	"github.com/selectiveci/selective-cli/internal/contract"
@@ -149,5 +152,58 @@ func TestDocumentRefusesAnythingButAnObject(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Document(&buf, []int{1}); err == nil || buf.Len() != 0 {
 		t.Fatalf("err = %v, wrote %q", err, buf.String())
+	}
+}
+
+func boundedObject(t *testing.T, err contract.Coded) (map[string]any, string) {
+	t.Helper()
+	out := capture(t, func(b *bytes.Buffer) error { return BoundedError(b, err) })
+	var object map[string]any
+	if jsonErr := json.Unmarshal([]byte(out), &object); jsonErr != nil || len(out) > ErrorLineLimit || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "}\n") {
+		t.Fatalf("%d bytes, not one JSON line of at most %d: %v: %.80q", len(out), ErrorLineLimit, jsonErr, out)
+	}
+	return object, out
+}
+
+func TestBoundedErrorKeepsTheFieldsAnAgentActsOnAndCutsTheMessageToWhatRemains(t *testing.T) {
+	small := map[string]any{"retry_after_s": 30, "attempts": 3, "scope": "repo:acme/web", "failed_check": "server"}
+	messages := map[string]string{
+		"ascii":                strings.Repeat("m", 600),
+		"four-byte characters": strings.Repeat("😀", 150),
+		"escapes that expand":  strings.Repeat("\"\x01", 100),
+	}
+	for name, message := range messages {
+		t.Run(name, func(t *testing.T) {
+			object, _ := boundedObject(t, &contract.Error{Code: contract.RateLimited, Message: message, Fields: small})
+
+			for key, want := range small {
+				if fmt.Sprint(object[key]) != fmt.Sprint(want) {
+					t.Errorf("%s = %v, want %v kept beside a %d-byte message", key, object[key], want, len(message))
+				}
+			}
+			cut, _ := object["message"].(string)
+			if written, _ := json.Marshal(cut); !utf8.ValidString(cut) || !strings.HasPrefix(message, cut) || len(written)-2 < 128 {
+				t.Errorf("message is %d bytes %.40q, want a clean prefix with at least 128 bytes written", len(cut), cut)
+			}
+		})
+	}
+}
+
+func TestBoundedErrorGivesAFieldThatDoesNotFitUpWholeAndKeepsTheFirst128BytesOfTheMessage(t *testing.T) {
+	message := strings.Repeat("m", 600)
+	object, _ := boundedObject(t, &contract.Error{Code: contract.ServerError, Message: message, Fields: map[string]any{"big": strings.Repeat("b", 400), "attempts": 3}})
+
+	cut, _ := object["message"].(string)
+	if _, kept := object["big"]; kept || len(cut) < 128 || !strings.HasPrefix(message, cut) || object["attempts"] != float64(3) {
+		t.Errorf("object %.200v; want big dropped whole, attempts kept and at least 128 message bytes (got %d)", object, len(cut))
+	}
+}
+
+func TestBoundedErrorWritesTheErrorObjectUnchangedWhenItFits(t *testing.T) {
+	err := &contract.Error{Code: contract.RateLimited, Message: "slow down", Fields: map[string]any{"retry_after_s": 7, "attempts": 2}}
+
+	_, bounded := boundedObject(t, err)
+	if want := capture(t, func(b *bytes.Buffer) error { return Error(b, err) }); bounded != want {
+		t.Errorf("bounded %q, want the unbounded %q", bounded, want)
 	}
 }
