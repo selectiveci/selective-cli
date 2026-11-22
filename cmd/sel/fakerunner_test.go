@@ -31,11 +31,27 @@ func fakeRunner() int {
 			os.Exit(0)
 		}()
 	}
-	fmt.Println("fake runner stdout noise")
-	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
+	if path := os.Getenv("FAKE_SIGINT_AT_FILE"); path != "" {
+		stops := make(chan os.Signal, 1)
+		signal.Notify(stops, syscall.SIGINT)
+		go func() {
+			<-stops
+			_ = os.WriteFile(path, []byte(strconv.FormatInt(time.Now().UnixNano(), 10)), 0o644)
+			gate := os.Getenv("FAKE_STOP_GATE")
+			if gate == "" {
+				return
+			}
+			for os.Remove(gate) != nil {
+				time.Sleep(5 * time.Millisecond)
+			}
+			os.Exit(0)
+		}()
+	}
 	if path := os.Getenv("FAKE_PID_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
 	}
+	fmt.Println("fake runner stdout noise")
+	fmt.Fprintln(os.Stderr, "fake runner stderr noise")
 	if path := os.Getenv("FAKE_ARGS_FILE"); path != "" {
 		_ = os.WriteFile(path, []byte(strings.Join(os.Args[1:], " ")), 0o644)
 	}
@@ -87,6 +103,15 @@ func fakeRunner() int {
 				time.Sleep(time.Minute)
 			}
 		case "close":
+			for gate := os.Getenv("FAKE_FINISH_GATE"); gate != "" && os.Remove(gate) != nil; {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if path := os.Getenv("FAKE_FINISHED_FILE"); path != "" {
+				if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+					_, _ = f.WriteString("x")
+					_ = f.Close()
+				}
+			}
 			send("report_at_finish", map[string]any{"connection_retries": 0})
 			if os.Getenv("FAKE_LINGER") == "1" {
 				time.Sleep(time.Minute)
