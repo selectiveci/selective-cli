@@ -201,6 +201,30 @@ func TestAfterCommandRunsTheStepsInOrderAndStartsNoneOnceTheLimitHasPassed(t *te
 	}
 }
 
+func TestAfterCommandGivesUpOnAWedgedStepByTheBoundWhateverTheLimit(t *testing.T) {
+	cases := map[string]time.Time{"no limit": {}, "a limit an hour away": time.Now().Add(time.Hour)}
+	for name, limit := range cases {
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			returned := make(chan time.Duration, 1)
+			go func() {
+				began := time.Now()
+				afterCommand(limit, func() { <-release })
+				returned <- time.Since(began)
+			}()
+			select {
+			case took := <-returned:
+				if took < updateGrace {
+					t.Errorf("afterCommand returned after %s; want it to wait out the %s bound", took, updateGrace)
+				}
+			case <-time.After(2 * updateGrace):
+				t.Errorf("afterCommand still waiting on the wedged step after %s; want it to give up at %s", 2*updateGrace, updateGrace)
+			}
+		})
+	}
+}
+
 func TestBackstopExitsByTheBoundWhenTheClaimedCommandIsWedgedMidLineOnStdout(t *testing.T) {
 	const partial = `{"error":"not_fo`
 	cases := map[string]bool{"stderr stuck": false, "stderr on stdout's file": true}

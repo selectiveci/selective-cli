@@ -26,6 +26,8 @@ import (
 var version = "dev"
 var commit = "none"
 
+const updateGrace = time.Second
+
 func main() {
 	os.Exit(run(newRoot(), os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -60,11 +62,8 @@ func run(root *cobra.Command, args []string, stdout, stderr io.Writer) int {
 }
 
 func afterCommand(limit time.Time, steps ...func()) {
-	if limit.IsZero() {
-		for _, step := range steps {
-			step()
-		}
-		return
+	if bound := time.Now().Add(updateGrace); limit.IsZero() || bound.Before(limit) {
+		limit = bound
 	}
 	done := make(chan struct{})
 	go func() {
