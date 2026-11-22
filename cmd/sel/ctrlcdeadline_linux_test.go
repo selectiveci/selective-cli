@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,11 +13,10 @@ import (
 	"github.com/selectiveci/selective-cli/internal/localrun"
 )
 
-const raceTimeout = 3 * time.Second
-
 const (
-	raceBound = raceTimeout + localrun.ShutdownBudget + backstopGrace + backstopExit
-	execSlack = 500 * time.Millisecond
+	raceTimeout = 3 * time.Second
+	raceBound   = raceTimeout + localrun.ShutdownBudget + backstopGrace + backstopExit
+	execSlack   = 500 * time.Millisecond
 )
 
 type raceRun struct {
@@ -178,6 +178,15 @@ func stalledStdoutRun(t *testing.T, sig syscall.Signal, afterDeadline bool) (exi
 		t.Errorf("the runner group %d is still alive after sel exited", runner)
 	}
 	return exit, errOut.String()
+}
+
+func TestACtrlCCountsOnlyBeforeTheDeadline(t *testing.T) {
+	for offset, want := range map[time.Duration]bool{time.Hour: true, -time.Hour: false} {
+		c := &clock{deadline: time.Now().Add(offset)}
+		if noteCtrlC(context.WithValue(context.Background(), backstopKey{}, c)); c.ctrlC != want {
+			t.Errorf("deadline %s away: ctrlC = %v, want %v", offset, c.ctrlC, want)
+		}
+	}
 }
 
 func TestAStalledRunsBackstopExitCode(t *testing.T) {

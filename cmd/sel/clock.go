@@ -61,7 +61,7 @@ type clock struct {
 	claimed  bool
 	fired    bool
 	ctrlC    bool
-	told     bool
+	told     sync.Once
 	done     bool
 	owner    chan struct{}
 	cleaned  chan struct{}
@@ -131,18 +131,11 @@ func noteCtrlC(ctx context.Context) {
 }
 
 func announceInterrupt(ctx context.Context, w io.Writer) {
-	if c, ok := ctx.Value(backstopKey{}).(*clock); ok && !c.firstNotice() {
+	if c, ok := ctx.Value(backstopKey{}).(*clock); ok {
+		c.told.Do(func() { fmt.Fprintln(w, "Interrupted") })
 		return
 	}
 	fmt.Fprintln(w, "Interrupted")
-}
-
-func (c *clock) firstNotice() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	first := !c.told
-	c.told = true
-	return first
 }
 
 func (c *clock) output(stdout io.Writer) io.Writer {
@@ -259,8 +252,8 @@ func (c *clock) fire() {
 		run(&writing, func() {
 			if !ctrlC {
 				fmt.Fprintf(c.stderr, "Error: %s\n", c.cause.Error())
-			} else if c.firstNotice() {
-				fmt.Fprintln(c.stderr, "Interrupted")
+			} else {
+				c.told.Do(func() { fmt.Fprintln(c.stderr, "Interrupted") })
 			}
 		})
 	}
