@@ -232,6 +232,9 @@ func TestInterruptingDeviceLoginExitsOneThirty(t *testing.T) {
 			t.Errorf("event line %q does not start with {\"v\":1,\"event\"", line)
 		}
 	}
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], `{"v":1,"event":"error","error":"cancelled"`) {
+		t.Errorf("stdout lines = %q, want the authorize event then one cancelled error event", lines)
+	}
 }
 
 func leafPaths(c *cobra.Command, prefix string, out map[string]*cobra.Command) {
