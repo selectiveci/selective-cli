@@ -14,7 +14,7 @@ func explicitJSON(cmd *cobra.Command) bool {
 }
 
 func helpOnlyGroup(root *cobra.Command, args []string) (*cobra.Command, error) {
-	if !jsonFlagGiven(args) {
+	if !jsonFlagGiven(args) || strings.HasPrefix(args[0], cobra.ShellCompRequestCmd) {
 		return nil, nil
 	}
 	cmd, rest, err := root.Find(args)

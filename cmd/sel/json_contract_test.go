@@ -138,6 +138,26 @@ func toAny(names []string) []any {
 	return out
 }
 
+func TestShellCompletionStillAnswersWithJSONOnTheLine(t *testing.T) {
+	host := closedHost(t)
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"__complete", "flakes", "--json", ""}, "list"},
+		{[]string{"__completeNoDesc", "flakes", "--json", ""}, "list"},
+		{[]string{"__complete", "--json", ""}, "flakes"},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			res := runBinary(t, t.TempDir(), host, tc.args...)
+			if res.exit != 0 || !strings.Contains(res.stdout, tc.want) || strings.Contains(res.stdout, "usage_error") {
+				t.Errorf("exit %d stdout %q, want exit 0 and a completion listing %q", res.exit, res.stdout, tc.want)
+			}
+		})
+	}
+}
+
 func TestOnlyABareGroupWithExplicitJSONLeavesHelpBehind(t *testing.T) {
 	host := closedHost(t)
 	for _, args := range [][]string{{"auth"}, {"auth", "--json=false"}, {"--json=false"}, {"auth", "logn"}, {"flakes", "lst"}} {
