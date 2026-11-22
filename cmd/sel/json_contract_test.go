@@ -102,6 +102,8 @@ func TestUnknownCommandWithExplicitJSONIsOneUsageErrorWithSuggestions(t *testing
 		{[]string{"approvals", "bogus"}, []string{}, true},
 		{[]string{"flakes", "bogus"}, []string{}, true},
 		{[]string{"tokens", "bogus"}, []string{}, true},
+		{[]string{"suites", "setings"}, []string{"settings"}, true},
+		{[]string{"suites", "bogus"}, []string{}, true},
 		{[]string{"autth"}, []string{"auth"}, false},
 		{[]string{"bogus"}, []string{}, false},
 	}

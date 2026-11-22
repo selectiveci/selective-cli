@@ -274,10 +274,10 @@ func isNetworkError(err error) bool {
 func classify(err error, entered bool) contract.Coded {
 	var coded contract.Coded
 	switch {
+	case errors.As(err, &coded) && (entered || coded.ErrorCode() == contract.UsageError):
+		return coded
 	case !entered:
 		return contract.Errorf(contract.UsageError, "%s", err.Error())
-	case errors.As(err, &coded):
-		return coded
 	case isNetworkError(err):
 		return contract.Errorf(contract.NetworkError, "%s", err.Error())
 	default:
@@ -312,7 +312,7 @@ func suitesCmd() *cobra.Command {
   sel suites delete     Delete an archived suite for good
   sel suites show       Show a suite and its settings
   sel suites settings   Show or change a suite's settings`,
-		Args: cobra.NoArgs,
+		Args: groupNoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env, org, err := f.env(true)
 			if err != nil {

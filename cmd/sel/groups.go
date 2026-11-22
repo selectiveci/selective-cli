@@ -55,6 +55,13 @@ func showGroup(cmd *cobra.Command, args []string) error {
 	return cmd.Help()
 }
 
+func groupNoArgs(cmd *cobra.Command, args []string) error {
+	if len(args) > 0 && explicitJSON(cmd) {
+		return groupUsage(cmd, args)
+	}
+	return cobra.NoArgs(cmd, args)
+}
+
 func groupUsage(cmd *cobra.Command, args []string) error {
 	names := []string{}
 	for _, sub := range cmd.Commands() {
