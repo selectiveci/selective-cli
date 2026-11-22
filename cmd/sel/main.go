@@ -18,6 +18,7 @@ import (
 	"github.com/selectiveci/selective-cli/internal/auth"
 	"github.com/selectiveci/selective-cli/internal/contract"
 	"github.com/selectiveci/selective-cli/internal/format"
+	"github.com/selectiveci/selective-cli/internal/redact"
 	"github.com/selectiveci/selective-cli/internal/setup"
 	"github.com/selectiveci/selective-cli/internal/update"
 	"github.com/spf13/cobra"
@@ -91,6 +92,7 @@ func runCommand(root *cobra.Command, args []string, stdout, stderr io.Writer) (*
 }
 
 func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io.Writer) (*cobra.Command, int) {
+	redact.Reset()
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -124,7 +126,7 @@ func runWith(clock *clock, root *cobra.Command, args []string, stdout, stderr io
 		reportPending(errorObjectOnStdout(cmd, args, stdout), secretFlagGivenFor(root, cmd, args), out, stderr, pending)
 		return cmd, pending.ExitCode()
 	}
-	coded := classify(err, entered)
+	coded := redact.Coded(classify(err, entered))
 	stderrStalled := false
 	if errorObjectOnStdout(cmd, args, stdout) {
 		sink := out

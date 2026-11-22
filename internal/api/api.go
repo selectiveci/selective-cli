@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/contract"
+	"github.com/selectiveci/selective-cli/internal/redact"
 	"github.com/selectiveci/selective-cli/internal/update"
 )
 
@@ -38,6 +39,7 @@ func (c *Client) WithoutRateLimitRetry() *Client {
 }
 
 func New(host, token string) *Client {
+	redact.Add(token)
 	return &Client{Host: host, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second, Transport: update.Transport(nil)}}
 }
 
