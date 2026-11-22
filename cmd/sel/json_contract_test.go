@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -86,9 +87,80 @@ func TestBareGroupWithExplicitJSONIsOneUsageErrorListingTheSubcommands(t *testin
 	}
 }
 
+func TestUnknownCommandWithExplicitJSONIsOneUsageErrorWithSuggestions(t *testing.T) {
+	host := closedHost(t)
+	cases := []struct {
+		args        []string
+		suggestions []string
+		groupLevel  bool
+	}{
+		{[]string{"auth", "logn"}, []string{"login"}, true},
+		{[]string{"flakes", "lst"}, []string{"list"}, true},
+		{[]string{"tokens", "lisst"}, []string{"list"}, true},
+		{[]string{"approvals", "shw"}, []string{"show"}, true},
+		{[]string{"auth", "bogus"}, []string{}, true},
+		{[]string{"approvals", "bogus"}, []string{}, true},
+		{[]string{"flakes", "bogus"}, []string{}, true},
+		{[]string{"tokens", "bogus"}, []string{}, true},
+		{[]string{"suites", "setings"}, []string{"settings"}, true},
+		{[]string{"suites", "bogus"}, []string{}, true},
+		{[]string{"autth"}, []string{"auth"}, false},
+		{[]string{"bogus"}, []string{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			res := runBinary(t, t.TempDir(), host, append(slices.Clone(tc.args), "--json")...)
+
+			objects := stdoutObjects(t, res.stdout)
+			if res.exit != 5 || len(objects) != 1 || objects[0]["error"] != "usage_error" {
+				t.Fatalf("exit %d stdout %q, want exit 5 and one usage_error", res.exit, res.stdout)
+			}
+			obj := objects[0]
+			if !reflect.DeepEqual(obj["suggestions"], toAny(tc.suggestions)) {
+				t.Errorf("suggestions = %v, want %v", obj["suggestions"], tc.suggestions)
+			}
+			if _, has := obj["subcommands"]; has != tc.groupLevel {
+				t.Errorf("subcommands present = %v, want %v", has, tc.groupLevel)
+			}
+			message := obj["message"].(string)
+			if !strings.Contains(message, `unknown command "`+tc.args[len(tc.args)-1]+`" for "sel`) || strings.Contains(message, "Did you mean this?") != (len(tc.suggestions) > 0) {
+				t.Errorf("message = %q", message)
+			}
+		})
+	}
+}
+
+func toAny(names []string) []any {
+	out := []any{}
+	for _, n := range names {
+		out = append(out, n)
+	}
+	return out
+}
+
+func TestShellCompletionStillAnswersWithJSONOnTheLine(t *testing.T) {
+	host := closedHost(t)
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"__complete", "flakes", "--json", ""}, "list"},
+		{[]string{"__completeNoDesc", "flakes", "--json", ""}, "list"},
+		{[]string{"__complete", "--json", ""}, "flakes"},
+	}
+	for _, tc := range cases {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			res := runBinary(t, t.TempDir(), host, tc.args...)
+			if res.exit != 0 || !strings.Contains(res.stdout, tc.want) || strings.Contains(res.stdout, "usage_error") {
+				t.Errorf("exit %d stdout %q, want exit 0 and a completion listing %q", res.exit, res.stdout, tc.want)
+			}
+		})
+	}
+}
+
 func TestOnlyABareGroupWithExplicitJSONLeavesHelpBehind(t *testing.T) {
 	host := closedHost(t)
-	for _, args := range [][]string{{"auth"}, {"auth", "--json=false"}, {"--json=false"}, {"approvals", "bogus", "--json"}, {"auth", "bogus", "--json"}} {
+	for _, args := range [][]string{{"auth"}, {"auth", "--json=false"}, {"--json=false"}, {"auth", "logn"}, {"flakes", "lst"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			res := runBinary(t, t.TempDir(), host, args...)
 			if res.exit != 0 || !strings.Contains(res.stdout, "Available Commands:") || strings.HasPrefix(res.stdout, "{") {
@@ -188,6 +260,22 @@ func TestEveryCommandWithExplicitJSONKeepsTheOneErrorObjectContract(t *testing.T
 				t.Errorf("exit %d with %d error objects on stdout: %q", res.exit, errs, res.stdout)
 			}
 			t.Logf("%s: exit %d, %d objects, %d error objects", name, res.exit, len(objects), errs)
+
+			if len(visibleCommandPaths(findCommand(t, path), nil)) > 0 {
+				res := runBinary(t, t.TempDir(), host, append(slices.Clone(path), "bogus", "--json")...)
+				if errs := len(errorObjects(stdoutObjects(t, res.stdout))); res.exit != 5 || errs != 1 {
+					t.Errorf("unknown subcommand: exit %d with %d error objects on stdout: %q", res.exit, errs, res.stdout)
+				}
+			}
 		})
 	}
+}
+
+func findCommand(t *testing.T, path []string) *cobra.Command {
+	t.Helper()
+	cmd, _, err := newRoot().Find(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cmd
 }
