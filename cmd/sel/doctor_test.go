@@ -248,15 +248,12 @@ func TestDoctorTimeoutFlagBoundsTheRunAndExitsEight(t *testing.T) {
 	default:
 		t.Fatal("the handler never received the request, so nothing was hanging")
 	}
-	doc := oneLineDocument(t, res.stdout)
-	var serverCode string
-	for _, c := range doc.Doctor.Checks {
-		if c.Name == "server" && c.Status == "fail" {
-			serverCode = c.Code
-		}
+	var object struct {
+		Error       string `json:"error"`
+		FailedCheck string `json:"failed_check"`
 	}
-	if res.exit != contract.ExitTimeout || doc.Error != "timeout" || serverCode != "timeout" {
-		t.Errorf("exit %d, error %q, server check code %q", res.exit, doc.Error, serverCode)
+	if err := json.Unmarshal([]byte(res.stdout), &object); err != nil || res.exit != contract.ExitTimeout || object.Error != "timeout" || object.FailedCheck != "server" {
+		t.Errorf("exit %d, stdout %q (%v); want the timeout object naming the server check", res.exit, res.stdout, err)
 	}
 	if elapsed > 6*time.Second {
 		t.Errorf("took %s: --timeout 1s did not bound the run (the client's own 10s timeout would explain more than this)", elapsed)
