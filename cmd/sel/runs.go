@@ -113,7 +113,7 @@ stdout, or a note on stderr in pretty mode.
 
 Exit codes:
   0  all tests passed
-  1  real test failures
+  1  real test failures, or a build that did not finish (incomplete or cancelled)
   2  passed, but a test failed before passing on retry (safe to proceed)
   3  no build found for this commit (--wait ran out), or not inside a git repository
   4  authentication or network error, or --wait ran out after a failed lookup

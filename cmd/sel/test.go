@@ -128,21 +128,23 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 		return 0, contract.Errorf(contract.UsageError, "--timeout must be positive")
 	}
 	started := time.Now()
-	signalled, cancel, stop := interruptContext(cmd.Context())
+	writes := &writeWatch{}
+	signalled, cancel, stop := interruptContext(cmd.Context(), writes)
 	defer stop()
 	signalledAt := make(chan time.Time, 1)
 	context.AfterFunc(signalled, func() { signalledAt <- time.Now() })
 	stdout := cmd.OutOrStdout()
 	stdoutFile := underlyingFile(stdout)
 	terminal := stdoutFile != nil && format.IsTerminal(stdoutFile)
-	var events io.Writer = readerWatch{stdout, stdoutFile, terminal, func() { cancel(errReaderLeft) }}
+	var events io.Writer = readerWatch{stdout, stdoutFile, terminal, func() { cancel(errReaderLeft) }, writes}
 	pretty := !format.JSONMode(cmd.Flags(), stdout)
 	if pretty {
 		events = prettyEvents{format.NewWriter(events, "pretty")}
 	}
 	interrupted := func(sum localrun.Summary) (int, error) {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted")
-		if !sum.Reported {
+		owns := claimFinalLine(cmd.Context())
+		announceInterrupt(cmd.Context(), cmd.ErrOrStderr())
+		if owns && !sum.Reported {
 			sum.MS = (<-signalledAt).Sub(started).Milliseconds()
 			if err := localrun.WriteInterruptedSummary(events, sum); err != nil && !(errors.Is(context.Cause(signalled), errHangup) && readerDeparted(err)) {
 				return 0, contract.Errorf(contract.InternalError, "could not write the event stream: %v", err)
@@ -205,6 +207,9 @@ func runTest(cmd *cobra.Command, args []string, f testFlags) (int, error) {
 	if isRunnerError(err) && readerGone(stdoutFile) {
 		cancel(errReaderLeft)
 		err = localrun.ErrInterrupted
+	}
+	if errors.Is(err, localrun.ErrInterrupted) && sum.Reported && !f.list && errors.Is(context.Cause(signalled), errReaderLeft) {
+		err = nil
 	}
 	if err != nil && errors.Is(context.Cause(signalled), errHangup) {
 		err = localrun.ErrInterrupted

@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/selectiveci/selective-cli/internal/config"
@@ -91,7 +93,15 @@ func LoadState() State {
 	if err != nil {
 		return st
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return st
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return st
+	}
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return st
 	}
@@ -101,10 +111,18 @@ func LoadState() State {
 	return st
 }
 
+func replaceable(path string) bool {
+	info, err := os.Lstat(path)
+	return errors.Is(err, os.ErrNotExist) || err == nil && info.Mode().IsRegular()
+}
+
 func saveState(st State) error {
 	path, err := statePath()
 	if err != nil {
 		return err
+	}
+	if !replaceable(path) {
+		return errors.New("update state path is not a regular file")
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
