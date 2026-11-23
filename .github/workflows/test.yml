@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  vet:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +22,59 @@ jobs:
             GOOS=$goos go vet ./...
           done
 
-      - name: go test
-        run: go test -race -coverprofile=coverage.out ./...
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  shard:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        index: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: split tests
+        id: split
+        uses: hashicorp-forge/go-test-split-action@1485d57a7de487cd60ca5d56d8422ca16bb4f47b
+        with:
+          total: ${{ strategy.job-total }}
+          index: ${{ matrix.index }}
+          flags: -race
+
+      - name: go test
+        env:
+          RUN: ${{ steps.split.outputs.run }}
+        run: go test -race -coverprofile=coverage.out ./... -run "$RUN"
+
+  test:
+    needs: [vet, lint, shard]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: require every job to succeed
+        env:
+          VET: ${{ needs.vet.result }}
+          LINT: ${{ needs.lint.result }}
+          SHARD: ${{ needs.shard.result }}
+        run: |
+          for result in "$VET" "$LINT" "$SHARD"; do
+            [ "$result" = success ] || { echo "vet=$VET lint=$LINT shard=$SHARD"; exit 1; }
+          done
